@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Users/xingjunnan/IdeaProjects/SnapInk/.build/arm64-apple-macosx/debug/SnapInk.build/master.swiftdeps"
+  },
+  "/Users/xingjunnan/IdeaProjects/SnapInk/Sources/SnapInk/main.swift": {
+    "dependencies": "/Users/xingjunnan/IdeaProjects/SnapInk/.build/arm64-apple-macosx/debug/SnapInk.build/main.d",
+    "object": "/Users/xingjunnan/IdeaProjects/SnapInk/.build/arm64-apple-macosx/debug/SnapInk.build/main.swift.o",
+    "swiftmodule": "/Users/xingjunnan/IdeaProjects/SnapInk/.build/arm64-apple-macosx/debug/SnapInk.build/main~partial.swiftmodule",
+    "swift-dependencies": "/Users/xingjunnan/IdeaProjects/SnapInk/.build/arm64-apple-macosx/debug/SnapInk.build/main.swiftdeps",
+    "diagnostics": "/Users/xingjunnan/IdeaProjects/SnapInk/.build/arm64-apple-macosx/debug/SnapInk.build/main.dia"
+  }
+}
