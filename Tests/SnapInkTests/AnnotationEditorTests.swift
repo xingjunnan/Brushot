@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import XCTest
 @testable import SnapInk
 
@@ -20,9 +21,9 @@ final class AnnotationEditorTests: XCTestCase {
             let hoverButton = try XCTUnwrap(button as? AnnotationHoverButton)
             XCTAssertNil(hoverButton.toolTip)
             XCTAssertEqual(hoverButton.hoverTitle, tool.title)
-            XCTAssertEqual(hoverButton.hoverDelay, 0.15, accuracy: 0.001)
+            XCTAssertEqual(hoverButton.hoverDelay, 0.05, accuracy: 0.001)
         }
-        XCTAssertEqual(AnnotationHoverTooltipPresenter.fontSize, 14)
+        XCTAssertEqual(AnnotationHoverTooltipPresenter.fontSize, 16)
 
         toolbar.setTool(.rectangle, style: .defaultStyle(for: .rectangle))
         XCTAssertEqual(toolbar.frame.height, 72)
@@ -108,6 +109,51 @@ final class AnnotationEditorTests: XCTestCase {
         XCTAssertEqual(pinCount, 1)
     }
 
+    func testToolbarLongCaptureButtonInvokesActionAndCanBeDisabled() throws {
+        let toolbar = AnnotationToolbarView(frame: CGRect(x: 0, y: 0, width: 650, height: 72))
+        var invocationCount = 0
+        toolbar.onLongCapture = { invocationCount += 1 }
+        let button = try XCTUnwrap(descendants(of: toolbar).compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "longCaptureAction"
+        })
+        let hoverButton = try XCTUnwrap(button as? AnnotationHoverButton)
+
+        XCTAssertEqual(hoverButton.hoverTitle, "长截图")
+        XCTAssertNotNil(button.image)
+        button.performClick(nil)
+        XCTAssertEqual(invocationCount, 1)
+
+        toolbar.setLongCaptureEnabled(false)
+        button.performClick(nil)
+        XCTAssertEqual(invocationCount, 1)
+    }
+
+    func testRegularSelectionLongCaptureButtonUsesCurrentRegion() throws {
+        let overlay = SelectionOverlayView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        let window = NSWindow(
+            contentRect: CGRect(x: 100, y: 80, width: 400, height: 300),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = overlay
+        overlay.mouseDown(with: try mouseEvent(type: .leftMouseDown, at: CGPoint(x: 40, y: 50)))
+        overlay.mouseDragged(with: try mouseEvent(type: .leftMouseDragged, at: CGPoint(x: 260, y: 210)))
+        overlay.mouseUp(with: try mouseEvent(type: .leftMouseUp, at: CGPoint(x: 260, y: 210)))
+        var requestedRect: CGRect?
+        var regularSubmitCount = 0
+        overlay.onLongCaptureRequested = { requestedRect = $0 }
+        overlay.onSelectionFinished = { _, _ in regularSubmitCount += 1 }
+
+        let button = try XCTUnwrap(descendants(of: overlay).compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "longCaptureAction"
+        })
+        button.performClick(nil)
+
+        XCTAssertEqual(requestedRect, CGRect(x: 140, y: 130, width: 220, height: 160))
+        XCTAssertEqual(regularSubmitCount, 0)
+    }
+
     func testSelectionPinButtonSubmitsCurrentRegionForPinning() throws {
         let overlay = SelectionOverlayView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         let window = NSWindow(
@@ -189,6 +235,32 @@ final class AnnotationEditorTests: XCTestCase {
         copyButton.performClick(nil)
 
         XCTAssertEqual(submittedRect?.size, CGSize(width: 210, height: 170))
+    }
+
+    func testLongCaptureSelectionUsesDedicatedStartFlow() throws {
+        let overlay = SelectionOverlayView(
+            frame: CGRect(x: 0, y: 0, width: 500, height: 400),
+            purpose: .longCapture
+        )
+        let window = NSWindow(
+            contentRect: CGRect(x: 100, y: 80, width: 500, height: 400),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = overlay
+        var requestedRect: CGRect?
+        var regularSubmitCount = 0
+        overlay.onLongCaptureRequested = { requestedRect = $0 }
+        overlay.onSelectionFinished = { _, _ in regularSubmitCount += 1 }
+
+        overlay.mouseDown(with: try mouseDownEvent(at: CGPoint(x: 40, y: 60)))
+        overlay.mouseDragged(with: try mouseEvent(type: .leftMouseDragged, at: CGPoint(x: 360, y: 300)))
+        overlay.mouseUp(with: try mouseEvent(type: .leftMouseUp, at: CGPoint(x: 360, y: 300)))
+        overlay.keyDown(with: try keyEvent(keyCode: UInt16(kVK_Return), characters: "\r"))
+
+        XCTAssertEqual(requestedRect, CGRect(x: 140, y: 140, width: 320, height: 240))
+        XCTAssertEqual(regularSubmitCount, 0)
     }
 
     func testClickingSequenceCreatesAutomaticNumberAndImmediatelyEditsOptionalText() throws {
@@ -778,6 +850,21 @@ final class AnnotationEditorTests: XCTestCase {
             eventNumber: 1,
             clickCount: clickCount,
             pressure: 1
+        ))
+    }
+
+    private func keyEvent(keyCode: UInt16, characters: String) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: characters,
+            charactersIgnoringModifiers: characters,
+            isARepeat: false,
+            keyCode: keyCode
         ))
     }
 }

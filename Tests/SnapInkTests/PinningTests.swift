@@ -123,7 +123,7 @@ final class PinningTests: XCTestCase {
         var annotated: CGImage?
         let editor = PinAnnotationEditorWindowController(image: base) { annotated = $0 } onCancel: {}
         let content = try XCTUnwrap(editor.window?.contentView)
-        let canvas = try XCTUnwrap(content.subviews.compactMap { $0 as? AnnotationCanvasView }.first)
+        let canvas = try XCTUnwrap(descendants(of: content).compactMap { $0 as? AnnotationCanvasView }.first)
         _ = canvas.document.add(
             tool: .rectangle,
             geometry: .rect(CGRect(x: 5, y: 5, width: 30, height: 20)),
@@ -137,6 +137,24 @@ final class PinningTests: XCTestCase {
         XCTAssertEqual(result.width, base.width)
         XCTAssertEqual(result.height, base.height)
         XCTAssertNotEqual(try PinImageCodec.pngData(from: result), try PinImageCodec.pngData(from: base))
+    }
+
+    func testTallAnnotationImageUsesScrollableCanvasWithoutShrinkingItsWidth() throws {
+        let base = try makeImage(width: 700, height: 4_200, color: .white)
+        let editor = PinAnnotationEditorWindowController(
+            image: base,
+            title: "长截图标注",
+            onFinish: { _ in },
+            onCancel: {}
+        )
+        let content = try XCTUnwrap(editor.window?.contentView)
+        let scrollView = try XCTUnwrap(descendants(of: content).compactMap { $0 as? NSScrollView }.first)
+        let canvas = try XCTUnwrap(scrollView.documentView as? AnnotationCanvasView)
+
+        XCTAssertEqual(editor.window?.title, "长截图标注")
+        XCTAssertTrue(scrollView.hasVerticalScroller)
+        XCTAssertGreaterThan(canvas.frame.height, scrollView.contentSize.height)
+        XCTAssertGreaterThanOrEqual(canvas.frame.width, 690)
     }
 
     private func temporaryDirectory() -> URL {

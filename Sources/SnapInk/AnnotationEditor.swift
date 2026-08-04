@@ -1302,7 +1302,7 @@ final class InlineAnnotationTextView: NSTextView {
 
 @MainActor
 final class AnnotationHoverButton: NSButton {
-    static let defaultHoverDelay: TimeInterval = 0.15
+    static let defaultHoverDelay: TimeInterval = 0.05
 
     var hoverTitle: String?
     var hoverDelay = defaultHoverDelay
@@ -1378,7 +1378,7 @@ final class AnnotationHoverButton: NSButton {
 
 @MainActor
 final class AnnotationHoverTooltipPresenter {
-    static let fontSize: CGFloat = 14
+    static let fontSize: CGFloat = 16
 
     private let panel: NSPanel
     private let backgroundView = NSVisualEffectView()
@@ -1427,14 +1427,14 @@ final class AnnotationHoverTooltipPresenter {
         label.stringValue = title
         label.sizeToFit()
         let contentSize = NSSize(
-            width: ceil(label.frame.width) + 20,
-            height: max(30, ceil(label.frame.height) + 12)
+            width: ceil(label.frame.width) + 24,
+            height: max(34, ceil(label.frame.height) + 14)
         )
         backgroundView.frame = NSRect(origin: .zero, size: contentSize)
         label.frame = NSRect(
-            x: 10,
+            x: 12,
             y: floor((contentSize.height - label.frame.height) / 2),
-            width: contentSize.width - 20,
+            width: contentSize.width - 24,
             height: label.frame.height
         )
 
@@ -1479,6 +1479,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
     var onUndo: (() -> Void)?
     var onRedo: (() -> Void)?
     var onCancel: (() -> Void)?
+    var onLongCapture: (() -> Void)?
     var onOCR: (() -> Void)?
     var onPin: (() -> Void)?
     var onCopy: (() -> Void)?
@@ -1512,6 +1513,11 @@ final class AnnotationToolbarView: NSVisualEffectView {
     private lazy var undoButton = makeButton(symbol: "arrow.uturn.backward", title: "撤销", action: #selector(undoAction))
     private lazy var redoButton = makeButton(symbol: "arrow.uturn.forward", title: "重做", action: #selector(redoAction))
     private lazy var cancelButton = makeButton(symbol: "xmark", title: "取消 (Esc)", action: #selector(cancelAction))
+    private lazy var longCaptureButton = makeButton(
+        symbol: "rectangle.expand.vertical",
+        title: "长截图",
+        action: #selector(longCaptureAction)
+    )
     private lazy var ocrButton = makeButton(symbol: "text.viewfinder", title: "识别文字", action: #selector(ocrAction))
     private lazy var pinButton = makeButton(symbol: "pin", title: "贴图", action: #selector(pinAction))
     private lazy var copyButton = makeButton(symbol: "doc.on.doc", title: "复制 (⌘C)", action: #selector(copyAction))
@@ -1519,6 +1525,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
     private let busyIndicator = NSProgressIndicator()
     private let busyLabel = NSTextField(labelWithString: "正在冻结截图…")
     private var isBusy = false
+    private var isLongCaptureAvailable = true
     private var canUndo = false
     private var canRedo = false
 
@@ -1573,12 +1580,18 @@ final class AnnotationToolbarView: NSVisualEffectView {
         redoButton.isEnabled = !isBusy && canRedo
     }
 
+    func setLongCaptureEnabled(_ enabled: Bool) {
+        isLongCaptureAvailable = enabled
+        longCaptureButton.isEnabled = !isBusy && enabled
+    }
+
     func setBusy(_ busy: Bool, message: String = "正在冻结截图…") {
         isBusy = busy
         busyLabel.stringValue = message
         for button in toolButtons.values { button.isEnabled = !busy }
         undoButton.isEnabled = !busy && canUndo
         redoButton.isEnabled = !busy && canRedo
+        longCaptureButton.isEnabled = !busy && isLongCaptureAvailable
         ocrButton.isEnabled = !busy
         pinButton.isEnabled = !busy
         copyButton.isEnabled = !busy
@@ -1622,6 +1635,8 @@ final class AnnotationToolbarView: NSVisualEffectView {
         mainRow.addArrangedSubview(redoButton)
         mainRow.addArrangedSubview(makeSeparator())
         mainRow.addArrangedSubview(cancelButton)
+        longCaptureButton.identifier = NSUserInterfaceItemIdentifier("longCaptureAction")
+        mainRow.addArrangedSubview(longCaptureButton)
         ocrButton.identifier = NSUserInterfaceItemIdentifier("ocrAction")
         mainRow.addArrangedSubview(ocrButton)
         pinButton.identifier = NSUserInterfaceItemIdentifier("pinAction")
@@ -1880,6 +1895,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
     @objc private func undoAction() { onUndo?() }
     @objc private func redoAction() { onRedo?() }
     @objc private func cancelAction() { onCancel?() }
+    @objc private func longCaptureAction() { onLongCapture?() }
     @objc private func ocrAction() { onOCR?() }
     @objc private func pinAction() { onPin?() }
     @objc private func copyAction() { onCopy?() }

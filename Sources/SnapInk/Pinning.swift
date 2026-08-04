@@ -723,6 +723,7 @@ final class PinLibraryWindowController: NSWindowController, NSTableViewDataSourc
 final class PinAnnotationEditorWindowController: NSWindowController {
     private let canvas: AnnotationCanvasView
     private let toolbar: AnnotationToolbarView
+    private let scrollView = NSScrollView()
     private var activeTool: AnnotationTool = .select
     private var styles = Dictionary(uniqueKeysWithValues: AnnotationTool.drawingTools.map {
         ($0, AnnotationStylePreferences.load(for: $0))
@@ -730,31 +731,37 @@ final class PinAnnotationEditorWindowController: NSWindowController {
     private let onFinish: (CGImage) -> Void
     private let onCancel: () -> Void
 
-    init(image: CGImage, onFinish: @escaping (CGImage) -> Void, onCancel: @escaping () -> Void) {
+    init(
+        image: CGImage,
+        title: String = "贴图二次标注",
+        onFinish: @escaping (CGImage) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
         self.onFinish = onFinish
         self.onCancel = onCancel
         let visible = NSScreen.main?.visibleFrame.size ?? CGSize(width: 1200, height: 800)
-        let maxImageSize = CGSize(width: min(1000, visible.width - 80), height: min(700, visible.height - 150))
+        let maximumCanvasWidth = min(1000, visible.width - 80)
+        let maximumViewportHeight = min(700, visible.height - 150)
         let ratio = CGFloat(image.width) / CGFloat(max(1, image.height))
-        var imageSize = CGSize(width: min(CGFloat(image.width), maxImageSize.width), height: 0)
-        imageSize.height = imageSize.width / ratio
-        if imageSize.height > maxImageSize.height {
-            imageSize.height = maxImageSize.height
-            imageSize.width = imageSize.height * ratio
-        }
+        let imageWidth = min(CGFloat(image.width), maximumCanvasWidth)
+        let imageSize = CGSize(width: imageWidth, height: imageWidth / ratio)
+        let viewportHeight = min(imageSize.height, maximumViewportHeight)
         canvas = AnnotationCanvasView(frame: CGRect(origin: .zero, size: imageSize), baseImage: image)
         toolbar = AnnotationToolbarView(frame: CGRect(x: 0, y: 0, width: 650, height: 72))
-        let contentSize = CGSize(width: max(imageSize.width, toolbar.frame.width) + 20, height: imageSize.height + 92)
+        let contentSize = CGSize(
+            width: max(imageSize.width + 18, toolbar.frame.width) + 20,
+            height: viewportHeight + 92
+        )
         let window = NSWindow(
             contentRect: CGRect(origin: .zero, size: contentSize),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
-        window.title = "贴图二次标注"
+        window.title = title
         window.isReleasedWhenClosed = false
         super.init(window: window)
-        configureLayout(imageSize: imageSize)
+        configureLayout(imageSize: imageSize, viewportHeight: viewportHeight)
         configureActions()
         setTool(.select)
         window.center()
@@ -771,11 +778,21 @@ final class PinAnnotationEditorWindowController: NSWindowController {
         window?.makeFirstResponder(canvas)
     }
 
-    private func configureLayout(imageSize: CGSize) {
+    private func configureLayout(imageSize: CGSize, viewportHeight: CGFloat) {
         guard let content = window?.contentView else { return }
-        content.addSubview(canvas)
+        scrollView.hasVerticalScroller = imageSize.height > viewportHeight + 0.5
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .bezelBorder
+        scrollView.documentView = canvas
+        scrollView.frame = CGRect(
+            x: 10,
+            y: 84,
+            width: content.bounds.width - 20,
+            height: viewportHeight
+        )
+        content.addSubview(scrollView)
         content.addSubview(toolbar)
-        canvas.setFrameOrigin(CGPoint(x: (content.bounds.width - imageSize.width) / 2, y: 84))
         toolbar.setFrameOrigin(CGPoint(x: (content.bounds.width - toolbar.frame.width) / 2, y: 6))
         toolbar.onPreferredSizeChanged = { [weak self] in
             guard let self, let content = self.window?.contentView else { return }

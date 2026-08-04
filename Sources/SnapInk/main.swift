@@ -141,10 +141,12 @@ enum ShortcutAction: UInt32, CaseIterable, Hashable {
     case pinClipboard = 2
     case pinLibrary = 3
     case togglePins = 4
+    case longCapture = 5
 
     var title: String {
         switch self {
         case .capture: "区域截图"
+        case .longCapture: "长截图"
         case .pinClipboard: "从剪贴板贴图"
         case .pinLibrary: "贴图库…"
         case .togglePins: "隐藏全部贴图"
@@ -154,6 +156,7 @@ enum ShortcutAction: UInt32, CaseIterable, Hashable {
     var preferencePrefix: String {
         switch self {
         case .capture: "captureShortcut"
+        case .longCapture: "longCaptureShortcut"
         case .pinClipboard: "pinClipboardShortcut"
         case .pinLibrary: "pinLibraryShortcut"
         case .togglePins: "togglePinsShortcut"
@@ -164,6 +167,12 @@ enum ShortcutAction: UInt32, CaseIterable, Hashable {
         switch self {
         case .capture:
             .defaultCapture
+        case .longCapture:
+            KeyboardShortcut(
+                keyCode: UInt32(kVK_ANSI_L),
+                modifiers: UInt32(controlKey | optionKey),
+                keyLabel: "L"
+            )
         case .pinClipboard:
             KeyboardShortcut(
                 keyCode: UInt32(kVK_ANSI_V),
@@ -314,6 +323,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             selector: #selector(captureSelection)
         )
         menu.addItem(capture)
+
+        let longCapture = makeShortcutMenuItem(
+            action: .longCapture,
+            title: "长截图",
+            selector: #selector(captureLongScreenshot)
+        )
+        menu.addItem(longCapture)
 
         let pinItem = NSMenuItem(title: "贴图", action: nil, keyEquivalent: "")
         let pinMenu = NSMenu(title: "贴图")
@@ -589,6 +605,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func performShortcutAction(_ action: ShortcutAction) {
         switch action {
         case .capture: captureSelection()
+        case .longCapture: captureLongScreenshot()
         case .pinClipboard: pinClipboard()
         case .pinLibrary: showPinLibrary()
         case .togglePins: toggleAllPins()
@@ -597,6 +614,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func captureSelection() {
         captureController.beginSelectionCapture()
+    }
+
+    @objc private func captureLongScreenshot() {
+        captureController.beginLongCapture()
     }
 
     @objc private func showSettings() {
@@ -634,7 +655,7 @@ final class ShortcutSettingsWindowController: NSWindowController, NSWindowDelega
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 300),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 330),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -811,6 +832,9 @@ enum OCRSource {
 final class CaptureController {
     private var overlayWindows: [SelectionOverlayWindow] = []
     private var isRequestingScreenCapturePermission = false
+    private var isPreparingLongCapture = false
+    private var longCaptureSession: LongCaptureSessionController?
+    private var longCapturePreview: LongCapturePreviewWindowController?
     private let textRecognizer: any TextRecognizing
     private var ocrResultWindowController: OCRResultWindowController?
     private var isTranslationEnabled = TranslationPreferences.isEnabled()
@@ -840,12 +864,30 @@ final class CaptureController {
     }
 
     func beginSelectionCapture() {
+        requestScreenCapturePermission { [weak self] in
+            self?.presentSelectionOverlays()
+        }
+    }
+
+    func beginLongCapture() {
+        guard longCaptureSession == nil, !isPreparingLongCapture else {
+            NSSound.beep()
+            return
+        }
+        requestScreenCapturePermission { [weak self] in
+            self?.presentLongCaptureOverlays()
+        }
+    }
+
+    private func requestScreenCapturePermission(
+        then action: @escaping @MainActor () -> Void
+    ) {
         guard !isRequestingScreenCapturePermission else {
             return
         }
 
         if CGPreflightScreenCaptureAccess() {
-            presentSelectionOverlays()
+            action()
             return
         }
 
@@ -864,7 +906,7 @@ final class CaptureController {
                     false,
                     onScreenWindowsOnly: true
                 )
-                presentSelectionOverlays()
+                action()
             } catch {
                 showPermissionAlert(error: error)
             }
@@ -896,11 +938,91 @@ final class CaptureController {
             window.onOCRRequested = { [weak self] source in
                 self?.finishOCR(source: source)
             }
+            window.onLongCaptureRequested = { [weak self] rect in
+                self?.startLongCapture(globalRect: rect)
+            }
             return window
         }
 
         NSApp.activate(ignoringOtherApps: true)
         overlayWindows.forEach { $0.makeKeyAndOrderFront(nil) }
+    }
+
+    private func presentLongCaptureOverlays() {
+        closeOverlays()
+        overlayWindows = NSScreen.screens.map { screen in
+            let window = SelectionOverlayWindow(screen: screen, purpose: .longCapture)
+            window.onSelectionCancelled = { [weak self] in
+                self?.closeOverlays()
+            }
+            window.onLongCaptureRequested = { [weak self] rect in
+                self?.startLongCapture(globalRect: rect)
+            }
+            return window
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        overlayWindows.forEach { $0.makeKeyAndOrderFront(nil) }
+    }
+
+    private func startLongCapture(globalRect: CGRect) {
+        guard !isPreparingLongCapture, longCaptureSession == nil else { return }
+        isPreparingLongCapture = true
+        closeOverlays()
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.sleep(for: .milliseconds(90))
+                let capturer = try await ScreenRegionCapturer(globalRect: globalRect)
+                let firstFrame = try await capturer.capture()
+                let session = try LongCaptureSessionController(
+                    selectionRect: globalRect,
+                    firstFrame: firstFrame,
+                    captureFrame: {
+                        await capturer.prepareForOverlayExclusion()
+                        return try await capturer.capture()
+                    },
+                    onFinish: { [weak self] image, logicalWidth in
+                        guard let self else { return }
+                        self.longCaptureSession = nil
+                        self.showLongCapturePreview(image: image, logicalWidth: logicalWidth)
+                    },
+                    onCancel: { [weak self] in
+                        self?.longCaptureSession = nil
+                    },
+                    onError: { [weak self] error in
+                        self?.longCaptureSession = nil
+                        self?.showFailureAlert(message: error.localizedDescription)
+                    }
+                )
+                isPreparingLongCapture = false
+                longCaptureSession = session
+                session.start()
+                await capturer.prepareForOverlayExclusion()
+            } catch {
+                isPreparingLongCapture = false
+                showFailureAlert(message: error.localizedDescription)
+            }
+        }
+    }
+
+    private func showLongCapturePreview(image: CGImage, logicalWidth: CGFloat) {
+        longCapturePreview?.close()
+        let preview = LongCapturePreviewWindowController(
+            image: image,
+            logicalWidth: logicalWidth,
+            onOCR: { [weak self] image, completion in
+                guard let self else {
+                    completion()
+                    return
+                }
+                self.finishOCR(source: .image(image), completion: completion)
+            },
+            onDismiss: { [weak self] in
+                self?.longCapturePreview = nil
+            }
+        )
+        longCapturePreview = preview
+        preview.showWindow(nil)
     }
 
     private func finishCapture(globalRect: CGRect, action: CaptureAction) {
@@ -955,11 +1077,15 @@ final class CaptureController {
         }
     }
 
-    private func finishOCR(source: OCRSource) {
+    private func finishOCR(source: OCRSource, completion: (() -> Void)? = nil) {
         closeOverlays()
 
         Task { [weak self] in
-            guard let self else { return }
+            guard let self else {
+                completion?()
+                return
+            }
+            defer { completion?() }
             do {
                 let image: CGImage
                 switch source {
@@ -1038,67 +1164,8 @@ final class CaptureController {
     }
 
     private func makeScreenshot(globalRect: CGRect) async throws -> CGImage {
-        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(globalRect) }),
-              let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
-            throw makeCaptureError("无法确定截图所在的显示器。")
-        }
-
-        let shareableContent = try await SCShareableContent.excludingDesktopWindows(
-            false,
-            onScreenWindowsOnly: true
-        )
-        let displayID = CGDirectDisplayID(screenNumber.uint32Value)
-        guard let display = shareableContent.displays.first(where: { $0.displayID == displayID }) else {
-            throw makeCaptureError("无法读取截图所在的显示器。")
-        }
-
-        let currentApplication = shareableContent.applications.first {
-            $0.processID == ProcessInfo.processInfo.processIdentifier
-        }
-        let filter = SCContentFilter(
-            display: display,
-            excludingApplications: currentApplication.map { [$0] } ?? [],
-            exceptingWindows: []
-        )
-
-        let selection = globalRect.intersection(screen.frame).integral
-        guard !selection.isNull, selection.width >= 1, selection.height >= 1 else {
-            throw makeCaptureError("截图区域无效。")
-        }
-
-        let sourceRect = CGRect(
-            x: selection.minX - screen.frame.minX,
-            y: screen.frame.maxY - selection.maxY,
-            width: selection.width,
-            height: selection.height
-        ).integral
-        let configuration = SCStreamConfiguration()
-        configuration.sourceRect = sourceRect
-        let pixelScale: CGFloat
-        if #available(macOS 14.0, *) {
-            pixelScale = CGFloat(filter.pointPixelScale)
-        } else {
-            pixelScale = screen.backingScaleFactor
-        }
-        configuration.width = max(1, Int((sourceRect.width * pixelScale).rounded()))
-        configuration.height = max(1, Int((sourceRect.height * pixelScale).rounded()))
-        configuration.showsCursor = false
-        configuration.queueDepth = 1
-
-        if #available(macOS 14.0, *) {
-            configuration.captureResolution = .best
-            configuration.ignoreShadowsDisplay = true
-            configuration.shouldBeOpaque = true
-            return try await SCScreenshotManager.captureImage(
-                contentFilter: filter,
-                configuration: configuration
-            )
-        } else {
-            return try await StreamScreenshotCapturer.capture(
-                contentFilter: filter,
-                configuration: configuration
-            )
-        }
+        let capturer = try await ScreenRegionCapturer(globalRect: globalRect)
+        return try await capturer.capture()
     }
 
     private func closeOverlays() {
@@ -1117,6 +1184,7 @@ final class CaptureController {
             window.onAnnotatedFinished = nil
             window.onAnnotationFailed = nil
             window.onOCRRequested = nil
+            window.onLongCaptureRequested = nil
             window.orderOut(nil)
         }
 
@@ -1160,6 +1228,11 @@ final class CaptureController {
     }
 }
 
+enum SelectionPurpose {
+    case regular
+    case longCapture
+}
+
 final class SelectionOverlayWindow: NSWindow {
     var onSelectionFinished: ((CGRect, CaptureAction) -> Void)?
     var onSelectionCancelled: (() -> Void)?
@@ -1167,13 +1240,17 @@ final class SelectionOverlayWindow: NSWindow {
     var onAnnotatedFinished: ((CGImage, CaptureAction, CGSize) -> Void)?
     var onAnnotationFailed: ((Error) -> Void)?
     var onOCRRequested: ((OCRSource) -> Void)?
+    var onLongCaptureRequested: ((CGRect) -> Void)?
 
     private var overlayView: SelectionOverlayView? {
         contentView as? SelectionOverlayView
     }
 
-    init(screen: NSScreen) {
-        let view = SelectionOverlayView(frame: CGRect(origin: .zero, size: screen.frame.size))
+    init(screen: NSScreen, purpose: SelectionPurpose = .regular) {
+        let view = SelectionOverlayView(
+            frame: CGRect(origin: .zero, size: screen.frame.size),
+            purpose: purpose
+        )
         super.init(
             contentRect: screen.frame,
             styleMask: [.borderless],
@@ -1208,6 +1285,9 @@ final class SelectionOverlayWindow: NSWindow {
         }
         view.onOCRRequested = { [weak self] source in
             self?.onOCRRequested?(source)
+        }
+        view.onLongCaptureRequested = { [weak self] rect in
+            self?.onLongCaptureRequested?(rect)
         }
     }
 
@@ -1246,7 +1326,9 @@ final class SelectionOverlayView: NSView {
     var onAnnotatedFinished: ((CGImage, CaptureAction, CGSize) -> Void)?
     var onAnnotationFailed: ((Error) -> Void)?
     var onOCRRequested: ((OCRSource) -> Void)?
+    var onLongCaptureRequested: ((CGRect) -> Void)?
 
+    private let purpose: SelectionPurpose
     private var startPoint: NSPoint?
     private var currentPoint: NSPoint?
     private var dragOperation: DragOperation?
@@ -1265,15 +1347,28 @@ final class SelectionOverlayView: NSView {
         }
     )
     private lazy var actionBar = makeActionBar()
+    private lazy var longCaptureBar: LongCaptureStartBar = {
+        let bar = LongCaptureStartBar(frame: CGRect(x: 0, y: 0, width: 430, height: 48))
+        bar.onStart = { [weak self] in self?.requestLongCapture() }
+        bar.onCancel = { [weak self] in self?.onSelectionCancelled?() }
+        return bar
+    }()
     private let infoAttributes: [NSAttributedString.Key: Any] = [
         .font: NSFont.systemFont(ofSize: 13, weight: .medium),
         .foregroundColor: NSColor.white
     ]
 
-    override init(frame frameRect: NSRect) {
+    init(frame frameRect: NSRect, purpose: SelectionPurpose = .regular) {
+        self.purpose = purpose
         super.init(frame: frameRect)
-        addSubview(actionBar)
-        actionBar.isHidden = true
+        switch purpose {
+        case .regular:
+            addSubview(actionBar)
+            actionBar.isHidden = true
+        case .longCapture:
+            addSubview(longCaptureBar)
+            longCaptureBar.isHidden = true
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -1324,7 +1419,7 @@ final class SelectionOverlayView: NSView {
            let selection = currentSelection() {
             dragOperation = .resizing(handle)
             resizeInitialRect = selection
-            actionBar.isHidden = true
+            hideSelectionControls()
             window?.makeFirstResponder(self)
             annotationCanvas?.needsDisplay = true
             return
@@ -1336,14 +1431,18 @@ final class SelectionOverlayView: NSView {
            let selection = currentSelection(),
            selection.contains(location) {
             if event.clickCount >= 2 {
-                submitSelection(action: .copy)
+                if purpose == .longCapture {
+                    requestLongCapture()
+                } else {
+                    submitSelection(action: .copy)
+                }
                 return
             }
 
             dragOperation = .moving
             moveAnchorPoint = location
             moveInitialRect = selection
-            actionBar.isHidden = true
+            hideSelectionControls()
             NSCursor.closedHand.set()
             return
         }
@@ -1352,7 +1451,7 @@ final class SelectionOverlayView: NSView {
         moveAnchorPoint = nil
         moveInitialRect = nil
         isSelectionFinalized = false
-        actionBar.isHidden = true
+        hideSelectionControls()
         startPoint = location
         currentPoint = startPoint
         window?.invalidateCursorRects(for: self)
@@ -1395,7 +1494,7 @@ final class SelectionOverlayView: NSView {
             dragOperation = nil
             resizeInitialRect = nil
             if let selection = currentSelection() {
-                positionActionBar(for: selection)
+                positionSelectionControls(for: selection)
             }
             window?.invalidateCursorRects(for: self)
             if let annotationCanvas {
@@ -1418,14 +1517,14 @@ final class SelectionOverlayView: NSView {
         guard let selection = currentSelection(), selection.width >= 2, selection.height >= 2 else {
             startPoint = nil
             currentPoint = nil
-            actionBar.isHidden = true
+            hideSelectionControls()
             window?.invalidateCursorRects(for: self)
             needsDisplay = true
             return
         }
 
         isSelectionFinalized = true
-        positionActionBar(for: selection)
+        positionSelectionControls(for: selection)
         window?.invalidateCursorRects(for: self)
         NSCursor.openHand.set()
         needsDisplay = true
@@ -1440,11 +1539,17 @@ final class SelectionOverlayView: NSView {
         }
         if event.keyCode == UInt16(kVK_Escape) {
             onSelectionCancelled?()
-        } else if isSelectionFinalized,
+        } else if purpose == .longCapture,
+                  isSelectionFinalized,
+                  event.keyCode == UInt16(kVK_Return) {
+            requestLongCapture()
+        } else if purpose == .regular,
+                  isSelectionFinalized,
                   event.modifierFlags.contains(.command),
                   event.charactersIgnoringModifiers?.lowercased() == "c" {
             submitSelection(action: .copy)
-        } else if isSelectionFinalized,
+        } else if purpose == .regular,
+                  isSelectionFinalized,
                   event.modifierFlags.contains(.command),
                   event.charactersIgnoringModifiers?.lowercased() == "s" {
             submitSelection(action: .saveToDownloads)
@@ -1457,7 +1562,10 @@ final class SelectionOverlayView: NSView {
         NSColor.black.withAlphaComponent(0.34).setFill()
         guard let selection = currentSelection() else {
             bounds.fill()
-            drawHint("拖动选择截图区域，Esc 取消", at: NSPoint(x: bounds.midX - 100, y: bounds.midY))
+            let hint = purpose == .longCapture
+                ? "拖动选择可滚动区域，Esc 取消"
+                : "拖动选择截图区域，Esc 取消"
+            drawHint(hint, at: NSPoint(x: bounds.midX - 110, y: bounds.midY))
             return
         }
 
@@ -1558,6 +1666,7 @@ final class SelectionOverlayView: NSView {
 
         isPreparingAnnotation = false
         actionBar.setBusy(false)
+        actionBar.setLongCaptureEnabled(false)
         frozenScreenImage = baseImage
         guard let croppedImage = croppedFrozenImage(for: selection) else {
             onAnnotationFailed?(NSError(
@@ -1595,7 +1704,7 @@ final class SelectionOverlayView: NSView {
         addSubview(canvas, positioned: .below, relativeTo: actionBar)
         annotationCanvas = canvas
         activateAnnotationTool(initialTool)
-        positionActionBar(for: selection)
+        positionSelectionControls(for: selection)
         window?.invalidateCursorRects(for: self)
         window?.makeFirstResponder(canvas)
         needsDisplay = true
@@ -1638,6 +1747,7 @@ final class SelectionOverlayView: NSView {
     func annotationEditingDidFail() {
         isPreparingAnnotation = false
         actionBar.setBusy(false)
+        actionBar.setLongCaptureEnabled(true)
     }
 
     private func requestAnnotationEditing(tool: AnnotationTool) {
@@ -1704,6 +1814,9 @@ final class SelectionOverlayView: NSView {
             self?.annotationCanvas?.cancelPendingInteraction()
             self?.onSelectionCancelled?()
         }
+        bar.onLongCapture = { [weak self] in
+            self?.requestLongCapture()
+        }
         bar.onCopy = { [weak self] in
             self?.submitSelection(action: .copy)
         }
@@ -1718,13 +1831,14 @@ final class SelectionOverlayView: NSView {
         }
         bar.onPreferredSizeChanged = { [weak self] in
             guard let self, let selection = self.currentSelection() else { return }
-            self.positionActionBar(for: selection)
+            self.positionSelectionControls(for: selection)
         }
         return bar
     }
 
-    private func positionActionBar(for selection: CGRect) {
-        let size = actionBar.frame.size
+    private func positionSelectionControls(for selection: CGRect) {
+        let controls: NSView = purpose == .longCapture ? longCaptureBar : actionBar
+        let size = controls.frame.size
         let horizontalInset: CGFloat = 8
         let gap: CGFloat = 8
         let x = min(
@@ -1738,8 +1852,33 @@ final class SelectionOverlayView: NSView {
         }
         y = min(max(y, horizontalInset), bounds.maxY - size.height - horizontalInset)
 
-        actionBar.setFrameOrigin(NSPoint(x: x, y: y))
-        actionBar.isHidden = false
+        controls.setFrameOrigin(NSPoint(x: x, y: y))
+        controls.isHidden = false
+    }
+
+    private func hideSelectionControls() {
+        switch purpose {
+        case .regular:
+            actionBar.isHidden = true
+        case .longCapture:
+            longCaptureBar.isHidden = true
+        }
+    }
+
+    private func requestLongCapture() {
+        guard (purpose == .longCapture || annotationCanvas == nil),
+              isSelectionFinalized,
+              !isSubmitting,
+              let selection = currentSelection(),
+              selection.width >= 80,
+              selection.height >= 80,
+              let globalRect = currentGlobalSelectionRect() else {
+            if purpose == .longCapture { NSSound.beep() }
+            return
+        }
+        isSubmitting = true
+        hideSelectionControls()
+        onLongCaptureRequested?(globalRect)
     }
 
     private func currentSelection() -> CGRect? {

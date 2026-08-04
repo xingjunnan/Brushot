@@ -58,6 +58,9 @@ final class ShortcutTests: XCTestCase {
 
     func testStatusMenuGroupsPinActionsAndQuitHasNoShortcut() throws {
         let menu = AppDelegate().makeStatusMenu()
+        let longCapture = try XCTUnwrap(menu.items.first { $0.title == "长截图" })
+        XCTAssertEqual(longCapture.keyEquivalent, "l")
+        XCTAssertEqual(longCapture.keyEquivalentModifierMask, [.control, .option])
         let pinItem = try XCTUnwrap(menu.items.first { $0.title == "贴图" })
         let pinMenu = try XCTUnwrap(pinItem.submenu)
 
@@ -81,7 +84,7 @@ final class ShortcutTests: XCTestCase {
         XCTAssertTrue(quit.keyEquivalentModifierMask.isEmpty)
     }
 
-    func testShortcutSettingsShowsFourRecorders() throws {
+    func testShortcutSettingsShowsAllRecordersIncludingLongCapture() throws {
         let controller = ShortcutSettingsWindowController(
             shortcuts: ShortcutPreferences.loadAll(),
             onChange: { _, _ in }
@@ -91,6 +94,9 @@ final class ShortcutTests: XCTestCase {
 
         XCTAssertEqual(controller.window?.title, "SnapInk 快捷键设置")
         XCTAssertEqual(recorders.count, ShortcutAction.allCases.count)
+        XCTAssertNotNil(recorders.first {
+            $0.identifier?.rawValue == "shortcut.\(ShortcutAction.longCapture.rawValue)"
+        })
         XCTAssertEqual(
             Set(recorders.compactMap { $0.identifier?.rawValue }),
             Set(ShortcutAction.allCases.map { "shortcut.\($0.rawValue)" })
