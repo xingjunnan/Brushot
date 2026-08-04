@@ -1,0 +1,10 @@
+SnapInk 安装说明
+
+系统要求：macOS 13.0 或更高版本，支持 Intel 和 Apple Silicon Mac。
+
+1. 将 SnapInk 拖到 Applications（应用程序）文件夹。
+2. 首次启动时，请在“应用程序”中右键 SnapInk，选择“打开”，然后在提示中再次选择“打开”。
+3. 根据提示前往“系统设置 > 隐私与安全性 > 屏幕录制/屏幕与系统音频录制”，开启 SnapInk。
+4. 授权后完全退出 SnapInk，再重新打开一次。
+
+说明：此内部测试包使用 Apple Development 证书签名，尚未进行 Apple Developer ID 公证，因此首次启动需要使用右键“打开”。

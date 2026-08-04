@@ -1,0 +1,87 @@
+# SnapInk
+
+SnapInk is a lightweight native macOS screenshot app inspired by iShot. The current build includes the complete capture and inline annotation loop:
+
+It supports macOS 13 or later on both Apple Silicon and Intel Macs through a Universal 2 executable.
+
+- menu bar app
+- configurable global shortcuts for capture, clipboard pinning, the pin library, and hiding/showing pins
+- drag-to-select capture overlay
+- selection action bar with cancel, local OCR, copy, and save actions
+- inline annotation tools for rectangle, ellipse, line, arrow, pen, text, numbered steps with optional descriptions, mosaic, and spotlight highlight
+- editable annotation objects with move, resize, restyle, delete, undo, redo, and context-sensitive drawing/move/resize cursors
+- per-tool color, opacity, width, line, fill, arrow, text, mosaic, and highlight styles
+- per-tool style persistence across launches
+- PNG output to Downloads
+- screenshot and clipboard image pinning in always-on-top desktop windows
+- persistent pin library with SHA-256 content deduplication and up to 100 recent images
+- pin opacity, corner radius, current/all-desktop behavior, pixel-level arrow-key movement, and hide/show all
+- right-click or double-click secondary annotation for pinned images
+- on-device Chinese and English text recognition using macOS Vision, with editable result preview
+- on-device English-to-Simplified-Chinese translation on macOS 15 or later using Apple Translation
+- screen recording permission prompt
+
+## Capture Workflow
+
+1. Press the configured shortcut or choose `区域截图` from the menu bar.
+2. Drag to select an area.
+3. Move the selection or drag any edge/corner handle to resize it, then choose an annotation tool to freeze the selected image and enter editing mode.
+4. Add and edit annotations, then recognize the original image text, copy the flattened result to the clipboard, or save it to Downloads. Newly created annotations remain selected and can be moved or resized without switching away from the active drawing tool.
+
+The `text.viewfinder` button runs OCR entirely on the Mac and opens an editable result window. On macOS 15 or later, the compact side-by-side result window can translate the currently edited English text into Simplified Chinese using Apple's on-device Translation framework; use the menu bar's `启用 OCR 英译中` check item to turn this feature on or off. On macOS 13 and 14 the menu shows a disabled compatibility note instead. macOS may ask to download the language models on first use. Copying either the original or translated text writes plain text to the clipboard. In annotation mode OCR always reads the frozen original screenshot, so arrows, text, mosaic, and other annotations are ignored.
+
+Use `Command + C` or `Command + S` while the selection is active for the copy and save actions. Global shortcuts can be changed from `快捷键设置…` in the menu bar.
+
+Annotation tool shortcuts are `V/R/O/L/A/P/T/N/M/H`. Use `Command + Z` and `Shift + Command + Z` for undo and redo, and Delete to remove the selected annotation. While editing text, `Command + Return` commits and Escape cancels the text edit.
+
+Double-click an empty part of the annotated screenshot or any non-text annotation to copy the flattened PNG. Double-click text to edit it. While a drawing tool is active, existing annotations take pointer priority; hold Option while dragging to force creation of a new overlapping annotation. Color, opacity, width, and other style choices are applied immediately but are not added to the undo history.
+
+Sequence annotations are numeric badges only and increment automatically. Add explanatory text next to a badge with the separate text tool.
+
+## Pin Workflow
+
+- Click the pin button in the screenshot toolbar to float the selected or annotated result above other windows.
+- Open the menu bar's `贴图` submenu and choose `从剪贴板贴图` to pin PNG, TIFF, or other image content currently on the clipboard.
+- In the same submenu, choose `贴图库…` to reopen, delete, or clear persistent pin history. Identical image content is stored only once.
+- Drag a pinned image to move it. After clicking it, use the arrow keys for one-pixel movement or Shift + arrow keys for ten pixels.
+- Right-click a pin to change opacity or corner radius, keep it on the current desktop or show it on every desktop, copy/save it, or annotate it again.
+- Double-clicking a pin opens the complete annotation toolset; completing the edit updates the pin and adds the edited result to history.
+- Use `隐藏全部贴图` / `显示全部贴图` from the menu bar to temporarily toggle every open pin.
+- Choose `快捷键设置…` to customize all four global actions. SnapInk rejects duplicate combinations and shortcuts already reserved by macOS or other applications.
+
+## Run From Source
+
+```bash
+swift run SnapInk
+```
+
+This path uses Swift Package Manager for development. The packaging scripts below use the Xcode toolchain directly and keep build output inside the project.
+
+## Build `.app`
+
+```bash
+./scripts/build-app.sh
+open dist/SnapInk.app
+```
+
+## Build `.dmg`
+
+```bash
+./scripts/build-dmg.sh
+open dist/SnapInk.dmg
+```
+
+The generated app and DMG are signed as complete app bundles. The build automatically uses the first Apple Development certificate in the login keychain, which keeps macOS privacy permissions stable across rebuilds. To select a different Apple Development or Developer ID identity:
+
+```bash
+SNAPINK_CODESIGN_IDENTITY="Apple Development: Your Name (TEAMID)" ./scripts/build-app.sh
+```
+
+macOS screen recording permission is required on first use. For permission testing, launch the generated app instead of `swift run`, because direct command-line builds do not have the packaged app's signing identity.
+
+The first capture requires macOS screen recording permission. If permission is denied, enable SnapInk in System Settings > Privacy & Security > Screen & System Audio Recording, then relaunch the app.
+
+## Next Core Features
+
+- capture full screen and active window
+- Developer ID signing and notarization
