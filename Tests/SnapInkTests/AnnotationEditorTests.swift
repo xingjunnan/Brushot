@@ -17,8 +17,12 @@ final class AnnotationEditorTests: XCTestCase {
         for button in toolButtons {
             let rawValue = try XCTUnwrap(button.identifier?.rawValue)
             let tool = try XCTUnwrap(AnnotationTool(rawValue: rawValue))
-            XCTAssertEqual(button.toolTip, tool.title)
+            let hoverButton = try XCTUnwrap(button as? AnnotationHoverButton)
+            XCTAssertNil(hoverButton.toolTip)
+            XCTAssertEqual(hoverButton.hoverTitle, tool.title)
+            XCTAssertEqual(hoverButton.hoverDelay, 0.15, accuracy: 0.001)
         }
+        XCTAssertEqual(AnnotationHoverTooltipPresenter.fontSize, 14)
 
         toolbar.setTool(.rectangle, style: .defaultStyle(for: .rectangle))
         XCTAssertEqual(toolbar.frame.height, 72)

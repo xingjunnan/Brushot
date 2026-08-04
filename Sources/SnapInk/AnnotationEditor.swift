@@ -1301,6 +1301,178 @@ final class InlineAnnotationTextView: NSTextView {
 }
 
 @MainActor
+final class AnnotationHoverButton: NSButton {
+    static let defaultHoverDelay: TimeInterval = 0.15
+
+    var hoverTitle: String?
+    var hoverDelay = defaultHoverDelay
+    var onHoverShow: ((AnnotationHoverButton, String) -> Void)?
+    var onHoverHide: (() -> Void)?
+
+    private var hoverTrackingArea: NSTrackingArea?
+    private var hoverTimer: Timer?
+
+    override func updateTrackingAreas() {
+        if let hoverTrackingArea {
+            removeTrackingArea(hoverTrackingArea)
+        }
+        let trackingArea = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        hoverTrackingArea = trackingArea
+        super.updateTrackingAreas()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        scheduleHover()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        cancelHover()
+        super.mouseExited(with: event)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        cancelHover()
+        super.mouseDown(with: event)
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil {
+            cancelHover()
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    private func scheduleHover() {
+        hoverTimer?.invalidate()
+        guard hoverTitle?.isEmpty == false else { return }
+        let timer = Timer(
+            timeInterval: hoverDelay,
+            target: self,
+            selector: #selector(showHover),
+            userInfo: nil,
+            repeats: false
+        )
+        hoverTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func cancelHover() {
+        hoverTimer?.invalidate()
+        hoverTimer = nil
+        onHoverHide?()
+    }
+
+    @objc private func showHover() {
+        hoverTimer = nil
+        guard let hoverTitle, !hoverTitle.isEmpty else { return }
+        onHoverShow?(self, hoverTitle)
+    }
+}
+
+@MainActor
+final class AnnotationHoverTooltipPresenter {
+    static let fontSize: CGFloat = 14
+
+    private let panel: NSPanel
+    private let backgroundView = NSVisualEffectView()
+    private let label = NSTextField(labelWithString: "")
+    private weak var hostWindow: NSWindow?
+
+    init() {
+        panel = NSPanel(
+            contentRect: .zero,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: true
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.ignoresMouseEvents = true
+        panel.isReleasedWhenClosed = false
+        panel.animationBehavior = .none
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+
+        backgroundView.material = .hudWindow
+        backgroundView.blendingMode = .behindWindow
+        backgroundView.state = .active
+        backgroundView.wantsLayer = true
+        backgroundView.layer?.cornerRadius = 7
+        backgroundView.layer?.masksToBounds = true
+
+        label.font = .systemFont(ofSize: Self.fontSize, weight: .medium)
+        label.textColor = .labelColor
+        label.alignment = .center
+        label.maximumNumberOfLines = 1
+        label.lineBreakMode = .byClipping
+        backgroundView.addSubview(label)
+        panel.contentView = backgroundView
+    }
+
+    func show(title: String, relativeTo view: NSView) {
+        guard let window = view.window else { return }
+        if hostWindow !== window {
+            hostWindow?.removeChildWindow(panel)
+            window.addChildWindow(panel, ordered: .above)
+            hostWindow = window
+        }
+
+        label.stringValue = title
+        label.sizeToFit()
+        let contentSize = NSSize(
+            width: ceil(label.frame.width) + 20,
+            height: max(30, ceil(label.frame.height) + 12)
+        )
+        backgroundView.frame = NSRect(origin: .zero, size: contentSize)
+        label.frame = NSRect(
+            x: 10,
+            y: floor((contentSize.height - label.frame.height) / 2),
+            width: contentSize.width - 20,
+            height: label.frame.height
+        )
+
+        let buttonRectInWindow = view.convert(view.bounds, to: nil)
+        let buttonRect = window.convertToScreen(buttonRectInWindow)
+        let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? buttonRect
+        let gap: CGFloat = 7
+        var origin = NSPoint(
+            x: buttonRect.midX - contentSize.width / 2,
+            y: buttonRect.maxY + gap
+        )
+        if origin.y + contentSize.height > visibleFrame.maxY {
+            origin.y = buttonRect.minY - contentSize.height - gap
+        }
+        origin.x = min(
+            max(origin.x, visibleFrame.minX + 4),
+            visibleFrame.maxX - contentSize.width - 4
+        )
+        origin.y = min(
+            max(origin.y, visibleFrame.minY + 4),
+            visibleFrame.maxY - contentSize.height - 4
+        )
+        panel.setFrame(NSRect(origin: origin, size: contentSize), display: false)
+        panel.orderFront(nil)
+    }
+
+    func hide() {
+        panel.orderOut(nil)
+    }
+
+    func detach() {
+        hide()
+        hostWindow?.removeChildWindow(panel)
+        hostWindow = nil
+    }
+}
+
+@MainActor
 final class AnnotationToolbarView: NSVisualEffectView {
     var onToolSelected: ((AnnotationTool) -> Void)?
     var onStyleChanged: ((AnnotationStyle) -> Void)?
@@ -1317,6 +1489,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
     private var contextTool: AnnotationTool = .select
     private var currentStyle = AnnotationStyle.defaultStyle(for: .rectangle)
     private var toolButtons: [AnnotationTool: NSButton] = [:]
+    private let hoverTooltipPresenter = AnnotationHoverTooltipPresenter()
     private let rootStack = NSStackView()
     private let styleRow = NSStackView()
     private let colorPaletteStack = NSStackView()
@@ -1362,6 +1535,13 @@ final class AnnotationToolbarView: NSVisualEffectView {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil {
+            hoverTooltipPresenter.detach()
+        }
+        super.viewWillMove(toWindow: newWindow)
     }
 
     func setTool(_ tool: AnnotationTool, style: AnnotationStyle) {
@@ -1705,14 +1885,20 @@ final class AnnotationToolbarView: NSVisualEffectView {
     @objc private func copyAction() { onCopy?() }
     @objc private func saveAction() { onSave?() }
 
-    private func makeButton(symbol: String, title: String, action: Selector) -> NSButton {
-        let button = NSButton(frame: NSRect(x: 0, y: 0, width: 30, height: 28))
+    private func makeButton(symbol: String, title: String, action: Selector) -> AnnotationHoverButton {
+        let button = AnnotationHoverButton(frame: NSRect(x: 0, y: 0, width: 30, height: 28))
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
             .withSymbolConfiguration(.init(pointSize: 16, weight: .medium))
         if button.image == nil { button.title = String(title.prefix(1)) }
         button.imagePosition = .imageOnly
         button.isBordered = false
-        button.toolTip = title
+        button.hoverTitle = title
+        button.onHoverShow = { [weak self] button, title in
+            self?.hoverTooltipPresenter.show(title: title, relativeTo: button)
+        }
+        button.onHoverHide = { [weak self] in
+            self?.hoverTooltipPresenter.hide()
+        }
         button.setAccessibilityLabel(title)
         button.target = self
         button.action = action

@@ -810,7 +810,7 @@ enum OCRSource {
 @MainActor
 final class CaptureController {
     private var overlayWindows: [SelectionOverlayWindow] = []
-    private var didRequestScreenCapturePermission = false
+    private var isRequestingScreenCapturePermission = false
     private let textRecognizer: any TextRecognizing
     private var ocrResultWindowController: OCRResultWindowController?
     private var isTranslationEnabled = TranslationPreferences.isEnabled()
@@ -840,11 +840,38 @@ final class CaptureController {
     }
 
     func beginSelectionCapture() {
-        guard ensureScreenCapturePermission() else {
-            showPermissionAlert()
+        guard !isRequestingScreenCapturePermission else {
             return
         }
 
+        if CGPreflightScreenCaptureAccess() {
+            presentSelectionOverlays()
+            return
+        }
+
+        // On recent macOS releases CGRequestScreenCaptureAccess() can return
+        // denial without displaying a prompt or registering the app in System
+        // Settings. Asking ScreenCaptureKit for the available content performs
+        // the real capture authorization request and reliably creates the TCC
+        // entry for this installed app.
+        isRequestingScreenCapturePermission = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { isRequestingScreenCapturePermission = false }
+
+            do {
+                _ = try await SCShareableContent.excludingDesktopWindows(
+                    false,
+                    onScreenWindowsOnly: true
+                )
+                presentSelectionOverlays()
+            } catch {
+                showPermissionAlert(error: error)
+            }
+        }
+    }
+
+    private func presentSelectionOverlays() {
         closeOverlays()
 
         let screens = NSScreen.screens
@@ -1098,48 +1125,22 @@ final class CaptureController {
         }
     }
 
-    private func ensureScreenCapturePermission() -> Bool {
-        if CGPreflightScreenCaptureAccess() {
-            return true
-        }
-
-        guard !didRequestScreenCapturePermission else {
-            return false
-        }
-        didRequestScreenCapturePermission = true
-        return CGRequestScreenCaptureAccess()
-    }
-
-    private func showPermissionAlert() {
+    private func showPermissionAlert(error: Error) {
         let alert = NSAlert()
         alert.messageText = "需要屏幕录制权限"
-        alert.informativeText = "如果设置中已经开启 SnapInk，通常是应用更新后旧进程仍在运行。请先重新启动 SnapInk；如果仍无效，请在系统设置中关闭再重新开启 SnapInk，然后重新启动。"
-        alert.addButton(withTitle: "重新启动 SnapInk")
-        alert.addButton(withTitle: "打开设置")
+        alert.informativeText = "SnapInk 已向 macOS 发起屏幕录制授权申请。请在“系统设置 > 隐私与安全性 > 录屏与系统录音”中开启 SnapInk，然后退出并重新打开应用。\n\n如果列表中仍没有 SnapInk，请点击列表底部的“+”，手动选择“应用程序”中的 SnapInk。\n\n系统信息：\(error.localizedDescription)"
+        alert.addButton(withTitle: "打开系统设置")
+        alert.addButton(withTitle: "退出 SnapInk")
         alert.addButton(withTitle: "取消")
         switch alert.runModal() {
         case .alertFirstButtonReturn:
-            relaunchApplication()
-        case .alertSecondButtonReturn:
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
                 NSWorkspace.shared.open(url)
             }
+        case .alertSecondButtonReturn:
+            NSApp.terminate(nil)
         default:
             break
-        }
-    }
-
-    private func relaunchApplication() {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        task.arguments = ["-n", Bundle.main.bundlePath]
-        do {
-            try task.run()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                NSApp.terminate(nil)
-            }
-        } catch {
-            showFailureAlert(message: "无法自动重新启动 SnapInk，请手动退出后重新打开。")
         }
     }
 

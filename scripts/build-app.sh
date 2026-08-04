@@ -50,8 +50,10 @@ cp "$RESOURCES_DIR/AppIcon.icns" "$APP_RESOURCES_DIR/AppIcon.icns"
 # are sealed as part of the app. Prefer an explicitly configured identity, then
 # a Developer ID Application identity when available, then the first Apple
 # Development identity in the user's keychain.
+EXPLICIT_CODE_SIGN_IDENTITY=false
 if [[ -n "${SNAPINK_CODESIGN_IDENTITY:-}" ]]; then
     CODE_SIGN_IDENTITY="$SNAPINK_CODESIGN_IDENTITY"
+    EXPLICIT_CODE_SIGN_IDENTITY=true
 else
     CODE_SIGN_IDENTITY="$(
         security find-identity -v -p codesigning 2>/dev/null \
@@ -77,6 +79,29 @@ if [[ "$CODE_SIGN_IDENTITY" == Developer\ ID\ Application:* ]]; then
     CODESIGN_ARGS+=(--timestamp)
 fi
 codesign "${CODESIGN_ARGS[@]}" "$APP_DIR"
+
+# A certificate can remain in the keychain after it expires or loses trust.
+# codesign can still produce a CMS signature with it, but macOS then rejects
+# the app identity and privacy permissions become unreliable. For automatic
+# identity selection, prefer a valid ad-hoc signature over an invalid
+# certificate-backed signature. An explicitly requested identity remains a
+# hard failure so release signing mistakes are never hidden.
+if ! codesign --verify --deep --strict "$APP_DIR" >/dev/null 2>&1; then
+    if [[ "$EXPLICIT_CODE_SIGN_IDENTITY" == true ]]; then
+        echo "Error: the explicitly selected code-signing identity did not produce a valid signature." >&2
+        exit 1
+    fi
+    echo "Warning: the automatically selected signing identity is not trusted; falling back to ad-hoc signing." >&2
+    CODE_SIGN_IDENTITY="-"
+    codesign \
+        --force \
+        --deep \
+        --options runtime \
+        --identifier "com.snapink.app" \
+        --sign "$CODE_SIGN_IDENTITY" \
+        "$APP_DIR"
+    codesign --verify --deep --strict "$APP_DIR"
+fi
 
 if [[ "$CODE_SIGN_IDENTITY" == "-" ]]; then
     echo "Warning: using an ad-hoc signature; privacy permissions may reset after rebuilding."
