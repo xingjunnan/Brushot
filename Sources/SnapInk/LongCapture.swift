@@ -1334,7 +1334,7 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
 
     @objc private func saveAction() {
         do {
-            let url = try ScreenshotWriter.writePNGToDownloads(image)
+            let url = try ScreenshotWriter.writeImage(image)
             NSSound(named: "Glass")?.play()
             NSWorkspace.shared.activateFileViewerSelecting([url])
         } catch {

@@ -76,7 +76,7 @@ final class ShortcutTests: XCTestCase {
         XCTAssertEqual(pinMenu.items[2].keyEquivalent, "h")
         XCTAssertEqual(pinMenu.items[2].keyEquivalentModifierMask, [.option])
 
-        let settings = try XCTUnwrap(menu.items.first { $0.title == "快捷键设置…" })
+        let settings = try XCTUnwrap(menu.items.first { $0.title == "偏好设置…" })
         XCTAssertEqual(settings.keyEquivalent, "")
         XCTAssertTrue(settings.keyEquivalentModifierMask.isEmpty)
         let quit = try XCTUnwrap(menu.items.first { $0.title == "退出 SnapInk" })
@@ -85,14 +85,15 @@ final class ShortcutTests: XCTestCase {
     }
 
     func testShortcutSettingsShowsAllRecordersIncludingLongCapture() throws {
-        let controller = ShortcutSettingsWindowController(
+        let controller = PreferencesWindowController(
             shortcuts: ShortcutPreferences.loadAll(),
-            onChange: { _, _ in }
+            onShortcutChange: { _, _ in },
+            onTranslationToggle: { _ in }
         )
         let content = try XCTUnwrap(controller.window?.contentView)
         let recorders = descendants(of: content).compactMap { $0 as? ShortcutRecorderButton }
 
-        XCTAssertEqual(controller.window?.title, "SnapInk 快捷键设置")
+        XCTAssertEqual(controller.window?.title, "偏好设置")
         XCTAssertEqual(recorders.count, ShortcutAction.allCases.count)
         XCTAssertNotNil(recorders.first {
             $0.identifier?.rawValue == "shortcut.\(ShortcutAction.longCapture.rawValue)"
@@ -113,23 +114,6 @@ final class ShortcutTests: XCTestCase {
         XCTAssertFalse(TranslationPreferences.isEnabled(defaults: defaults))
         TranslationPreferences.setEnabled(true, defaults: defaults)
         XCTAssertTrue(TranslationPreferences.isEnabled(defaults: defaults))
-    }
-
-    func testTranslationMenuExplainsSystemRequirementAndOffersToggleWhenAvailable() {
-        let delegate = AppDelegate()
-        let unavailable = delegate.makeTranslationMenuItem(systemAvailable: false)
-        XCTAssertEqual(unavailable.title, "OCR 英译中（需要 macOS 15 或更高版本）")
-        XCTAssertFalse(unavailable.isEnabled)
-        XCTAssertNil(unavailable.action)
-
-        let available = delegate.makeTranslationMenuItem(systemAvailable: true)
-        XCTAssertEqual(available.title, "启用 OCR 英译中")
-        XCTAssertTrue(available.isEnabled)
-        XCTAssertNotNil(available.action)
-        XCTAssertEqual(
-            available.state,
-            TranslationPreferences.isEnabled() ? .on : .off
-        )
     }
 
     private func descendants(of view: NSView) -> [NSView] {

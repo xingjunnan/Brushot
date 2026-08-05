@@ -209,9 +209,39 @@ final class PinImageView: NSView {
         NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
 
+    override func scrollWheel(with event: NSEvent) {
+        let delta = event.scrollingDeltaY
+        guard delta != 0 else {
+            super.scrollWheel(with: event)
+            return
+        }
+        let sensitivity: CGFloat = event.hasPreciseScrollingDeltas ? 0.015 : 0.1
+        let factor = 1.0 + delta * sensitivity
+        let point = convert(event.locationInWindow, from: nil)
+        owner?.zoomBy(factor: factor, centeredAt: point)
+    }
+
+    override func magnify(with event: NSEvent) {
+        guard abs(event.magnification) > 0.001 else { return }
+        let factor = 1.0 + event.magnification
+        let point = convert(event.locationInWindow, from: nil)
+        owner?.zoomBy(factor: factor, centeredAt: point)
+    }
+
     override func keyDown(with event: NSEvent) {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let step = modifiers.contains(.shift) ? 10 : 1
+
+        if modifiers.contains(.command) {
+            switch event.keyCode {
+            case 24: owner?.zoomIn()   // = / +
+            case 27: owner?.zoomOut()  // -
+            case 29: owner?.resetZoom() // 0
+            default: super.keyDown(with: event)
+            }
+            return
+        }
+
         switch event.keyCode {
         case 123: owner?.moveByPixels(dx: -step, dy: 0)
         case 124: owner?.moveByPixels(dx: step, dy: 0)
@@ -294,11 +324,60 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
     func moveByPixels(dx: Int, dy: Int) {
         guard let window else { return }
         var frame = window.frame
-        // WindowServer aligns top-level windows to integral screen coordinates;
-        // one arrow-key step is therefore one addressable desktop pixel/point.
         frame.origin.x += CGFloat(dx)
         frame.origin.y += CGFloat(dy)
         window.setFrameOrigin(frame.origin)
+    }
+
+    // MARK: - Zoom
+
+    func zoomBy(factor: CGFloat, centeredAt point: CGPoint) {
+        guard let window else { return }
+        let frame = window.frame
+        let ratio = frame.height / max(1, frame.width)
+        var newWidth = frame.width * factor
+        let screen = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? frame
+        let minWidth: CGFloat = 50
+        let maxWidth = max(screen.width, screen.height) * 2
+        newWidth = min(max(newWidth, minWidth), maxWidth)
+        let newHeight = newWidth * ratio
+        guard abs(newWidth - frame.width) > 0.5 else { return }
+
+        let ratioX = point.x / max(1, frame.width)
+        let ratioY = point.y / max(1, frame.height)
+        let newOriginX = frame.origin.x + ratioX * (frame.width - newWidth)
+        let newOriginY = frame.origin.y + ratioY * (frame.height - newHeight)
+
+        window.setFrame(
+            CGRect(x: newOriginX, y: newOriginY, width: newWidth, height: newHeight),
+            display: true,
+            animate: false
+        )
+    }
+
+    func zoomIn() {
+        guard let window else { return }
+        let center = CGPoint(x: window.frame.width / 2, y: window.frame.height / 2)
+        zoomBy(factor: 1.25, centeredAt: center)
+    }
+
+    func zoomOut() {
+        guard let window else { return }
+        let center = CGPoint(x: window.frame.width / 2, y: window.frame.height / 2)
+        zoomBy(factor: 0.8, centeredAt: center)
+    }
+
+    func resetZoom() {
+        guard let window else { return }
+        let size = Self.initialSize(for: image)
+        let frame = window.frame
+        let originX = frame.midX - size.width / 2
+        let originY = frame.midY - size.height / 2
+        window.setFrame(
+            CGRect(x: originX, y: originY, width: size.width, height: size.height),
+            display: true,
+            animate: false
+        )
     }
 
     func setOpacity(_ value: CGFloat) {
@@ -362,6 +441,16 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
         menu.addItem(desktopItem)
 
         menu.addItem(.separator())
+        let zoomItem = NSMenuItem(title: "缩放", action: nil, keyEquivalent: "")
+        let zoomMenu = NSMenu()
+        zoomMenu.addItem(NSMenuItem(title: "放大", action: #selector(zoomInAction), keyEquivalent: ""))
+        zoomMenu.addItem(NSMenuItem(title: "缩小", action: #selector(zoomOutAction), keyEquivalent: ""))
+        zoomMenu.addItem(.separator())
+        zoomMenu.addItem(NSMenuItem(title: "重置大小", action: #selector(resetZoomAction), keyEquivalent: ""))
+        zoomItem.submenu = zoomMenu
+        menu.addItem(zoomItem)
+
+        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "关闭贴图", action: #selector(closeAction), keyEquivalent: ""))
         for item in menu.items { item.target = self }
         for submenu in menu.items.compactMap(\.submenu) {
@@ -401,6 +490,9 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
     @objc private func cornerAction(_ sender: NSMenuItem) { setCornerRadius(CGFloat(sender.tag)) }
     @objc private func currentDesktopAction() { setDesktopBehavior(.currentDesktop) }
     @objc private func allDesktopsAction() { setDesktopBehavior(.allDesktops) }
+    @objc private func zoomInAction() { zoomIn() }
+    @objc private func zoomOutAction() { zoomOut() }
+    @objc private func resetZoomAction() { resetZoom() }
 
     @objc private func saveAction() {
         let panel = NSSavePanel()

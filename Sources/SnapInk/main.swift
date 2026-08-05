@@ -3,6 +3,7 @@ import Carbon
 import CoreGraphics
 import ImageIO
 import ScreenCaptureKit
+import ServiceManagement
 
 struct KeyboardShortcut: Hashable {
     let keyCode: UInt32
@@ -276,6 +277,90 @@ enum TranslationPreferences {
     }
 }
 
+enum AppPreferences {
+    private static let launchAtLoginKey = "launchAtLogin"
+    private static let saveLocationKey = "saveLocation"
+    private static let imageFormatKey = "imageFormat"
+
+    // MARK: - Launch at login
+
+    static var launchAtLogin: Bool {
+        get { UserDefaults.standard.bool(forKey: launchAtLoginKey) }
+        set {
+            UserDefaults.standard.set(newValue, forKey: launchAtLoginKey)
+            applyLaunchAtLogin(newValue)
+        }
+    }
+
+    static func syncLaunchAtLogin() {
+        applyLaunchAtLogin(launchAtLogin)
+    }
+
+    private static func applyLaunchAtLogin(_ enabled: Bool) {
+        if #available(macOS 13.0, *) {
+            let service = SMAppService.mainApp
+            if enabled {
+                try? service.register()
+            } else {
+                try? service.unregister()
+            }
+        }
+    }
+
+    // MARK: - Save location
+
+    static var saveLocation: URL {
+        get {
+            if let path = UserDefaults.standard.string(forKey: saveLocationKey),
+               !path.isEmpty {
+                return URL(fileURLWithPath: path)
+            }
+            return defaultSaveLocation
+        }
+        set { UserDefaults.standard.set(newValue.path, forKey: saveLocationKey) }
+    }
+
+    static var defaultSaveLocation: URL {
+        FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+    }
+
+    // MARK: - Image format
+
+    enum ImageFormat: String, CaseIterable {
+        case png
+        case jpg
+
+        var displayName: String {
+            switch self {
+            case .png: "PNG"
+            case .jpg: "JPG"
+            }
+        }
+
+        var fileExtension: String {
+            switch self {
+            case .png: "png"
+            case .jpg: "jpg"
+            }
+        }
+
+        var utType: String {
+            switch self {
+            case .png: "public.png"
+            case .jpg: "public.jpeg"
+            }
+        }
+    }
+
+    static var imageFormat: ImageFormat {
+        get {
+            ImageFormat(rawValue: UserDefaults.standard.string(forKey: imageFormatKey) ?? "png") ?? .png
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: imageFormatKey) }
+    }
+}
+
 @MainActor
 @objcMembers
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -284,9 +369,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKeyRefs: [ShortcutAction: EventHotKeyRef] = [:]
     private var eventHandlerRef: EventHandlerRef?
     private let captureController = CaptureController()
-    private var settingsWindowController: ShortcutSettingsWindowController?
+    private var settingsWindowController: PreferencesWindowController?
     private var pinVisibilityMenuItem: NSMenuItem!
-    private var translationMenuItem: NSMenuItem!
     private let pinManager = PinManager.shared
     private var shortcuts = ShortcutPreferences.loadAll()
 
@@ -295,6 +379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureStatusItem()
         installHotKeyHandler()
         registerInitialHotKeys()
+        AppPreferences.syncLaunchAtLogin()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -371,14 +456,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pinItem.submenu = pinMenu
         menu.addItem(pinItem)
 
-        translationMenuItem = makeTranslationMenuItem(
-            systemAvailable: TranslationPreferences.isSystemAvailable
-        )
-        menu.addItem(translationMenuItem)
-
         menu.addItem(NSMenuItem.separator())
         let settings = NSMenuItem(
-            title: "快捷键设置…",
+            title: "偏好设置…",
             action: #selector(showSettings),
             keyEquivalent: ""
         )
@@ -391,27 +471,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quitItem.keyEquivalentModifierMask = []
         menu.addItem(quitItem)
         return menu
-    }
-
-    func makeTranslationMenuItem(systemAvailable: Bool) -> NSMenuItem {
-        guard systemAvailable else {
-            let item = NSMenuItem(
-                title: "OCR 英译中（需要 macOS 15 或更高版本）",
-                action: nil,
-                keyEquivalent: ""
-            )
-            item.isEnabled = false
-            return item
-        }
-
-        let item = NSMenuItem(
-            title: "启用 OCR 英译中",
-            action: #selector(toggleOCRTranslation),
-            keyEquivalent: ""
-        )
-        item.target = self
-        item.state = TranslationPreferences.isEnabled() ? .on : .off
-        return item
     }
 
     private func makeShortcutMenuItem(
@@ -442,13 +501,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleAllPins() {
         pinManager.toggleAllPins()
-    }
-
-    @objc private func toggleOCRTranslation() {
-        let enabled = !TranslationPreferences.isEnabled()
-        TranslationPreferences.setEnabled(enabled)
-        translationMenuItem.state = enabled ? .on : .off
-        captureController.setTranslationEnabled(enabled)
     }
 
     private func showPinFailure(_ message: String) {
@@ -643,9 +695,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showSettings() {
         if settingsWindowController == nil {
-            settingsWindowController = ShortcutSettingsWindowController(shortcuts: shortcuts) { [weak self] action, shortcut in
-                self?.updateShortcut(shortcut, for: action)
-            }
+            settingsWindowController = PreferencesWindowController(
+                shortcuts: shortcuts,
+                onShortcutChange: { [weak self] action, shortcut in
+                    self?.updateShortcut(shortcut, for: action)
+                },
+                onTranslationToggle: { [weak self] enabled in
+                    self?.captureController.setTranslationEnabled(enabled)
+                }
+            )
         }
         settingsWindowController?.setShortcuts(shortcuts)
         settingsWindowController?.showWindow(nil)
@@ -660,15 +718,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 @MainActor
-final class ShortcutSettingsWindowController: NSWindowController, NSWindowDelegate {
+final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     private var recorderButtons: [ShortcutAction: ShortcutRecorderButton] = [:]
-    private let onChange: (ShortcutAction, KeyboardShortcut) -> Void
+    private let onShortcutChange: (ShortcutAction, KeyboardShortcut) -> Void
+    private let onTranslationToggle: (Bool) -> Void
+
+    private var launchAtLoginCheckbox: NSButton!
+    private var translationCheckbox: NSButton!
+    private var saveLocationLabel: NSTextField!
+    private var formatPopUp: NSPopUpButton!
 
     init(
         shortcuts: [ShortcutAction: KeyboardShortcut],
-        onChange: @escaping (ShortcutAction, KeyboardShortcut) -> Void
+        onShortcutChange: @escaping (ShortcutAction, KeyboardShortcut) -> Void,
+        onTranslationToggle: @escaping (Bool) -> Void
     ) {
-        self.onChange = onChange
+        self.onShortcutChange = onShortcutChange
+        self.onTranslationToggle = onTranslationToggle
         for action in ShortcutAction.allCases {
             recorderButtons[action] = ShortcutRecorderButton(
                 shortcut: shortcuts[action] ?? action.defaultShortcut
@@ -676,12 +742,12 @@ final class ShortcutSettingsWindowController: NSWindowController, NSWindowDelega
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 330),
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 640),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        window.title = "SnapInk 快捷键设置"
+        window.title = "偏好设置"
         window.isReleasedWhenClosed = false
 
         super.init(window: window)
@@ -693,7 +759,7 @@ final class ShortcutSettingsWindowController: NSWindowController, NSWindowDelega
                 self.stopRecording(except: button)
             }
             button.onShortcutChange = { [weak self] shortcut in
-                self?.onChange(action, shortcut)
+                self?.onShortcutChange(action, shortcut)
             }
         }
         configureContentView()
@@ -717,52 +783,189 @@ final class ShortcutSettingsWindowController: NSWindowController, NSWindowDelega
         stopRecording(except: nil)
     }
 
+    // MARK: - Layout
+
     private func configureContentView() {
         guard let contentView = window?.contentView else { return }
 
-        let rows = ShortcutAction.allCases.compactMap { action -> NSView? in
+        // --- 通用 ---
+        launchAtLoginCheckbox = makeCheckbox(
+            title: "开机自动启动",
+            action: #selector(toggleLaunchAtLogin)
+        )
+        launchAtLoginCheckbox.state = AppPreferences.launchAtLogin ? .on : .off
+
+        translationCheckbox = makeCheckbox(
+            title: TranslationPreferences.isSystemAvailable
+                ? "启用 OCR 英译中"
+                : "启用 OCR 英译中（需要 macOS 15 或更高版本）",
+            action: #selector(toggleTranslation)
+        )
+        translationCheckbox.state = TranslationPreferences.isEnabled() ? .on : .off
+        translationCheckbox.isEnabled = TranslationPreferences.isSystemAvailable
+
+        let generalSection = makeSection(
+            title: "通用",
+            views: [launchAtLoginCheckbox, translationCheckbox]
+        )
+
+        // --- 图片 ---
+        saveLocationLabel = NSTextField(labelWithString: AppPreferences.saveLocation.path)
+        saveLocationLabel.font = .systemFont(ofSize: 12)
+        saveLocationLabel.lineBreakMode = .byTruncatingMiddle
+        saveLocationLabel.cell?.truncatesLastVisibleLine = true
+        saveLocationLabel.cell?.wraps = false
+        saveLocationLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        saveLocationLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+
+        let chooseButton = NSButton(title: "选择…", target: self, action: #selector(chooseSaveLocation))
+        chooseButton.bezelStyle = .rounded
+
+        let locationRow = makeRow(
+            label: "保存位置",
+            trailingViews: [saveLocationLabel, chooseButton]
+        )
+
+        formatPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+        formatPopUp.addItems(withTitles: AppPreferences.ImageFormat.allCases.map { $0.displayName })
+        formatPopUp.selectItem(withTitle: AppPreferences.imageFormat.displayName)
+        formatPopUp.target = self
+        formatPopUp.action = #selector(changeImageFormat)
+
+        let formatRow = makeRow(
+            label: "存储格式",
+            trailingViews: [formatPopUp]
+        )
+
+        let imageSection = makeSection(
+            title: "图片",
+            views: [locationRow, formatRow]
+        )
+
+        // --- 快捷键 ---
+        let shortcutRows = ShortcutAction.allCases.compactMap { action -> NSView? in
             guard let recorderButton = recorderButtons[action] else { return nil }
-            let label = NSTextField(labelWithString: action.title)
-            label.font = .systemFont(ofSize: 14, weight: .medium)
-            label.setContentHuggingPriority(.defaultLow, for: .horizontal)
             recorderButton.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
-                recorderButton.widthAnchor.constraint(equalToConstant: 180),
-                recorderButton.heightAnchor.constraint(equalToConstant: 32)
+                recorderButton.widthAnchor.constraint(equalToConstant: 160),
+                recorderButton.heightAnchor.constraint(equalToConstant: 28)
             ])
-
-            let row = NSStackView(views: [label, recorderButton])
-            row.orientation = .horizontal
-            row.alignment = .centerY
-            row.distribution = .fill
-            row.spacing = 20
-            return row
+            return makeRow(label: action.title, trailingViews: [recorderButton])
         }
-        let stack = NSStackView(views: rows)
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 14
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        rows.forEach { row in
-            row.translatesAutoresizingMaskIntoConstraints = false
-            row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        }
+        let shortcutSection = makeSection(title: "快捷键", views: shortcutRows)
 
+        // --- Note ---
         let note = NSTextField(labelWithString: "快捷键必须包含 ⌘、⌃ 或 ⌥；重复或已被系统占用的组合不会保存。")
         note.textColor = .secondaryLabelColor
-        note.font = .systemFont(ofSize: 12)
+        note.font = .systemFont(ofSize: 11)
         note.translatesAutoresizingMaskIntoConstraints = false
+        note.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        note.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        contentView.addSubview(stack)
-        contentView.addSubview(note)
+        // --- Assemble ---
+        let outerStack = NSStackView(views: [generalSection, imageSection, shortcutSection, note])
+        outerStack.orientation = .vertical
+        outerStack.alignment = .leading
+        outerStack.spacing = 28
+        outerStack.translatesAutoresizingMaskIntoConstraints = false
+
+        contentView.addSubview(outerStack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 28),
-            stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -28),
-            stack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 26),
-            note.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
-            note.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -28),
-            note.topAnchor.constraint(equalTo: stack.bottomAnchor, constant: 18)
+            outerStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
+            outerStack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
+            outerStack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 24),
+            outerStack.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -20)
         ])
+    }
+
+    // MARK: - Layout helpers
+
+    private func makeSection(title: String, views: [NSView]) -> NSStackView {
+        let header = NSTextField(labelWithString: title)
+        header.font = .systemFont(ofSize: 13, weight: .semibold)
+        header.textColor = .controlAccentColor
+        header.translatesAutoresizingMaskIntoConstraints = false
+
+        let content = NSStackView(views: views)
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 16
+        content.translatesAutoresizingMaskIntoConstraints = false
+        views.forEach { $0.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true }
+
+        let section = NSStackView(views: [header, content])
+        section.orientation = .vertical
+        section.alignment = .leading
+        section.spacing = 10
+        section.translatesAutoresizingMaskIntoConstraints = false
+        header.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true
+        content.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true
+        return section
+    }
+
+    private func makeRow(label: String, trailingViews: [NSView]) -> NSStackView {
+        let labelField = NSTextField(labelWithString: label)
+        labelField.font = .systemFont(ofSize: 13)
+        labelField.translatesAutoresizingMaskIntoConstraints = false
+        labelField.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        labelField.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+
+        let trailing = NSStackView(views: trailingViews)
+        trailing.orientation = .horizontal
+        trailing.alignment = .centerY
+        trailing.spacing = 8
+        trailing.translatesAutoresizingMaskIntoConstraints = false
+        trailing.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        trailing.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+
+        let row = NSStackView(views: [labelField, trailing])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.distribution = .fill
+        row.spacing = 16
+        row.translatesAutoresizingMaskIntoConstraints = false
+        labelField.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        return row
+    }
+
+    private func makeCheckbox(title: String, action: Selector) -> NSButton {
+        let button = NSButton()
+        button.title = title
+        button.setButtonType(.switch)
+        button.target = self
+        button.action = action
+        return button
+    }
+
+    // MARK: - Actions
+
+    @objc private func toggleLaunchAtLogin() {
+        AppPreferences.launchAtLogin = launchAtLoginCheckbox.state == .on
+    }
+
+    @objc private func toggleTranslation() {
+        let enabled = translationCheckbox.state == .on
+        TranslationPreferences.setEnabled(enabled)
+        onTranslationToggle(enabled)
+    }
+
+    @objc private func chooseSaveLocation() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = AppPreferences.saveLocation
+        if panel.runModal() == .OK, let url = panel.url {
+            AppPreferences.saveLocation = url
+            saveLocationLabel.stringValue = url.path
+        }
+    }
+
+    @objc private func changeImageFormat() {
+        guard let title = formatPopUp.titleOfSelectedItem,
+              let format = AppPreferences.ImageFormat.allCases.first(where: { $0.displayName == title }) else { return }
+        AppPreferences.imageFormat = format
     }
 
     private func stopRecording(except activeButton: ShortcutRecorderButton?) {
@@ -1094,7 +1297,7 @@ final class CaptureController {
 
     private func finishGIFCapture(data: Data) {
         do {
-            let url = try ScreenshotWriter.writeGIFToDownloads(data)
+            let url = try ScreenshotWriter.writeGIF(data)
             NSSound(named: "Glass")?.play()
             NSWorkspace.shared.activateFileViewerSelecting([url])
         } catch {
@@ -1251,7 +1454,7 @@ final class CaptureController {
             try ScreenshotWriter.copyToPasteboard(image)
             NSSound(named: "Tink")?.play()
         case .saveToDownloads:
-            let url = try ScreenshotWriter.writePNGToDownloads(image)
+            let url = try ScreenshotWriter.writeImage(image)
             NSSound(named: "Glass")?.play()
             NSWorkspace.shared.activateFileViewerSelecting([url])
         case .pin:
@@ -2248,33 +2451,41 @@ enum ScreenshotWriter {
         }
     }
 
-    static func writePNGToDownloads(_ image: CGImage) throws -> URL {
-        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser
+    static func writeImage(
+        _ image: CGImage,
+        to directory: URL? = nil,
+        format: AppPreferences.ImageFormat? = nil
+    ) throws -> URL {
+        let dir = directory ?? AppPreferences.saveLocation
+        let fmt = format ?? AppPreferences.imageFormat
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
-        let url = downloads.appendingPathComponent("SnapInk-\(formatter.string(from: Date())).png")
+        let url = dir.appendingPathComponent("SnapInk-\(formatter.string(from: Date())).\(fmt.fileExtension)")
 
-        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
-            throw makeError(code: 3, message: "无法创建 PNG 文件。")
+        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, fmt.utType as CFString, 1, nil) else {
+            throw makeError(code: 3, message: "无法创建 \(fmt.displayName) 文件。")
         }
 
-        CGImageDestinationAddImage(destination, image, nil)
+        if fmt == .jpg {
+            let props: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: 0.9]
+            CGImageDestinationAddImage(destination, image, props as CFDictionary)
+        } else {
+            CGImageDestinationAddImage(destination, image, nil)
+        }
         guard CGImageDestinationFinalize(destination) else {
-            throw makeError(code: 4, message: "无法将截图保存到下载目录。")
+            throw makeError(code: 4, message: "无法将截图保存到 \(dir.path)。")
         }
 
         return url
     }
 
-    static func writeGIFToDownloads(_ data: Data) throws -> URL {
-        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser
+    static func writeGIF(_ data: Data, to directory: URL? = nil) throws -> URL {
+        let dir = directory ?? AppPreferences.saveLocation
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
-        let url = downloads.appendingPathComponent("SnapInk-\(formatter.string(from: Date())).gif")
+        let url = dir.appendingPathComponent("SnapInk-\(formatter.string(from: Date())).gif")
         try data.write(to: url)
         return url
     }
