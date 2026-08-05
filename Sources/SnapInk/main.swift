@@ -1644,6 +1644,7 @@ final class SelectionOverlayView: NSView {
     private var resizeInitialRect: CGRect?
     private var isSelectionFinalized = false
     private var isPreselected = false
+    private var preselectClickStart: CGPoint?
     private var isGIFConfirming = false
     private var isPreparingAnnotation = false
     private var isSubmitting = false
@@ -1790,9 +1791,8 @@ final class SelectionOverlayView: NSView {
         currentPoint = CGPoint(x: bounds.maxX, y: bounds.maxY)
         isSelectionFinalized = true
         isPreselected = true
-        if let selection = currentSelection() {
-            positionSelectionControls(for: selection)
-        }
+        // Don't show the toolbar yet — like iShot/Xnip, the user clicks
+        // once to enter annotation mode or drags to draw a new region.
         window?.invalidateCursorRects(for: self)
         needsDisplay = true
     }
@@ -1826,20 +1826,12 @@ final class SelectionOverlayView: NSView {
                 return
             }
 
-            // A preselected full-screen selection is not meant to be moved
-            // (it already covers the screen). Any click inside starts a fresh
-            // drag-selection so the user can carve out a smaller region.
+            // Like iShot/Xnip: a click in the pre-selected full-screen
+            // region enters annotation mode on mouseUp; a drag converts
+            // to a fresh selection.  Don't commit to either action yet.
             if isPreselected {
-                isPreselected = false
-                isSelectionFinalized = false
-                hideSelectionControls()
-                startPoint = location
-                currentPoint = location
-                dragOperation = .selecting
-                moveAnchorPoint = nil
-                moveInitialRect = nil
+                preselectClickStart = location
                 window?.makeFirstResponder(self)
-                needsDisplay = true
                 return
             }
 
@@ -1873,6 +1865,25 @@ final class SelectionOverlayView: NSView {
             return
         }
 
+        // Convert a pre-select click into a fresh drag-selection once the
+        // mouse moves beyond a small threshold (like iShot/Xnip).
+        if let start = preselectClickStart {
+            if abs(location.x - start.x) > 3 || abs(location.y - start.y) > 3 {
+                preselectClickStart = nil
+                isPreselected = false
+                isSelectionFinalized = false
+                hideSelectionControls()
+                startPoint = start
+                currentPoint = location
+                dragOperation = .selecting
+                moveAnchorPoint = nil
+                moveInitialRect = nil
+                window?.invalidateCursorRects(for: self)
+            }
+            needsDisplay = true
+            return
+        }
+
         switch dragOperation {
         case .selecting:
             guard startPoint != nil else { return }
@@ -1891,6 +1902,20 @@ final class SelectionOverlayView: NSView {
     override func mouseUp(with event: NSEvent) {
         guard !isPreparingAnnotation else { return }
         let location = convert(event.locationInWindow, from: nil)
+
+        // A plain click (no drag) on the pre-selected full-screen region
+        // enters annotation mode — show the toolbar (like iShot/Xnip).
+        if preselectClickStart != nil {
+            preselectClickStart = nil
+            isPreselected = false
+            if let selection = currentSelection() {
+                positionSelectionControls(for: selection)
+            }
+            window?.invalidateCursorRects(for: self)
+            NSCursor.openHand.set()
+            needsDisplay = true
+            return
+        }
 
         if case .resizing(let handle) = dragOperation {
             resizeSelection(handle: handle, to: location)
