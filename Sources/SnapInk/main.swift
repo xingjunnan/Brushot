@@ -142,11 +142,13 @@ enum ShortcutAction: UInt32, CaseIterable, Hashable {
     case pinLibrary = 3
     case togglePins = 4
     case longCapture = 5
+    case gifCapture = 6
 
     var title: String {
         switch self {
         case .capture: "区域截图"
         case .longCapture: "长截图"
+        case .gifCapture: "GIF 录制"
         case .pinClipboard: "从剪贴板贴图"
         case .pinLibrary: "贴图库…"
         case .togglePins: "隐藏全部贴图"
@@ -157,6 +159,7 @@ enum ShortcutAction: UInt32, CaseIterable, Hashable {
         switch self {
         case .capture: "captureShortcut"
         case .longCapture: "longCaptureShortcut"
+        case .gifCapture: "gifCaptureShortcut"
         case .pinClipboard: "pinClipboardShortcut"
         case .pinLibrary: "pinLibraryShortcut"
         case .togglePins: "togglePinsShortcut"
@@ -172,6 +175,12 @@ enum ShortcutAction: UInt32, CaseIterable, Hashable {
                 keyCode: UInt32(kVK_ANSI_L),
                 modifiers: UInt32(controlKey | optionKey),
                 keyLabel: "L"
+            )
+        case .gifCapture:
+            KeyboardShortcut(
+                keyCode: UInt32(kVK_ANSI_G),
+                modifiers: UInt32(optionKey),
+                keyLabel: "G"
             )
         case .pinClipboard:
             KeyboardShortcut(
@@ -330,6 +339,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             selector: #selector(captureLongScreenshot)
         )
         menu.addItem(longCapture)
+
+        let gifCapture = makeShortcutMenuItem(
+            action: .gifCapture,
+            title: "GIF 录制",
+            selector: #selector(captureGIF)
+        )
+        menu.addItem(gifCapture)
 
         let pinItem = NSMenuItem(title: "贴图", action: nil, keyEquivalent: "")
         let pinMenu = NSMenu(title: "贴图")
@@ -606,6 +622,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch action {
         case .capture: captureSelection()
         case .longCapture: captureLongScreenshot()
+        case .gifCapture: captureGIF()
         case .pinClipboard: pinClipboard()
         case .pinLibrary: showPinLibrary()
         case .togglePins: toggleAllPins()
@@ -618,6 +635,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func captureLongScreenshot() {
         captureController.beginLongCapture()
+    }
+
+    @objc private func captureGIF() {
+        captureController.beginGIFCapture()
     }
 
     @objc private func showSettings() {
@@ -835,6 +856,7 @@ final class CaptureController {
     private var isPreparingLongCapture = false
     private var longCaptureSession: LongCaptureSessionController?
     private var longCapturePreview: LongCapturePreviewWindowController?
+    private var gifSession: GIFSessionController?
     private let textRecognizer: any TextRecognizing
     private var ocrResultWindowController: OCRResultWindowController?
     private var isTranslationEnabled = TranslationPreferences.isEnabled()
@@ -876,6 +898,16 @@ final class CaptureController {
         }
         requestScreenCapturePermission { [weak self] in
             self?.presentLongCaptureOverlays()
+        }
+    }
+
+    func beginGIFCapture() {
+        guard gifSession == nil else {
+            NSSound.beep()
+            return
+        }
+        requestScreenCapturePermission { [weak self] in
+            self?.presentGIFCaptureOverlays()
         }
     }
 
@@ -941,6 +973,9 @@ final class CaptureController {
             window.onLongCaptureRequested = { [weak self] rect in
                 self?.startLongCapture(globalRect: rect)
             }
+            window.onGIFCaptureRequested = { [weak self] rect in
+                self?.startGIFCapture(globalRect: rect)
+            }
             return window
         }
 
@@ -957,6 +992,22 @@ final class CaptureController {
             }
             window.onLongCaptureRequested = { [weak self] rect in
                 self?.startLongCapture(globalRect: rect)
+            }
+            return window
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        overlayWindows.forEach { $0.makeKeyAndOrderFront(nil) }
+    }
+
+    private func presentGIFCaptureOverlays() {
+        closeOverlays()
+        overlayWindows = NSScreen.screens.map { screen in
+            let window = SelectionOverlayWindow(screen: screen, purpose: .gifCapture)
+            window.onSelectionCancelled = { [weak self] in
+                self?.closeOverlays()
+            }
+            window.onGIFCaptureRequested = { [weak self] rect in
+                self?.startGIFCapture(globalRect: rect)
             }
             return window
         }
@@ -1002,6 +1053,52 @@ final class CaptureController {
                 isPreparingLongCapture = false
                 showFailureAlert(message: error.localizedDescription)
             }
+        }
+    }
+
+    private func startGIFCapture(globalRect: CGRect) {
+        guard gifSession == nil else { return }
+        closeOverlays()
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.sleep(for: .milliseconds(90))
+                let capturer = try await ScreenRegionCapturer(globalRect: globalRect)
+                let session = GIFSessionController(
+                    selectionRect: globalRect,
+                    capturer: capturer,
+                    fps: 15,
+                    maxDuration: 30,
+                    maxWidth: 720,
+                    onFinish: { [weak self] data in
+                        guard let self else { return }
+                        self.gifSession = nil
+                        self.finishGIFCapture(data: data)
+                    },
+                    onCancel: { [weak self] in
+                        self?.gifSession = nil
+                    },
+                    onError: { [weak self] error in
+                        self?.gifSession = nil
+                        self?.showFailureAlert(message: error.localizedDescription)
+                    }
+                )
+                gifSession = session
+                session.start()
+                await capturer.prepareForOverlayExclusion()
+            } catch {
+                showFailureAlert(message: error.localizedDescription)
+            }
+        }
+    }
+
+    private func finishGIFCapture(data: Data) {
+        do {
+            let url = try ScreenshotWriter.writeGIFToDownloads(data)
+            NSSound(named: "Glass")?.play()
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } catch {
+            showFailureAlert(message: error.localizedDescription)
         }
     }
 
@@ -1185,6 +1282,7 @@ final class CaptureController {
             window.onAnnotationFailed = nil
             window.onOCRRequested = nil
             window.onLongCaptureRequested = nil
+            window.onGIFCaptureRequested = nil
             window.orderOut(nil)
         }
 
@@ -1231,6 +1329,7 @@ final class CaptureController {
 enum SelectionPurpose {
     case regular
     case longCapture
+    case gifCapture
 }
 
 final class SelectionOverlayWindow: NSWindow {
@@ -1241,6 +1340,7 @@ final class SelectionOverlayWindow: NSWindow {
     var onAnnotationFailed: ((Error) -> Void)?
     var onOCRRequested: ((OCRSource) -> Void)?
     var onLongCaptureRequested: ((CGRect) -> Void)?
+    var onGIFCaptureRequested: ((CGRect) -> Void)?
 
     private var overlayView: SelectionOverlayView? {
         contentView as? SelectionOverlayView
@@ -1289,6 +1389,9 @@ final class SelectionOverlayWindow: NSWindow {
         view.onLongCaptureRequested = { [weak self] rect in
             self?.onLongCaptureRequested?(rect)
         }
+        view.onGIFCaptureRequested = { [weak self] rect in
+            self?.onGIFCaptureRequested?(rect)
+        }
     }
 
     func enterAnnotationEditing(baseImage: CGImage, initialTool: AnnotationTool) {
@@ -1327,6 +1430,7 @@ final class SelectionOverlayView: NSView {
     var onAnnotationFailed: ((Error) -> Void)?
     var onOCRRequested: ((OCRSource) -> Void)?
     var onLongCaptureRequested: ((CGRect) -> Void)?
+    var onGIFCaptureRequested: ((CGRect) -> Void)?
 
     private let purpose: SelectionPurpose
     private var startPoint: NSPoint?
@@ -1336,6 +1440,8 @@ final class SelectionOverlayView: NSView {
     private var moveInitialRect: CGRect?
     private var resizeInitialRect: CGRect?
     private var isSelectionFinalized = false
+    private var isPreselected = false
+    private var isGIFConfirming = false
     private var isPreparingAnnotation = false
     private var isSubmitting = false
     private var annotationCanvas: AnnotationCanvasView?
@@ -1348,9 +1454,48 @@ final class SelectionOverlayView: NSView {
     )
     private lazy var actionBar = makeActionBar()
     private lazy var longCaptureBar: LongCaptureStartBar = {
-        let bar = LongCaptureStartBar(frame: CGRect(x: 0, y: 0, width: 430, height: 48))
+        let hint: String
+        let title: String
+        switch purpose {
+        case .gifCapture:
+            hint = "框选录制区域 · 最长 30 秒"
+            title = "录制 GIF"
+        default:
+            hint = "框内内容需全部能够上下滚动"
+            title = "开始长截图"
+        }
+        let bar = LongCaptureStartBar(frame: CGRect(x: 0, y: 0, width: 430, height: 48), hint: hint, startTitle: title)
         bar.onStart = { [weak self] in self?.requestLongCapture() }
         bar.onCancel = { [weak self] in self?.onSelectionCancelled?() }
+        return bar
+    }()
+    private lazy var gifConfirmBar: LongCaptureStartBar = {
+        let bar = LongCaptureStartBar(
+            frame: CGRect(x: 0, y: 0, width: 430, height: 48),
+            hint: "点击「录制 GIF」开始 · 最长 30 秒",
+            startTitle: "录制 GIF"
+        )
+        bar.onStart = { [weak self] in
+            guard let self,
+                  let selection = self.currentSelection(),
+                  selection.width >= 80,
+                  selection.height >= 80,
+                  let globalRect = self.currentGlobalSelectionRect() else {
+                NSSound.beep()
+                return
+            }
+            self.isSubmitting = true
+            self.hideSelectionControls()
+            self.onGIFCaptureRequested?(globalRect)
+        }
+        bar.onCancel = { [weak self] in
+            guard let self else { return }
+            self.isGIFConfirming = false
+            self.gifConfirmBar.isHidden = true
+            if let selection = self.currentSelection() {
+                self.positionSelectionControls(for: selection)
+            }
+        }
         return bar
     }()
     private let infoAttributes: [NSAttributedString.Key: Any] = [
@@ -1366,7 +1511,10 @@ final class SelectionOverlayView: NSView {
         case .regular:
             addSubview(actionBar)
             actionBar.isHidden = true
-        case .longCapture:
+            addSubview(gifConfirmBar)
+            gifConfirmBar.isHidden = true
+            preselectFullScreenIfNeeded()
+        case .longCapture, .gifCapture:
             addSubview(longCaptureBar)
             longCaptureBar.isHidden = true
         }
@@ -1388,7 +1536,11 @@ final class SelectionOverlayView: NSView {
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .crosshair)
         if isSelectionFinalized, let selection = currentSelection() {
-            addCursorRect(selection, cursor: .openHand)
+            // A preselected full-screen region is not draggable; keep the
+            // crosshair so the user can immediately drag out a new selection.
+            if !isPreselected {
+                addCursorRect(selection, cursor: .openHand)
+            }
             for (handle, point) in selectionHandlePoints(for: selection) {
                 let cursor: NSCursor
                 switch handle {
@@ -1415,7 +1567,31 @@ final class SelectionOverlayView: NSView {
     }
 
     override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
         window?.makeFirstResponder(self)
+        preselectFullScreenIfNeeded()
+        window?.invalidateCursorRects(for: self)
+    }
+
+    /// On launch the regular capture overlay preselects the whole screen so
+    /// the user can confirm immediately (like iShot/Xnip) or drag to refine.
+    /// Long-capture/GIF overlays still start empty because their region must
+    /// be chosen deliberately.
+    private func preselectFullScreenIfNeeded() {
+        guard purpose == .regular,
+              !isSelectionFinalized,
+              startPoint == nil,
+              bounds.width > 0,
+              bounds.height > 0 else { return }
+        startPoint = .zero
+        currentPoint = CGPoint(x: bounds.maxX, y: bounds.maxY)
+        isSelectionFinalized = true
+        isPreselected = true
+        if let selection = currentSelection() {
+            positionSelectionControls(for: selection)
+        }
+        window?.invalidateCursorRects(for: self)
+        needsDisplay = true
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -1439,11 +1615,28 @@ final class SelectionOverlayView: NSView {
            let selection = currentSelection(),
            selection.contains(location) {
             if event.clickCount >= 2 {
-                if purpose == .longCapture {
+                if purpose == .longCapture || purpose == .gifCapture {
                     requestLongCapture()
                 } else {
                     submitSelection(action: .copy)
                 }
+                return
+            }
+
+            // A preselected full-screen selection is not meant to be moved
+            // (it already covers the screen). Any click inside starts a fresh
+            // drag-selection so the user can carve out a smaller region.
+            if isPreselected {
+                isPreselected = false
+                isSelectionFinalized = false
+                hideSelectionControls()
+                startPoint = location
+                currentPoint = location
+                dragOperation = .selecting
+                moveAnchorPoint = nil
+                moveInitialRect = nil
+                window?.makeFirstResponder(self)
+                needsDisplay = true
                 return
             }
 
@@ -1675,6 +1868,7 @@ final class SelectionOverlayView: NSView {
         isPreparingAnnotation = false
         actionBar.setBusy(false)
         actionBar.setLongCaptureEnabled(false)
+        actionBar.setGIFEnabled(false)
         frozenScreenImage = baseImage
         guard let croppedImage = croppedFrozenImage(for: selection) else {
             onAnnotationFailed?(NSError(
@@ -1756,6 +1950,7 @@ final class SelectionOverlayView: NSView {
         isPreparingAnnotation = false
         actionBar.setBusy(false)
         actionBar.setLongCaptureEnabled(true)
+        actionBar.setGIFEnabled(true)
     }
 
     private func requestAnnotationEditing(tool: AnnotationTool) {
@@ -1825,6 +2020,9 @@ final class SelectionOverlayView: NSView {
         bar.onLongCapture = { [weak self] in
             self?.requestLongCapture()
         }
+        bar.onGIF = { [weak self] in
+            self?.showGIFConfirmBar()
+        }
         bar.onCopy = { [weak self] in
             self?.submitSelection(action: .copy)
         }
@@ -1845,7 +2043,14 @@ final class SelectionOverlayView: NSView {
     }
 
     private func positionSelectionControls(for selection: CGRect) {
-        let controls: NSView = purpose == .longCapture ? longCaptureBar : actionBar
+        let controls: NSView
+        if purpose == .longCapture || purpose == .gifCapture {
+            controls = longCaptureBar
+        } else if isGIFConfirming {
+            controls = gifConfirmBar
+        } else {
+            controls = actionBar
+        }
         let size = controls.frame.size
         let horizontalInset: CGFloat = 8
         let gap: CGFloat = 8
@@ -1868,25 +2073,49 @@ final class SelectionOverlayView: NSView {
         switch purpose {
         case .regular:
             actionBar.isHidden = true
-        case .longCapture:
+            gifConfirmBar.isHidden = true
+        case .longCapture, .gifCapture:
             longCaptureBar.isHidden = true
         }
     }
 
+    /// Switch from the annotation toolbar to a "录制 GIF" confirm bar
+    /// that reuses the current selection (no re-drawing needed).
+    private func showGIFConfirmBar() {
+        guard purpose == .regular,
+              isSelectionFinalized,
+              !isSubmitting,
+              let selection = currentSelection(),
+              selection.width >= 80,
+              selection.height >= 80 else {
+            NSSound.beep()
+            return
+        }
+        actionBar.isHidden = true
+        isGIFConfirming = true
+        positionSelectionControls(for: selection)
+        needsDisplay = true
+    }
+
     private func requestLongCapture() {
-        guard (purpose == .longCapture || annotationCanvas == nil),
+        let needsBar = (purpose == .longCapture || purpose == .gifCapture)
+        guard (needsBar || annotationCanvas == nil),
               isSelectionFinalized,
               !isSubmitting,
               let selection = currentSelection(),
               selection.width >= 80,
               selection.height >= 80,
               let globalRect = currentGlobalSelectionRect() else {
-            if purpose == .longCapture { NSSound.beep() }
+            if needsBar { NSSound.beep() }
             return
         }
         isSubmitting = true
         hideSelectionControls()
-        onLongCaptureRequested?(globalRect)
+        if purpose == .gifCapture {
+            onGIFCaptureRequested?(globalRect)
+        } else {
+            onLongCaptureRequested?(globalRect)
+        }
     }
 
     private func currentSelection() -> CGRect? {
@@ -2037,6 +2266,25 @@ enum ScreenshotWriter {
         }
 
         return url
+    }
+
+    static func writeGIFToDownloads(_ data: Data) throws -> URL {
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
+        let url = downloads.appendingPathComponent("SnapInk-\(formatter.string(from: Date())).gif")
+        try data.write(to: url)
+        return url
+    }
+
+    static func copyGIFToPasteboard(_ data: Data) throws {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        guard pasteboard.setData(data, forType: NSPasteboard.PasteboardType("com.compuserve.gif")) else {
+            throw makeError(code: 5, message: "无法写入系统剪贴板。")
+        }
     }
 
     private static func makeError(code: Int, message: String) -> NSError {

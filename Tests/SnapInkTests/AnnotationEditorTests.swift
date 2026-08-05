@@ -8,7 +8,7 @@ final class AnnotationEditorTests: XCTestCase {
     func testToolbarCollapsesWithoutStyleControlsAndExpandsForTool() throws {
         let toolbar = AnnotationToolbarView(frame: CGRect(x: 0, y: 0, width: 650, height: 82))
         XCTAssertEqual(toolbar.frame.height, 40)
-        XCTAssertLessThan(toolbar.frame.width, 620)
+        XCTAssertLessThan(toolbar.frame.width, 680)
         let toolButtons = descendants(of: toolbar).compactMap { $0 as? NSButton }.filter {
             guard let identifier = $0.identifier?.rawValue else { return false }
             return AnnotationTool(rawValue: identifier) != nil

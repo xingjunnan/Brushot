@@ -621,7 +621,7 @@ final class LongCaptureStartBar: NSVisualEffectView {
     var onStart: (() -> Void)?
     var onCancel: (() -> Void)?
 
-    override init(frame frameRect: NSRect) {
+    init(frame frameRect: NSRect, hint: String = "框内内容需全部能够上下滚动", startTitle: String = "开始长截图") {
         super.init(frame: frameRect)
         material = .hudWindow
         blendingMode = .withinWindow
@@ -630,15 +630,15 @@ final class LongCaptureStartBar: NSVisualEffectView {
         layer?.cornerRadius = 9
         layer?.masksToBounds = true
 
-        let hint = NSTextField(labelWithString: "框内内容需全部能够上下滚动")
-        hint.font = .systemFont(ofSize: 12)
-        hint.textColor = .secondaryLabelColor
+        let hintLabel = NSTextField(labelWithString: hint)
+        hintLabel.font = .systemFont(ofSize: 12)
+        hintLabel.textColor = .secondaryLabelColor
         let cancel = NSButton(title: "取消", target: self, action: #selector(cancelAction))
-        let start = NSButton(title: "开始长截图", target: self, action: #selector(startAction))
+        let start = NSButton(title: startTitle, target: self, action: #selector(startAction))
         start.keyEquivalent = "\r"
         start.bezelStyle = .rounded
         start.contentTintColor = .controlAccentColor
-        let stack = NSStackView(views: [hint, cancel, start])
+        let stack = NSStackView(views: [hintLabel, cancel, start])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 10

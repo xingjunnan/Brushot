@@ -1480,6 +1480,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
     var onRedo: (() -> Void)?
     var onCancel: (() -> Void)?
     var onLongCapture: (() -> Void)?
+    var onGIF: (() -> Void)?
     var onOCR: (() -> Void)?
     var onPin: (() -> Void)?
     var onCopy: (() -> Void)?
@@ -1518,6 +1519,11 @@ final class AnnotationToolbarView: NSVisualEffectView {
         title: "长截图",
         action: #selector(longCaptureAction)
     )
+    private lazy var gifButton: AnnotationHoverButton = {
+        let button = makeButton(symbol: "", title: "GIF", action: #selector(gifAction))
+        button.image = makeTextIcon("GIF")
+        return button
+    }()
     private lazy var ocrButton = makeButton(symbol: "text.viewfinder", title: "识别文字", action: #selector(ocrAction))
     private lazy var pinButton = makeButton(symbol: "pin", title: "贴图", action: #selector(pinAction))
     private lazy var copyButton = makeButton(symbol: "doc.on.doc", title: "复制 (⌘C)", action: #selector(copyAction))
@@ -1526,6 +1532,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
     private let busyLabel = NSTextField(labelWithString: "正在冻结截图…")
     private var isBusy = false
     private var isLongCaptureAvailable = true
+    private var isGIFAvailable = true
     private var canUndo = false
     private var canRedo = false
 
@@ -1585,6 +1592,11 @@ final class AnnotationToolbarView: NSVisualEffectView {
         longCaptureButton.isEnabled = !isBusy && enabled
     }
 
+    func setGIFEnabled(_ enabled: Bool) {
+        isGIFAvailable = enabled
+        gifButton.isEnabled = !isBusy && enabled
+    }
+
     func setBusy(_ busy: Bool, message: String = "正在冻结截图…") {
         isBusy = busy
         busyLabel.stringValue = message
@@ -1592,6 +1604,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
         undoButton.isEnabled = !busy && canUndo
         redoButton.isEnabled = !busy && canRedo
         longCaptureButton.isEnabled = !busy && isLongCaptureAvailable
+        gifButton.isEnabled = !busy && isGIFAvailable
         ocrButton.isEnabled = !busy
         pinButton.isEnabled = !busy
         copyButton.isEnabled = !busy
@@ -1637,6 +1650,8 @@ final class AnnotationToolbarView: NSVisualEffectView {
         mainRow.addArrangedSubview(cancelButton)
         longCaptureButton.identifier = NSUserInterfaceItemIdentifier("longCaptureAction")
         mainRow.addArrangedSubview(longCaptureButton)
+        gifButton.identifier = NSUserInterfaceItemIdentifier("gifAction")
+        mainRow.addArrangedSubview(gifButton)
         ocrButton.identifier = NSUserInterfaceItemIdentifier("ocrAction")
         mainRow.addArrangedSubview(ocrButton)
         pinButton.identifier = NSUserInterfaceItemIdentifier("pinAction")
@@ -1896,10 +1911,50 @@ final class AnnotationToolbarView: NSVisualEffectView {
     @objc private func redoAction() { onRedo?() }
     @objc private func cancelAction() { onCancel?() }
     @objc private func longCaptureAction() { onLongCapture?() }
+    @objc private func gifAction() { onGIF?() }
     @objc private func ocrAction() { onOCR?() }
     @objc private func pinAction() { onPin?() }
     @objc private func copyAction() { onCopy?() }
     @objc private func saveAction() { onSave?() }
+
+    /// Renders short text (e.g. "GIF") inside a rounded-rectangle badge
+    /// as a template image so it blends with the toolbar icon color.
+    private func makeTextIcon(_ text: String, fontSize: CGFloat = 11) -> NSImage {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: fontSize, weight: .bold),
+            .foregroundColor: NSColor.black
+        ]
+        let textSize = (text as NSString).size(withAttributes: attributes)
+        let padding: CGFloat = 3
+        let badgeSize = NSSize(
+            width: textSize.width + padding * 2,
+            height: textSize.height + padding * 2
+        )
+        let image = NSImage(size: badgeSize)
+        image.lockFocus()
+
+        // Rounded-rectangle border
+        let badgePath = NSBezierPath(
+            roundedRect: NSRect(origin: .zero, size: badgeSize),
+            xRadius: 4,
+            yRadius: 4
+        )
+        NSColor.black.setStroke()
+        badgePath.lineWidth = 1
+        badgePath.stroke()
+
+        // Centered text
+        (text as NSString).draw(
+            at: NSPoint(
+                x: (badgeSize.width - textSize.width) / 2,
+                y: (badgeSize.height - textSize.height) / 2
+            ),
+            withAttributes: attributes
+        )
+        image.unlockFocus()
+        image.isTemplate = true
+        return image
+    }
 
     private func makeButton(symbol: String, title: String, action: Selector) -> AnnotationHoverButton {
         let button = AnnotationHoverButton(frame: NSRect(x: 0, y: 0, width: 30, height: 28))

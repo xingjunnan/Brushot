@@ -15,6 +15,12 @@ final class ScreenRegionCapturer {
     private let configuration: SCStreamConfiguration
     private var preparedOverlayExclusion = false
 
+    /// Exposed so the GIF recorder can build a long-running stream from the
+    /// same filter/config (source rect, scale, exclusion of SnapInk overlays)
+    /// already prepared for this selection.
+    var captureContentFilter: SCContentFilter { contentFilter }
+    var streamConfiguration: SCStreamConfiguration { configuration }
+
     init(globalRect: CGRect) async throws {
         guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(globalRect) }),
               let screenNumber = screen.deviceDescription[
