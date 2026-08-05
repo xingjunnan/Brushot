@@ -1357,6 +1357,7 @@ final class SelectionOverlayView: NSView {
         .font: NSFont.systemFont(ofSize: 13, weight: .medium),
         .foregroundColor: NSColor.white
     ]
+    private let handleHitHalfSize: CGFloat = 10
 
     init(frame frameRect: NSRect, purpose: SelectionPurpose = .regular) {
         self.purpose = purpose
@@ -1395,11 +1396,18 @@ final class SelectionOverlayView: NSView {
                     cursor = .resizeLeftRight
                 case .top, .bottom:
                     cursor = .resizeUpDown
-                default:
-                    cursor = .crosshair
+                case .topLeft, .bottomRight:
+                    cursor = AnnotationCursorFactory.cursor(for: .resizeDiagonalDown)
+                case .topRight, .bottomLeft:
+                    cursor = AnnotationCursorFactory.cursor(for: .resizeDiagonalUp)
                 }
                 addCursorRect(
-                    CGRect(x: point.x - 9, y: point.y - 9, width: 18, height: 18),
+                    CGRect(
+                        x: point.x - handleHitHalfSize,
+                        y: point.y - handleHitHalfSize,
+                        width: handleHitHalfSize * 2,
+                        height: handleHitHalfSize * 2
+                    ),
                     cursor: cursor
                 )
             }
@@ -1913,20 +1921,21 @@ final class SelectionOverlayView: NSView {
     private func selectionHandle(at point: CGPoint) -> SelectionHandle? {
         guard let selection = currentSelection() else { return nil }
         return selectionHandlePoints(for: selection).first { _, handlePoint in
-            hypot(point.x - handlePoint.x, point.y - handlePoint.y) <= 10
+            abs(point.x - handlePoint.x) <= handleHitHalfSize
+                && abs(point.y - handlePoint.y) <= handleHitHalfSize
         }?.0
     }
 
     private func selectionHandlePoints(for selection: CGRect) -> [(SelectionHandle, CGPoint)] {
         [
             (.bottomLeft, CGPoint(x: selection.minX, y: selection.minY)),
-            (.bottom, CGPoint(x: selection.midX, y: selection.minY)),
             (.bottomRight, CGPoint(x: selection.maxX, y: selection.minY)),
+            (.topLeft, CGPoint(x: selection.minX, y: selection.maxY)),
+            (.topRight, CGPoint(x: selection.maxX, y: selection.maxY)),
+            (.bottom, CGPoint(x: selection.midX, y: selection.minY)),
             (.left, CGPoint(x: selection.minX, y: selection.midY)),
             (.right, CGPoint(x: selection.maxX, y: selection.midY)),
-            (.topLeft, CGPoint(x: selection.minX, y: selection.maxY)),
-            (.top, CGPoint(x: selection.midX, y: selection.maxY)),
-            (.topRight, CGPoint(x: selection.maxX, y: selection.maxY))
+            (.top, CGPoint(x: selection.midX, y: selection.maxY))
         ]
     }
 

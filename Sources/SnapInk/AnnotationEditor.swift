@@ -16,7 +16,7 @@ enum AnnotationCursorKind: Equatable {
 }
 
 @MainActor
-private enum AnnotationCursorFactory {
+enum AnnotationCursorFactory {
     private static var directionalCursors: [Int: NSCursor] = [:]
 
     static func cursor(for kind: AnnotationCursorKind) -> NSCursor {
@@ -28,8 +28,8 @@ private enum AnnotationCursorFactory {
         case .iBeam: .iBeam
         case .resizeHorizontal: .resizeLeftRight
         case .resizeVertical: .resizeUpDown
-        case .resizeDiagonalDown: directionalCursor(degrees: 45)
-        case .resizeDiagonalUp: directionalCursor(degrees: 135)
+        case .resizeDiagonalDown: directionalCursor(degrees: 135)
+        case .resizeDiagonalUp: directionalCursor(degrees: 45)
         case .resizeLine(let degrees): directionalCursor(degrees: degrees)
         }
     }
