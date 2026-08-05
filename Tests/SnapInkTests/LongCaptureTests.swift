@@ -48,6 +48,53 @@ final class LongCaptureTests: XCTestCase {
         }
     }
 
+    func testReverseScrollIsRejectedDoesNotOverlapContent() throws {
+        // Scrolling back up moves the view DOWN over already-captured content.
+        // The captured frame is the previous frame shifted down, which must be
+        // rejected (not stitched) or the long image overlaps/stacks content.
+        let width = 180
+        let frameHeight = 300
+        let forwardSteps = [80, 90]
+        let backwardStep = 60
+        let totalForward = forwardSteps.reduce(0, +)
+        let sourceHeight = frameHeight + totalForward + backwardStep + 20
+        let source = try patternedImage(width: width, height: sourceHeight)
+        let first = try XCTUnwrap(source.cropping(to: CGRect(
+            x: 0, y: 0, width: width, height: frameHeight
+        )))
+        let stitcher = try LongCaptureStitcher(firstFrame: first)
+        var offset = 0
+        for step in forwardSteps {
+            offset += step
+            let frame = try XCTUnwrap(source.cropping(to: CGRect(
+                x: 0, y: offset, width: width, height: frameHeight
+            )))
+            XCTAssertEqual(
+                try stitcher.append(frame),
+                .appended(newPixelRows: step, totalPixelHeight: frameHeight + offset)
+            )
+        }
+        // The user now scrolls back up: this frame is the previous frame
+        // shifted down (reveals content above). It must throw, not stitch.
+        offset -= backwardStep
+        let reverseFrame = try XCTUnwrap(source.cropping(to: CGRect(
+            x: 0, y: offset, width: width, height: frameHeight
+        )))
+        XCTAssertThrowsError(try stitcher.append(reverseFrame)) { error in
+            XCTAssertEqual(error as? LongCaptureStitchError, .reverseScrollDetected)
+        }
+        XCTAssertEqual(stitcher.pixelHeight, frameHeight + totalForward)
+        // Scrolling forward again still works after a rejected reverse frame.
+        let resumeOffset = totalForward + 40
+        let resumeFrame = try XCTUnwrap(source.cropping(to: CGRect(
+            x: 0, y: resumeOffset, width: width, height: frameHeight
+        )))
+        XCTAssertEqual(
+            try stitcher.append(resumeFrame),
+            .appended(newPixelRows: 40, totalPixelHeight: frameHeight + resumeOffset)
+        )
+    }
+
     func testContinuousSmallScrollStepsCaptureEveryBlockAndFeedLivePreview() throws {
         let frameHeight = 360
         let step = 45
@@ -269,7 +316,7 @@ final class LongCaptureTests: XCTestCase {
         XCTAssertEqual(session.livePreviewSegmentCount, 2)
         XCTAssertEqual(
             session.instructionText,
-            "在框内向下滚动，结束后点击“完成”",
+            "向下滚动采集；向上滚动立即完成，或点“完成”",
             "状态区应保持为固定帮助，不猜测是否已经到底"
         )
         session.cancel()

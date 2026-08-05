@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Vision
 
 enum LongCaptureAppendResult: Equatable {
     case appended(newPixelRows: Int, totalPixelHeight: Int)
@@ -10,6 +11,7 @@ enum LongCaptureStitchError: LocalizedError, Equatable {
     case invalidFrame
     case inconsistentFrameSize
     case noReliableOverlap
+    case reverseScrollDetected
     case imageTooLarge
     case renderingFailed
 
@@ -21,6 +23,8 @@ enum LongCaptureStitchError: LocalizedError, Equatable {
             "截图区域尺寸发生变化，请重新开始长截图。"
         case .noReliableOverlap:
             "没有识别到连续内容，请减小滚动距离，并确保框选区域内没有固定栏或动画。"
+        case .reverseScrollDetected:
+            "检测到向上回滚，已自动完成长截图。"
         case .imageTooLarge:
             "长截图已达到尺寸上限，请先完成并保存当前内容。"
         case .renderingFailed:
@@ -93,8 +97,8 @@ final class LongCaptureStitcher {
     private let firstFrame: RasterFrame
     private var firstPreviewImage: CGImage
     private var latestFrame: RasterFrame
+    private var latestImage: CGImage
     private var segments: [Segment] = []
-    private var lastSuccessfulDisplacement: Int?
     private var stableBottomInset = 0
     private var stableBottomPreviewImage: CGImage?
     private(set) var pixelHeight: Int
@@ -112,6 +116,7 @@ final class LongCaptureStitcher {
         self.firstFrame = raster
         firstPreviewImage = firstFrame
         latestFrame = raster
+        latestImage = firstFrame
         pixelHeight = raster.height
         try validateSize(width: raster.width, height: raster.height)
     }
@@ -126,16 +131,43 @@ final class LongCaptureStitcher {
             return .duplicate
         }
 
+        // Reverse scroll (the user scrolled back up, or the content reached
+        // its bottom and elastically rebounded): the current frame shifted
+        // DOWN relative to the previous one. Following iShot's behavior, stop
+        // capture immediately rather than risk overlapping/stacking content.
+        //
+        // Vision's full-frame registration gives a candidate displacement for
+        // how `current` aligns to `previous`; for a reverse scroll that is a
+        // (possibly periodic-aliased) shift D whose magnitude, applied to
+        // `current`, realigns it almost perfectly with `previous` — i.e.
+        // averageDifference(current, previous, |D|) is near zero. A genuine
+        // forward scroll is misaligned by ~2|D|, so the check never fires on
+        // real down-scrolls (including fast scrolls where Vision may report a
+        // negative periodic alias that does NOT realign). This runs before
+        // bestVerticalMatch so the periodic-alias-prone scan fallback cannot
+        // match such a frame.
+        let full = Self.findTranslation(from: image, to: latestImage)
+        if let full = full {
+            let absDy = abs(Int(full.y.rounded()))
+            if absDy > 0,
+               Self.averageDifference(next, latestFrame, displacement: absDy) < 4 {
+                throw LongCaptureStitchError.reverseScrollDetected
+            }
+        }
+
         guard let match = Self.bestVerticalMatch(
+            previousImage: latestImage,
+            currentImage: image,
             previous: latestFrame,
             current: next,
-            preferredDisplacement: lastSuccessfulDisplacement
+            frameHeight: next.height,
+            full: full
         ) else {
             throw LongCaptureStitchError.noReliableOverlap
         }
-        if segments.isEmpty {
+        if stableBottomInset == 0, segments.count <= 4 {
             let detectedInset = Self.detectStableBottomInset(previous: latestFrame, current: next)
-            if detectedInset > 0 {
+            if detectedInset > 0, detectedInset < firstFrame.height {
                 stableBottomInset = detectedInset
                 let firstBodyEnd = (firstFrame.height - detectedInset) * firstFrame.bytesPerRow
                 firstPreviewImage = try Self.makeRGBAImage(
@@ -165,6 +197,7 @@ final class LongCaptureStitcher {
             previewImage: previewImage
         ))
         latestFrame = next
+        latestImage = image
         if stableBottomInset > 0 {
             let footerStart = (next.height - stableBottomInset) * next.bytesPerRow
             stableBottomPreviewImage = try Self.makeRGBAImage(
@@ -173,7 +206,6 @@ final class LongCaptureStitcher {
                 data: Data(next.data[footerStart..<next.data.count])
             )
         }
-        lastSuccessfulDisplacement = match.displacement
         pixelHeight = newHeight
         return .appended(newPixelRows: match.displacement, totalPixelHeight: newHeight)
     }
@@ -306,100 +338,222 @@ final class LongCaptureStitcher {
     }
 
     private static func bestVerticalMatch(
+        previousImage: CGImage,
+        currentImage: CGImage,
         previous: RasterFrame,
         current: RasterFrame,
-        preferredDisplacement: Int?
+        frameHeight: Int,
+        full: (x: CGFloat, y: CGFloat, confidence: Float)?
     ) -> LongCaptureMatch? {
-        let minimumDisplacement = max(2, previous.height / 200)
-        let maximumDisplacement = max(
-            minimumDisplacement,
-            min(previous.height - 28, Int(Double(previous.height) * 0.94))
-        )
-        guard maximumDisplacement >= minimumDisplacement else { return nil }
-        var scores: [(displacement: Int, score: Double)] = []
-        scores.reserveCapacity(maximumDisplacement - minimumDisplacement + 1)
-        for displacement in minimumDisplacement...maximumDisplacement {
-            scores.append((
-                displacement,
-                averageDifference(previous, current, displacement: displacement)
-            ))
+        if let visionMatch = visionMatch(
+            previousImage: previousImage,
+            currentImage: currentImage,
+            previous: previous,
+            current: current,
+            frameHeight: frameHeight,
+            full: full
+        ) {
+            return visionMatch
         }
-        guard let coarseBest = scores.min(by: { $0.score < $1.score }) else { return nil }
+        // Fallback for low-overlap frames where Vision's single global guess
+        // is unreliable (for example only ~10% overlap during fast scrolling):
+        // a brute-force pixel scan that finds the best-scoring displacement
+        // across the whole overlap range with a confidence gate.
+        return scanBestDisplacement(previous: previous, current: current)
+    }
 
-        // Repeated list rows can create several nearly identical minima. A
-        // raw lowest score at the larger displacement would append some rows
-        // twice. Among genuinely close local minima, prefer motion continuity;
-        // for the first movement prefer the smaller displacement (more shared
-        // content), which is the safer non-duplicating choice.
-        let coarseTolerance = max(0.6, min(1.5, coarseBest.score * 0.15))
-        let localMinima = scores.indices.compactMap { index -> (displacement: Int, score: Double)? in
-            let value = scores[index]
-            let previousScore = index > scores.startIndex ? scores[index - 1].score : 255
-            let nextScore = index + 1 < scores.endIndex ? scores[index + 1].score : 255
-            guard value.score <= previousScore,
-                  value.score <= nextScore,
-                  value.score <= coarseBest.score + coarseTolerance else { return nil }
-            return value
+    private static func visionMatch(
+        previousImage: CGImage,
+        currentImage: CGImage,
+        previous: RasterFrame,
+        current: RasterFrame,
+        frameHeight: Int,
+        full: (x: CGFloat, y: CGFloat, confidence: Float)?
+    ) -> LongCaptureMatch? {
+        // Primary: Apple Vision's translational image registration (FFT-based,
+        // fast, global) on the full frame. No scroll-delta prediction and no
+        // bounded search window are needed: it finds the offset across the
+        // whole frame in one shot, so it tolerates the large per-frame
+        // displacements of fast scrolling without dropping frames. Horizontal
+        // movement is ignored because long capture only stitches vertical
+        // scroll, and horizontally periodic content makes Vision lock onto a
+        // horizontal alias anyway.
+        let maximumVerticalMovement = CGFloat(frameHeight) * 0.94
+        guard let full = full else {
+            return nil
         }
+        let fullDy = Int(full.y.rounded())
+        guard full.confidence >= 0.3,
+              abs(CGFloat(fullDy)) <= maximumVerticalMovement,
+              fullDy > 0 else {
+            return nil
+        }
+        var resolved = fullDy
 
-        // The coarse pass intentionally samples relatively few pixels so it
-        // can keep up with scrolling. List rows and thin text can make nearby
-        // offsets (for example 145 and 147 px) appear almost equal, which
-        // accumulates into visibly duplicated content. Re-evaluate a narrow
-        // neighborhood around every plausible minimum at much higher density.
-        var refinementDisplacements = Set<Int>()
-        for candidate in localMinima + [coarseBest] {
-            for displacement in (candidate.displacement - 3)...(candidate.displacement + 3)
-                where displacement >= minimumDisplacement && displacement <= maximumDisplacement {
-                refinementDisplacements.insert(displacement)
+        // For small/medium scrolls the comparison bands still overlap the true
+        // displacement, so they can validate the full-frame result. Periodic
+        // content can make a full-frame match lock onto an alias (true + a
+        // multiple of the repeat period); bands with distinctive content then
+        // disagree, so prefer the band consensus when it differs. Large scrolls
+        // move past a single band's height, so the bands cannot overlap and we
+        // keep the full-frame match.
+        let bandHeight = CGFloat(min(frameHeight, max(80, frameHeight / 3)))
+        if CGFloat(fullDy) < bandHeight {
+            let bands = comparisonBands(
+                imageWidth: previousImage.width,
+                imageHeight: previousImage.height,
+                bandCount: 5,
+                minimumBandHeight: 80
+            )
+            var bandTranslations: [(y: Int, confidence: Float)] = []
+            for band in bands {
+                guard let currentBand = currentImage.cropping(to: band),
+                      let previousBand = previousImage.cropping(to: band),
+                      let translation = findTranslation(from: currentBand, to: previousBand)
+                else { continue }
+                let bandDy = Int(translation.y.rounded())
+                guard translation.confidence >= 0.5,
+                      abs(CGFloat(bandDy)) <= maximumVerticalMovement,
+                      bandDy > 0 else { continue }
+                bandTranslations.append((bandDy, translation.confidence))
+            }
+            if let consensus = bestGroup(in: bandTranslations, tolerance: 3, minimumCount: 4) {
+                let averaged = average(consensus)
+                if abs(averaged.y - fullDy) > 3 {
+                    resolved = averaged.y
+                }
             }
         }
-        let refinedScores = refinementDisplacements.map { displacement in
-            (
-                displacement: displacement,
-                score: preciseDifference(previous, current, displacement: displacement)
-            )
-        }
-        guard let rawBest = refinedScores.min(by: { $0.score < $1.score }) else { return nil }
-        let separatedScores = refinedScores.filter {
-            abs($0.displacement - rawBest.displacement) >= 4
-        }
-        let secondScore = separatedScores.min(by: { $0.score < $1.score })?.score ?? 255
-        let confidence = secondScore - rawBest.score
 
-        // Only use motion continuity to break a true visual tie. It must not
-        // pull the result away from a more accurate offset when scroll speed
-        // accelerates between frames.
-        let tieTolerance = max(0.04, min(0.20, rawBest.score * 0.03))
-        let tiedCandidates = refinedScores.filter { $0.score <= rawBest.score + tieTolerance }
-        let best: (displacement: Int, score: Double)
-        if let preferredDisplacement, !tiedCandidates.isEmpty {
-            best = tiedCandidates.min {
-                let firstDistance = abs($0.displacement - preferredDisplacement)
-                let secondDistance = abs($1.displacement - preferredDisplacement)
-                if firstDistance == secondDistance {
-                    return $0.score < $1.score
-                }
-                return firstDistance < secondDistance
-            } ?? rawBest
-        } else {
-            best = tiedCandidates.min {
-                if $0.displacement == $1.displacement { return $0.score < $1.score }
-                return $0.displacement < $1.displacement
-            } ?? rawBest
+        // Verify the proposed displacement produces a genuine pixel overlap.
+        // This separates a real scroll from an unrelated frame or a large-D
+        // alias that slipped past the bands: true overlaps match almost
+        // perfectly, while unrelated or misaligned frames do not.
+        guard averageDifference(previous, current, displacement: resolved) <= 18 else {
+            return nil
         }
-
-        // Captures are lossless, so genuine overlap normally scores very close
-        // to zero. The looser upper bound allows font antialiasing and video
-        // compositing changes while the confidence gate rejects repeated or
-        // mostly blank regions that could otherwise be joined at a random row.
-        guard rawBest.score <= 18,
-              best.score <= rawBest.score + tieTolerance,
-              confidence >= 0.35 else { return nil }
         return LongCaptureMatch(
-            displacement: best.displacement,
-            score: best.score,
+            displacement: resolved,
+            score: Double(full.confidence),
+            confidence: Double(full.confidence)
+        )
+    }
+
+    private static func scanBestDisplacement(
+        previous: RasterFrame,
+        current: RasterFrame
+    ) -> LongCaptureMatch? {
+        // Coarse-to-fine pixel scan across the full overlap range. Used only
+        // when the Vision registration is unreliable (low-overlap fast scroll),
+        // so the periodic-alias risk that motivated the Vision path does not
+        // apply here. The confidence gate requires the best displacement to be
+        // clearly better than any alternative so unrelated frames are rejected.
+        let absoluteMinimum = max(2, previous.height / 200)
+        let absoluteMaximum = max(
+            absoluteMinimum,
+            min(previous.height - 28, Int(Double(previous.height) * 0.94))
+        )
+        guard absoluteMaximum >= absoluteMinimum else { return nil }
+
+        var bestDisplacement = absoluteMinimum
+        var bestScore = averageDifference(previous, current, displacement: absoluteMinimum)
+        var secondScore = 255.0
+        let coarseStep = max(1, (absoluteMaximum - absoluteMinimum) / 96)
+        var displacement = absoluteMinimum + coarseStep
+        while displacement <= absoluteMaximum {
+            let score = averageDifference(previous, current, displacement: displacement)
+            if score < bestScore {
+                secondScore = bestScore
+                bestScore = score
+                bestDisplacement = displacement
+            } else if score < secondScore, abs(displacement - bestDisplacement) >= 4 {
+                secondScore = score
+            }
+            displacement += coarseStep
+        }
+        let lower = max(absoluteMinimum, bestDisplacement - 3)
+        let upper = min(absoluteMaximum, bestDisplacement + 3)
+        for refined in lower...upper {
+            let score = averageDifference(previous, current, displacement: refined)
+            if score < bestScore {
+                secondScore = bestScore
+                bestScore = score
+                bestDisplacement = refined
+            } else if score < secondScore, abs(refined - bestDisplacement) >= 4 {
+                secondScore = score
+            }
+        }
+        let confidence = secondScore - bestScore
+        guard bestScore <= 18, confidence >= 0.35 else { return nil }
+        return LongCaptureMatch(
+            displacement: bestDisplacement,
+            score: bestScore,
             confidence: confidence
+        )
+    }
+
+    private static func comparisonBands(
+        imageWidth: Int,
+        imageHeight: Int,
+        bandCount: Int,
+        minimumBandHeight: Int
+    ) -> [CGRect] {
+        guard imageWidth > 0, imageHeight > 0 else { return [] }
+        let bandHeight = min(imageHeight, max(minimumBandHeight, imageHeight / 3))
+        let maxOriginY = max(0, imageHeight - bandHeight)
+        if maxOriginY == 0 {
+            return [CGRect(x: 0, y: 0, width: imageWidth, height: bandHeight)]
+        }
+        let origins = Set((0..<bandCount).map { index in
+            Int((CGFloat(maxOriginY) * CGFloat(index) / CGFloat(max(1, bandCount - 1))).rounded())
+        })
+        return origins.sorted().map {
+            CGRect(x: 0, y: $0, width: imageWidth, height: bandHeight)
+        }
+    }
+
+    private static func findTranslation(
+        from source: CGImage,
+        to target: CGImage
+    ) -> (x: CGFloat, y: CGFloat, confidence: Float)? {
+        let request = VNTranslationalImageRegistrationRequest(targetedCGImage: target)
+        let handler = VNImageRequestHandler(cgImage: source, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            return nil
+        }
+        guard let observation = request.results?.first
+            as? VNImageTranslationAlignmentObservation else { return nil }
+        return (
+            observation.alignmentTransform.tx,
+            observation.alignmentTransform.ty,
+            observation.confidence
+        )
+    }
+
+    private static func bestGroup(
+        in translations: [(y: Int, confidence: Float)],
+        tolerance: Int,
+        minimumCount: Int
+    ) -> [(y: Int, confidence: Float)]? {
+        var best: [(y: Int, confidence: Float)] = []
+        for translation in translations {
+            let group = translations.filter { abs($0.y - translation.y) <= tolerance }
+            if group.count > best.count { best = group }
+        }
+        return best.count >= minimumCount ? best : nil
+    }
+
+    private static func average(
+        _ translations: [(y: Int, confidence: Float)]
+    ) -> (y: Int, confidence: Float) {
+        let count = translations.count
+        let sumY = translations.reduce(0) { $0 + $1.y }
+        let sumConfidence = translations.reduce(Float(0)) { $0 + $1.confidence }
+        return (
+            Int((CGFloat(sumY) / CGFloat(count)).rounded()),
+            sumConfidence / Float(count)
         )
     }
 
@@ -414,20 +568,6 @@ final class LongCaptureStitcher {
             displacement: displacement,
             horizontalSamples: 32,
             verticalSamples: 72
-        )
-    }
-
-    private static func preciseDifference(
-        _ previous: RasterFrame,
-        _ current: RasterFrame,
-        displacement: Int
-    ) -> Double {
-        difference(
-            previous,
-            current,
-            displacement: displacement,
-            horizontalSamples: 96,
-            verticalSamples: 256
         )
     }
 
@@ -611,7 +751,7 @@ final class LongCaptureSessionController: NSObject {
     private var lastCaptureStartedAt = Date.distantPast
     private var lastScrollEventAt = Date.distantPast
 
-    nonisolated static let minimumCaptureInterval: TimeInterval = 0.03
+    nonisolated static let minimumCaptureInterval: TimeInterval = 0.04
     nonisolated static let scrollActivityTail: TimeInterval = 0.20
     nonisolated static let borderExpansion: CGFloat = 3
 
@@ -628,7 +768,28 @@ final class LongCaptureSessionController: NSObject {
     var livePreviewWindowFrame: CGRect { previewWindow.frame }
     var instructionText: String { statusLabel.stringValue }
 
-    nonisolated static let instruction = "在框内向下滚动，结束后点击“完成”"
+    nonisolated static let instruction = "向下滚动采集；向上滚动立即完成，或点“完成”"
+
+    /// The instruction rendered with the "向上滚动立即完成" segment emphasized
+    /// (semibold + accent color) so the auto-finish-on-reverse behavior is
+    /// noticeable at a glance while the rest stays in the subdued base style.
+    nonisolated static var instructionAttributed: NSAttributedString {
+        let text = instruction
+        let result = NSMutableAttributedString(string: text)
+        let baseRange = NSRange(location: 0, length: text.utf16.count)
+        result.addAttributes([
+            .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+            .foregroundColor: NSColor.secondaryLabelColor
+        ], range: baseRange)
+        let highlight = "向上滚动立即完成"
+        if let range = text.range(of: highlight) {
+            result.addAttributes([
+                .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
+                .foregroundColor: NSColor.controlAccentColor
+            ], range: NSRange(range, in: text))
+        }
+        return result
+    }
 
     init(
         selectionRect: CGRect,
@@ -893,6 +1054,9 @@ final class LongCaptureSessionController: NSObject {
                     break
                 }
                 finishOrContinueAfterCapture()
+            } catch LongCaptureStitchError.reverseScrollDetected {
+                isCapturing = false
+                finish()
             } catch LongCaptureStitchError.noReliableOverlap {
                 isCapturing = false
                 finishOrContinueAfterCapture()
@@ -919,7 +1083,7 @@ final class LongCaptureSessionController: NSObject {
     }
 
     private func updateInstruction() {
-        statusLabel.stringValue = Self.instruction
+        statusLabel.attributedStringValue = Self.instructionAttributed
     }
 
     private func updateLivePreview() {
