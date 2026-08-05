@@ -14,6 +14,9 @@ final class ScreenRegionCapturer {
     private var contentFilter: SCContentFilter
     private let configuration: SCStreamConfiguration
     private var preparedOverlayExclusion = false
+    /// Window IDs that should remain visible in the recording even when all
+    /// other SnapInk windows are excluded (e.g. the GIF annotation overlay).
+    var exceptedWindowIDs: Set<CGWindowID> = []
 
     /// Exposed so the GIF recorder can build a long-running stream from the
     /// same filter/config (source rect, scale, exclusion of SnapInk overlays)
@@ -98,22 +101,24 @@ final class ScreenRegionCapturer {
             if let application = shareableContent.applications.first(where: {
                 $0.processID == processID
             }) {
+                let excepted = shareableContent.windows.filter {
+                    exceptedWindowIDs.contains($0.windowID)
+                }
                 contentFilter = SCContentFilter(
                     display: display,
                     excludingApplications: [application],
-                    exceptingWindows: []
+                    exceptingWindows: excepted
                 )
             } else {
                 let ownWindows = shareableContent.windows.filter {
                     $0.owningApplication?.processID == processID
+                        && !exceptedWindowIDs.contains($0.windowID)
                 }
                 if !ownWindows.isEmpty {
                     contentFilter = SCContentFilter(display: display, excludingWindows: ownWindows)
                 }
             }
         } catch {
-            // The border is also drawn outside the source rectangle, so a
-            // transient content-enumeration failure must not abort capture.
         }
         preparedOverlayExclusion = true
     }

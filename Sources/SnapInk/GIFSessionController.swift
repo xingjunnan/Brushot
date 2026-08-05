@@ -6,6 +6,146 @@ private final class GIFOverlayPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+/// Transparent panel that sits on top of the recording area and captures
+/// annotation drawings.  When `ignoresMouseEvents == true` (no tool active)
+/// mouse events pass straight through to the app being recorded.
+private final class GIFAnnotationPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+private enum GIFAnnotationShape {
+    case pen(points: [CGPoint])
+    case rectangle(CGRect)
+    case arrow(start: CGPoint, end: CGPoint)
+}
+
+@MainActor
+private final class GIFAnnotationView: NSView {
+    enum Tool { case none, pen, rectangle, arrow }
+
+    private var shapes: [GIFAnnotationShape] = []
+    private var currentTool: Tool = .none
+    private var drawingShape: GIFAnnotationShape?
+    private var drawStartPoint: CGPoint?
+
+    private let annotationColor = NSColor.systemRed
+    private let lineWidth: CGFloat = 3
+
+    func setTool(_ tool: Tool) {
+        if let shape = drawingShape { shapes.append(shape) }
+        drawingShape = nil
+        drawStartPoint = nil
+        currentTool = tool
+        window?.ignoresMouseEvents = (tool == .none)
+        needsDisplay = true
+    }
+
+    func undoLast() {
+        guard !shapes.isEmpty else { return }
+        shapes.removeLast()
+        needsDisplay = true
+    }
+
+    func clearAll() {
+        shapes.removeAll()
+        drawingShape = nil
+        drawStartPoint = nil
+        needsDisplay = true
+    }
+
+    override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let all = drawingShape.map { shapes + [$0] } ?? shapes
+        for shape in all {
+            switch shape {
+            case .pen(let pts):
+                guard pts.count >= 2 else { continue }
+                let path = NSBezierPath()
+                path.lineWidth = lineWidth
+                path.lineCapStyle = .round
+                path.lineJoinStyle = .round
+                path.move(to: pts[0])
+                for p in pts.dropFirst() { path.line(to: p) }
+                annotationColor.setStroke()
+                path.stroke()
+            case .rectangle(let rect):
+                let path = NSBezierPath(rect: rect)
+                path.lineWidth = lineWidth
+                annotationColor.setStroke()
+                path.stroke()
+            case .arrow(let s, let e):
+                let path = NSBezierPath()
+                path.lineWidth = lineWidth
+                path.lineCapStyle = .round
+                path.move(to: s)
+                path.line(to: e)
+                annotationColor.setStroke()
+                path.stroke()
+                let angle = atan2(e.y - s.y, e.x - s.x)
+                let hl: CGFloat = 14
+                let p1 = CGPoint(x: e.x - hl * cos(angle - 0.4), y: e.y - hl * sin(angle - 0.4))
+                let p2 = CGPoint(x: e.x - hl * cos(angle + 0.4), y: e.y - hl * sin(angle + 0.4))
+                let head = NSBezierPath()
+                head.lineWidth = lineWidth
+                head.lineCapStyle = .round
+                head.lineJoinStyle = .round
+                head.move(to: p1)
+                head.line(to: e)
+                head.line(to: p2)
+                annotationColor.setStroke()
+                head.stroke()
+            }
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard currentTool != .none else { return }
+        let p = convert(event.locationInWindow, from: nil)
+        drawStartPoint = p
+        if currentTool == .pen { drawingShape = .pen(points: [p]) }
+        needsDisplay = true
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = drawStartPoint, currentTool != .none else { return }
+        let p = convert(event.locationInWindow, from: nil)
+        switch currentTool {
+        case .pen:
+            if case .pen(var pts) = drawingShape {
+                pts.append(p)
+                drawingShape = .pen(points: pts)
+            }
+        case .rectangle:
+            drawingShape = .rectangle(CGRect(
+                x: min(start.x, p.x), y: min(start.y, p.y),
+                width: abs(p.x - start.x), height: abs(p.y - start.y)
+            ))
+        case .arrow:
+            drawingShape = .arrow(start: start, end: p)
+        case .none: break
+        }
+        needsDisplay = true
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if let shape = drawingShape {
+            let valid: Bool
+            switch shape {
+            case .pen(let pts): valid = pts.count >= 2
+            case .rectangle(let r): valid = r.width >= 2 && r.height >= 2
+            case .arrow(let s, let e): valid = sqrt(pow(e.x - s.x, 2) + pow(e.y - s.y, 2)) >= 2
+            }
+            if valid { shapes.append(shape) }
+        }
+        drawingShape = nil
+        drawStartPoint = nil
+        needsDisplay = true
+    }
+}
+
 /// Red recording border, drawn one point outside the capture area so it never
 /// becomes part of the recorded pixels.
 private final class GIFBorderView: NSView {
@@ -36,9 +176,15 @@ final class GIFSessionController: NSObject {
 
     private let borderWindow: NSWindow
     private let controlWindow: GIFOverlayPanel
+    private let annotationWindow: GIFAnnotationPanel
+    private let annotationView: GIFAnnotationView
     private let statusLabel = NSTextField(labelWithString: "")
     private let finishButton = NSButton(title: "完成", target: nil, action: nil)
     private let cancelButton = NSButton(title: "取消", target: nil, action: nil)
+    private var selectToolButton: NSButton!
+    private var penToolButton: NSButton!
+    private var rectToolButton: NSButton!
+    private var arrowToolButton: NSButton!
 
     private var startedAt = Date()
     private var timer: Timer?
@@ -83,11 +229,29 @@ final class GIFSessionController: NSObject {
         borderWindow.isReleasedWhenClosed = false
 
         controlWindow = GIFOverlayPanel(
-            contentRect: CGRect(x: 0, y: 0, width: 300, height: 52),
+            contentRect: CGRect(x: 0, y: 0, width: 480, height: 52),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
+
+        annotationView = GIFAnnotationView(frame: CGRect(origin: .zero, size: selectionRect.size))
+        annotationWindow = GIFAnnotationPanel(
+            contentRect: selectionRect,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        annotationWindow.isOpaque = false
+        annotationWindow.backgroundColor = .clear
+        annotationWindow.hasShadow = false
+        annotationWindow.hidesOnDeactivate = false
+        annotationWindow.isReleasedWhenClosed = false
+        annotationWindow.level = .screenSaver
+        annotationWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        annotationWindow.ignoresMouseEvents = true
+        annotationWindow.contentView = annotationView
+
         super.init()
         configureControlPanel()
     }
@@ -95,8 +259,10 @@ final class GIFSessionController: NSObject {
     func start() {
         guard !isFinished else { return }
         positionControlPanel()
+        annotationWindow.orderFrontRegardless()
         borderWindow.orderFrontRegardless()
         controlWindow.orderFrontRegardless()
+        capturer.exceptedWindowIDs.insert(CGWindowID(annotationWindow.windowNumber))
         startedAt = Date()
         updateStatus(frameCount: 0, elapsed: 0)
 
@@ -206,8 +372,10 @@ final class GIFSessionController: NSObject {
         isFinished = true
         timer?.invalidate()
         timer = nil
+        annotationWindow.orderOut(nil)
         borderWindow.orderOut(nil)
         controlWindow.orderOut(nil)
+        annotationWindow.close()
         borderWindow.close()
         controlWindow.close()
     }
@@ -258,10 +426,25 @@ final class GIFSessionController: NSObject {
         cancelButton.action = #selector(cancelAction)
         cancelButton.keyEquivalent = "\u{1b}"
 
-        let stack = NSStackView(views: [dotContainer, statusLabel, cancelButton, finishButton])
+        // Annotation tool buttons
+        selectToolButton = makeToolButton(symbol: "cursorarrow", action: #selector(selectToolAction), tooltip: "选择", toggle: true)
+        penToolButton = makeToolButton(symbol: "scribble", action: #selector(penToolAction), tooltip: "画笔", toggle: true)
+        rectToolButton = makeToolButton(symbol: "rectangle", action: #selector(rectToolAction), tooltip: "矩形", toggle: true)
+        arrowToolButton = makeToolButton(symbol: "arrow.up.right", action: #selector(arrowToolAction), tooltip: "箭头", toggle: true)
+        let undoButton = makeToolButton(symbol: "arrow.uturn.backward", action: #selector(undoAnnotationAction), tooltip: "撤销标注", toggle: false)
+        let clearButton = makeToolButton(symbol: "xmark.circle", action: #selector(clearAnnotationAction), tooltip: "清除标注", toggle: false)
+        selectToolButton.state = .on
+
+        let stack = NSStackView(views: [
+            selectToolButton, penToolButton, rectToolButton, arrowToolButton,
+            makeSeparator(),
+            undoButton, clearButton,
+            makeSeparator(),
+            dotContainer, statusLabel, cancelButton, finishButton
+        ])
         stack.orientation = .horizontal
         stack.alignment = .centerY
-        stack.spacing = 9
+        stack.spacing = 6
         stack.translatesAutoresizingMaskIntoConstraints = false
         background.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -288,5 +471,82 @@ final class GIFSessionController: NSObject {
             origin.x = visible.minX
         }
         controlWindow.setFrameOrigin(origin)
+    }
+
+    // MARK: - Annotation actions
+
+    @objc private func selectToolAction() {
+        annotationView.setTool(.none)
+        updateToolButtonStates(active: nil)
+    }
+
+    @objc private func penToolAction(_ sender: NSButton) {
+        if sender.state == .on {
+            annotationView.setTool(.pen)
+            updateToolButtonStates(active: .pen)
+        } else {
+            annotationView.setTool(.none)
+            updateToolButtonStates(active: nil)
+        }
+    }
+
+    @objc private func rectToolAction(_ sender: NSButton) {
+        if sender.state == .on {
+            annotationView.setTool(.rectangle)
+            updateToolButtonStates(active: .rectangle)
+        } else {
+            annotationView.setTool(.none)
+            updateToolButtonStates(active: nil)
+        }
+    }
+
+    @objc private func arrowToolAction(_ sender: NSButton) {
+        if sender.state == .on {
+            annotationView.setTool(.arrow)
+            updateToolButtonStates(active: .arrow)
+        } else {
+            annotationView.setTool(.none)
+            updateToolButtonStates(active: nil)
+        }
+    }
+
+    @objc private func undoAnnotationAction() {
+        annotationView.undoLast()
+    }
+
+    @objc private func clearAnnotationAction() {
+        annotationView.clearAll()
+    }
+
+    private func updateToolButtonStates(active: GIFAnnotationView.Tool?) {
+        selectToolButton.state = active == nil ? .on : .off
+        penToolButton.state = active == .pen ? .on : .off
+        rectToolButton.state = active == .rectangle ? .on : .off
+        arrowToolButton.state = active == .arrow ? .on : .off
+    }
+
+    private func makeToolButton(symbol: String, action: Selector, tooltip: String, toggle: Bool) -> NSButton {
+        let button = NSButton()
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
+        button.imagePosition = .imageOnly
+        button.bezelStyle = .texturedRounded
+        button.setButtonType(toggle ? .toggle : .momentaryChange)
+        button.target = self
+        button.action = action
+        button.state = .off
+        button.toolTip = tooltip
+        return button
+    }
+
+    private func makeSeparator() -> NSView {
+        let sep = NSView()
+        sep.translatesAutoresizingMaskIntoConstraints = false
+        sep.wantsLayer = true
+        sep.layer?.backgroundColor = NSColor.separatorColor.cgColor
+        NSLayoutConstraint.activate([
+            sep.widthAnchor.constraint(equalToConstant: 1),
+            sep.heightAnchor.constraint(equalToConstant: 20)
+        ])
+        return sep
     }
 }
