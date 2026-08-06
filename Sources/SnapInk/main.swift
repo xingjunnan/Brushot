@@ -1182,9 +1182,23 @@ final class CaptureController {
             return window
         }
 
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-        overlayWindows.forEach { $0.makeKeyAndOrderFront(nil) }
+        // NSPanel + .nonactivatingPanel can receive mouse events and become
+        // key without app activation.  Avoid setActivationPolicy/activate —
+        // they cause a timing race that intermittently absorbs the first
+        // mouse click (the click is consumed by the activation transition
+        // instead of reaching the panel).  iShot/Xnip/Snipaste don't have
+        // this problem because they don't toggle activation policy.
+        overlayWindows.forEach { $0.orderFrontRegardless() }
+
+        // On multi-display setups only one window can be key.  Make the one
+        // under the cursor key so mouseMoved events are delivered reliably.
+        let mouseLocation = NSEvent.mouseLocation
+        for window in overlayWindows {
+            if window.frame.contains(mouseLocation) {
+                window.makeKeyAndOrderFront(nil)
+                break
+            }
+        }
     }
 
     private func presentLongCaptureOverlays() {
@@ -1199,9 +1213,15 @@ final class CaptureController {
             }
             return window
         }
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-        overlayWindows.forEach { $0.makeKeyAndOrderFront(nil) }
+        overlayWindows.forEach { $0.orderFrontRegardless() }
+
+        let mouseLocation = NSEvent.mouseLocation
+        for window in overlayWindows {
+            if window.frame.contains(mouseLocation) {
+                window.makeKeyAndOrderFront(nil)
+                break
+            }
+        }
     }
 
     private func presentGIFCaptureOverlays() {
@@ -1216,9 +1236,15 @@ final class CaptureController {
             }
             return window
         }
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
-        overlayWindows.forEach { $0.makeKeyAndOrderFront(nil) }
+        overlayWindows.forEach { $0.orderFrontRegardless() }
+
+        let mouseLocation = NSEvent.mouseLocation
+        for window in overlayWindows {
+            if window.frame.contains(mouseLocation) {
+                window.makeKeyAndOrderFront(nil)
+                break
+            }
+        }
     }
 
     private func startLongCapture(globalRect: CGRect) {
@@ -1492,8 +1518,8 @@ final class CaptureController {
             window.orderOut(nil)
         }
 
-        // Return to agent-app policy now that the overlays are gone.
-        NSApp.setActivationPolicy(.accessory)
+        // No setActivationPolicy reset needed — we never changed it from
+        // .accessory.  The app stays an agent app throughout.
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             windowsToClose.forEach { $0.close() }
@@ -1541,7 +1567,7 @@ enum SelectionPurpose {
     case gifCapture
 }
 
-final class SelectionOverlayWindow: NSWindow {
+final class SelectionOverlayWindow: NSPanel {
     var onSelectionFinished: ((CGRect, CaptureAction) -> Void)?
     var onSelectionCancelled: (() -> Void)?
     var onEditingRequested: ((CGRect, AnnotationTool) -> Void)?
@@ -1562,7 +1588,7 @@ final class SelectionOverlayWindow: NSWindow {
         )
         super.init(
             contentRect: screen.frame,
-            styleMask: [.borderless],
+            styleMask: [.nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -1576,6 +1602,7 @@ final class SelectionOverlayWindow: NSWindow {
         isReleasedWhenClosed = false
         hasShadow = false
         acceptsMouseMovedEvents = true
+        becomesKeyOnlyIfNeeded = false
 
         view.onSelectionFinished = { [weak self] rect, action in
             self?.onSelectionFinished?(rect, action)
@@ -1668,6 +1695,8 @@ final class SelectionOverlayView: NSView {
     private var sampledColor: NSColor?
     private var sampledScreenPosition: CGPoint?
     private var magnifierImage: CGImage?
+    private var mouseTrackingTimer: Timer?
+    private var lastPolledMouseLocation: CGPoint?
     private var isGIFConfirming = false
     private var isPreparingAnnotation = false
     private var isSubmitting = false
@@ -1752,6 +1781,10 @@ final class SelectionOverlayView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    // Mirror the window-level override so the view also accepts the first
+    // click when the app is not active.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         if isSelectionFinalized, !isPreselected, selectionHandle(at: point) != nil {
             return self
@@ -1799,6 +1832,58 @@ final class SelectionOverlayView: NSView {
         // Set crosshair immediately — the window may not be key yet, so
         // cursor rects won't take effect until becomeKey() is called.
         NSCursor.crosshair.set()
+
+        // Immediate full-screen preselection as fallback.  This does not
+        // depend on mouseMoved events, so the user can always click to
+        // enter annotation mode or drag to draw a new selection right
+        // away — even if the timer below hasn't fired yet.
+        startPoint = .zero
+        currentPoint = CGPoint(x: bounds.maxX, y: bounds.maxY)
+        isSelectionFinalized = true
+        isPreselected = true
+        needsDisplay = true
+
+        // Start a timer that continuously polls the mouse position.
+        // mouseMoved events are unreliable on non-key windows (multi-display)
+        // and before the app is fully activated.  The timer refines the
+        // full-screen fallback to the actual window under the cursor.
+        let timer = Timer(timeInterval: 0.03, repeats: true) { [weak self] _ in
+            self?.pollMousePosition()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        mouseTrackingTimer = timer
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil {
+            mouseTrackingTimer?.invalidate()
+            mouseTrackingTimer = nil
+        }
+    }
+
+    /// Timer-based fallback that polls ``NSEvent.mouseLocation`` so window
+    /// detection works even when ``mouseMoved`` events are not delivered.
+    private func pollMousePosition() {
+        guard isColorSamplerActive, let window = window else { return }
+
+        let mouseLocation = NSEvent.mouseLocation
+        let windowPoint = window.convertFromScreen(
+            CGRect(origin: mouseLocation, size: .zero)).origin
+        let viewPoint = convert(windowPoint, from: nil)
+
+        guard bounds.contains(viewPoint) else { return }
+
+        // Skip if the mouse hasn't moved since the last poll.
+        if let last = lastPolledMouseLocation, last == viewPoint {
+            return
+        }
+        lastPolledMouseLocation = viewPoint
+
+        detectWindowUnderCursor(at: viewPoint)
+        colorSamplerLocation = viewPoint
+        sampleColorAtCursor()
+        needsDisplay = true
     }
 
     // MARK: - Color Sampler (iShot-style eyedropper)
@@ -1862,6 +1947,7 @@ final class SelectionOverlayView: NSView {
         // window under the cursor (desktop fallback: full screen).
         detectWindowUnderCursor(at: location)
         colorSamplerLocation = location
+        lastPolledMouseLocation = location
         sampleColorAtCursor()
         needsDisplay = true
     }
@@ -2046,7 +2132,7 @@ final class SelectionOverlayView: NSView {
         guard !isPreparingAnnotation else { return }
         let location = convert(event.locationInWindow, from: nil)
 
-        if isSelectionFinalized,
+        if isSelectionFinalized, !isPreselected,
            let handle = selectionHandle(at: location),
            let selection = currentSelection() {
             dragOperation = .resizing(handle)
