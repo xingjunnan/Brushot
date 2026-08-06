@@ -2647,17 +2647,17 @@ final class SelectionOverlayView: NSView {
               let color = sampledColor else { return }
 
         // Crosshair guide lines from cursor to view edges
-        NSColor.systemBlue.withAlphaComponent(0.35).setStroke()
+        NSColor.systemBlue.withAlphaComponent(0.7).setStroke()
         let hLine = NSBezierPath()
         hLine.move(to: CGPoint(x: 0, y: location.y))
         hLine.line(to: CGPoint(x: bounds.maxX, y: location.y))
-        hLine.lineWidth = 1
+        hLine.lineWidth = 1.5
         hLine.stroke()
 
         let vLine = NSBezierPath()
         vLine.move(to: CGPoint(x: location.x, y: 0))
         vLine.line(to: CGPoint(x: location.x, y: bounds.maxY))
-        vLine.lineWidth = 1
+        vLine.lineWidth = 1.5
         vLine.stroke()
 
         drawColorInfoPopup(at: location, color: color)
@@ -2679,7 +2679,7 @@ final class SelectionOverlayView: NSView {
 
         // Square magnifier box (like iShot)
         let boxSize: CGFloat = 120
-        let borderWidth: CGFloat = 1
+        let borderWidth: CGFloat = 1.5
         let pad: CGFloat = 5
         let offset: CGFloat = 10
 
@@ -2770,20 +2770,26 @@ final class SelectionOverlayView: NSView {
         mp.lineWidth = 1.5
         mp.stroke()
 
-        // Blue border — thin, light, sharp corners
-        NSColor.systemBlue.withAlphaComponent(0.5).setStroke()
+        // Blue border — sharp corners
+        NSColor.systemBlue.withAlphaComponent(0.7).setStroke()
         let bp = NSBezierPath(rect: box)
         bp.lineWidth = borderWidth
         bp.stroke()
 
+        // Adaptive text color — black on light backgrounds, white on dark
+        let luminance = 0.2126 * color.redComponent
+                     + 0.7152 * color.greenComponent
+                     + 0.0722 * color.blueComponent
+        let textColor: NSColor = luminance > 0.6 ? .black : .white
+
         // Text attributes
         let nameAttr: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 13, weight: .bold),
-            .foregroundColor: NSColor.white
+            .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+            .foregroundColor: textColor
         ]
         let valueAttr: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular),
-            .foregroundColor: NSColor.white
+            .foregroundColor: textColor
         ]
 
         // Color name — top center
