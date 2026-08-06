@@ -1182,6 +1182,7 @@ final class CaptureController {
             return window
         }
 
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         overlayWindows.forEach { $0.makeKeyAndOrderFront(nil) }
     }
@@ -1198,6 +1199,7 @@ final class CaptureController {
             }
             return window
         }
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         overlayWindows.forEach { $0.makeKeyAndOrderFront(nil) }
     }
@@ -1214,6 +1216,7 @@ final class CaptureController {
             }
             return window
         }
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         overlayWindows.forEach { $0.makeKeyAndOrderFront(nil) }
     }
@@ -1489,6 +1492,9 @@ final class CaptureController {
             window.orderOut(nil)
         }
 
+        // Return to agent-app policy now that the overlays are gone.
+        NSApp.setActivationPolicy(.accessory)
+
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             windowsToClose.forEach { $0.close() }
         }
@@ -1606,6 +1612,19 @@ final class SelectionOverlayWindow: NSWindow {
     }
 
     override var canBecomeKey: Bool { true }
+
+    override func becomeKey() {
+        super.becomeKey()
+        // Cursor rects are only evaluated for the key window.  When the
+        // overlay first appears there is a brief moment before it becomes
+        // key where the system shows the default arrow cursor.  Force the
+        // crosshair immediately and re-invalidate cursor rects so the user
+        // never sees an arrow while selecting.
+        NSCursor.crosshair.set()
+        if let view = overlayView {
+            view.window?.invalidateCursorRects(for: view)
+        }
+    }
 }
 
 final class SelectionOverlayView: NSView {
@@ -1645,6 +1664,10 @@ final class SelectionOverlayView: NSView {
     private var isSelectionFinalized = false
     private var isPreselected = false
     private var preselectClickStart: CGPoint?
+    private var colorSamplerLocation: CGPoint?
+    private var sampledColor: NSColor?
+    private var sampledScreenPosition: CGPoint?
+    private var magnifierImage: CGImage?
     private var isGIFConfirming = false
     private var isPreparingAnnotation = false
     private var isSubmitting = false
@@ -1775,6 +1798,167 @@ final class SelectionOverlayView: NSView {
         window?.makeFirstResponder(self)
         preselectFullScreenIfNeeded()
         window?.invalidateCursorRects(for: self)
+        // Set crosshair immediately — the window may not be key yet, so
+        // cursor rects won't take effect until becomeKey() is called.
+        NSCursor.crosshair.set()
+    }
+
+    // MARK: - Color Sampler (iShot-style eyedropper)
+
+    private var isColorSamplerActive: Bool {
+        guard annotationCanvas == nil,
+              !isPreparingAnnotation,
+              !isSubmitting,
+              !isGIFConfirming else { return false }
+        if case .moving = dragOperation { return false }
+        if case .resizing = dragOperation { return false }
+        if isSelectionFinalized && !isPreselected { return false }
+        return true
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        // Cursor rects only work for the key window.  For non-key overlay
+        // windows (multi-display) or before the window becomes key, force
+        // the crosshair so the user never sees an arrow.
+        if isColorSamplerActive {
+            NSCursor.crosshair.set()
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        // Force crosshair on every mouse move during the selection phase.
+        // On non-key windows cursor rects are ignored, so this is the only
+        // reliable way to keep the crosshair visible.
+        if isColorSamplerActive {
+            NSCursor.crosshair.set()
+        }
+        guard isColorSamplerActive else {
+            if colorSamplerLocation != nil {
+                colorSamplerLocation = nil
+                sampledColor = nil
+                needsDisplay = true
+            }
+            return
+        }
+
+        let location = convert(event.locationInWindow, from: nil)
+        colorSamplerLocation = location
+        sampleColorAtCursor()
+        needsDisplay = true
+    }
+
+    /// Reads a region around the cursor from the live screen (excluding this
+    /// overlay) via ``CGWindowListCreateImage``.  The region is used both for
+    /// the magnifier image and for extracting the exact center-pixel color.
+    private func sampleColorAtCursor() {
+        guard let window, let location = colorSamplerLocation else { return }
+
+        // Convert view point → AppKit screen point → CG display point
+        let windowPoint = convert(location, to: nil)
+        let screenPoint = window.convertToScreen(
+            CGRect(origin: windowPoint, size: .zero)
+        ).origin
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? screenPoint.y
+        let cgPoint = CGPoint(x: screenPoint.x, y: primaryHeight - screenPoint.y)
+        sampledScreenPosition = cgPoint
+
+        // Capture a small region centered on the cursor for the loupe.
+        // 25 pt ≈ 50 px on a 2× Retina display → ~4.8× magnification in a
+        // 120-pt box.
+        let captureSize: CGFloat = 25
+        let captureRect = CGRect(
+            x: cgPoint.x - captureSize / 2,
+            y: cgPoint.y - captureSize / 2,
+            width: captureSize,
+            height: captureSize
+        )
+        guard let cgImage = CGWindowListCreateImage(
+            captureRect,
+            .optionOnScreenBelowWindow,
+            CGWindowID(window.windowNumber),
+            []
+        ) else {
+            magnifierImage = nil
+            sampledColor = nil
+            return
+        }
+        magnifierImage = cgImage
+        sampledColor = readCenterPixelColor(from: cgImage)
+    }
+
+    private func readCenterPixelColor(from image: CGImage) -> NSColor? {
+        let w = image.width
+        let h = image.height
+        guard w > 0, h > 0 else { return nil }
+
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(
+            data: &pixels,
+            width: w,
+            height: h,
+            bitsPerComponent: 8,
+            bytesPerRow: w * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+
+        let cx = w / 2
+        let cy = h / 2
+        let idx = (cy * w + cx) * 4
+        return NSColor(
+            srgbRed:   CGFloat(pixels[idx])     / 255,
+            green:     CGFloat(pixels[idx + 1]) / 255,
+            blue:      CGFloat(pixels[idx + 2]) / 255,
+            alpha:     1
+        )
+    }
+
+    private static let chineseColorTable: [(String, Int, Int, Int)] = [
+        ("白色", 255, 255, 255), ("黑色", 0, 0, 0),
+        ("红色", 255, 0, 0),     ("绿色", 0, 128, 0),
+        ("蓝色", 0, 0, 255),     ("黄色", 255, 255, 0),
+        ("青色", 0, 255, 255),   ("紫色", 128, 0, 128),
+        ("灰色", 128, 128, 128), ("橙色", 255, 165, 0),
+        ("粉色", 255, 192, 203), ("棕色", 139, 69, 19),
+        ("深红", 139, 0, 0),     ("深绿", 0, 100, 0),
+        ("深蓝", 0, 0, 139),     ("浅蓝", 173, 216, 230),
+        ("浅绿", 144, 238, 144), ("浅灰", 211, 211, 211),
+        ("深灰", 69, 69, 69),    ("金黄", 255, 215, 0),
+        ("银色", 192, 192, 192), ("藏青", 0, 0, 128),
+        ("酒红", 128, 0, 32),    ("玫红", 255, 0, 127),
+        ("天蓝", 135, 206, 235), ("米色", 245, 245, 220),
+        ("卡其", 189, 183, 107), ("珊瑚", 255, 127, 80),
+        ("青绿", 0, 139, 139),   ("品红", 255, 0, 255),
+        ("黄绿", 154, 205, 50),  ("雪白", 255, 250, 250),
+        ("墨绿", 0, 64, 0),      ("胭脂", 220, 20, 60),
+    ]
+
+    private func chineseColorName(for color: NSColor) -> String {
+        let r = Int((color.redComponent   * 255).rounded())
+        let g = Int((color.greenComponent * 255).rounded())
+        let b = Int((color.blueComponent  * 255).rounded())
+        var best = ""
+        var bestDist = Int.max
+        for (name, cr, cg, cb) in Self.chineseColorTable {
+            let dr = r - cr, dg = g - cg, db = b - cb
+            let d = dr * dr + dg * dg + db * db
+            if d < bestDist { bestDist = d; best = name }
+        }
+        return best
     }
 
     /// On launch the regular capture overlay preselects the whole screen so
@@ -1880,6 +2064,10 @@ final class SelectionOverlayView: NSView {
                 moveInitialRect = nil
                 window?.invalidateCursorRects(for: self)
             }
+            if isColorSamplerActive {
+                colorSamplerLocation = location
+                sampleColorAtCursor()
+            }
             needsDisplay = true
             return
         }
@@ -1888,6 +2076,10 @@ final class SelectionOverlayView: NSView {
         case .selecting:
             guard startPoint != nil else { return }
             currentPoint = location
+            if isColorSamplerActive {
+                colorSamplerLocation = location
+                sampleColorAtCursor()
+            }
         case .moving:
             moveSelection(to: location)
         case .resizing:
@@ -1995,6 +2187,7 @@ final class SelectionOverlayView: NSView {
                 ? "拖动选择可滚动区域，Esc 取消"
                 : "拖动选择截图区域，Esc 取消"
             drawHint(hint, at: NSPoint(x: bounds.midX - 110, y: bounds.midY))
+            drawColorSamplerOverlay()
             return
         }
 
@@ -2020,6 +2213,7 @@ final class SelectionOverlayView: NSView {
                 y: min(selection.maxY + 7, bounds.maxY - 34)
             )
         )
+        drawColorSamplerOverlay()
     }
 
     @objc private func cancelSelection() {
@@ -2443,6 +2637,188 @@ final class SelectionOverlayView: NSView {
 
         startPoint = CGPoint(x: minX, y: minY)
         currentPoint = CGPoint(x: maxX, y: maxY)
+    }
+
+    // MARK: - Color Sampler Drawing
+
+    private func drawColorSamplerOverlay() {
+        guard isColorSamplerActive,
+              let location = colorSamplerLocation,
+              let color = sampledColor else { return }
+
+        // Crosshair guide lines from cursor to view edges
+        NSColor.systemBlue.withAlphaComponent(0.35).setStroke()
+        let hLine = NSBezierPath()
+        hLine.move(to: CGPoint(x: 0, y: location.y))
+        hLine.line(to: CGPoint(x: bounds.maxX, y: location.y))
+        hLine.lineWidth = 1
+        hLine.stroke()
+
+        let vLine = NSBezierPath()
+        vLine.move(to: CGPoint(x: location.x, y: 0))
+        vLine.line(to: CGPoint(x: location.x, y: bounds.maxY))
+        vLine.lineWidth = 1
+        vLine.stroke()
+
+        drawColorInfoPopup(at: location, color: color)
+    }
+
+    private func drawColorInfoPopup(at point: CGPoint, color: NSColor) {
+        let r = Int((color.redComponent   * 255).rounded())
+        let g = Int((color.greenComponent * 255).rounded())
+        let b = Int((color.blueComponent  * 255).rounded())
+        let hex = String(format: "%02X%02X%02X", r, g, b)
+        let name = chineseColorName(for: color)
+
+        let posText: String
+        if let pos = sampledScreenPosition {
+            posText = "\(Int(pos.x)),\(Int(pos.y))"
+        } else {
+            posText = ""
+        }
+
+        // Square magnifier box (like iShot)
+        let boxSize: CGFloat = 120
+        let borderWidth: CGFloat = 1
+        let pad: CGFloat = 5
+        let offset: CGFloat = 10
+
+        var bx = point.x + offset
+        if bx + boxSize > bounds.maxX - 4 { bx = point.x - offset - boxSize }
+        if bx < 4 { bx = 4 }
+
+        var by = point.y + offset
+        if by + boxSize > bounds.maxY - 4 { by = point.y - offset - boxSize }
+        if by < 4 { by = 4 }
+
+        let box = CGRect(x: bx, y: by, width: boxSize, height: boxSize)
+        let inner = box.insetBy(dx: borderWidth, dy: borderWidth)
+
+        // Background — light, semi-transparent
+        NSColor(white: 0.22, alpha: 0.72).setFill()
+        box.fill()
+
+        // Magnified screen content (loupe)
+        if let img = magnifierImage,
+           let ctx = NSGraphicsContext.current?.cgContext {
+            ctx.saveGState()
+            // Clip to the box so the image doesn't bleed outside
+            ctx.clip(to: box)
+            // CGImage origin is top-left; CGContext origin is bottom-left.
+            // Flip Y so the captured screen appears right-side-up.
+            ctx.translateBy(x: 0, y: box.maxY)
+            ctx.scaleBy(x: 1, y: -1)
+            // Nearest-neighbour for a crisp pixelated magnifier look
+            ctx.interpolationQuality = .none
+            ctx.draw(
+                img,
+                in: CGRect(x: box.minX, y: 0, width: box.width, height: box.height)
+            )
+            ctx.restoreGState()
+        }
+
+        // Grid pattern
+        NSColor.white.withAlphaComponent(0.05).setStroke()
+        let gridStep: CGFloat = 12
+        var gx = inner.minX
+        while gx <= inner.maxX {
+            let gl = NSBezierPath()
+            gl.move(to: CGPoint(x: gx, y: inner.minY))
+            gl.line(to: CGPoint(x: gx, y: inner.maxY))
+            gl.lineWidth = 0.5
+            gl.stroke()
+            gx += gridStep
+        }
+        var gy = inner.minY
+        while gy <= inner.maxY {
+            let gl = NSBezierPath()
+            gl.move(to: CGPoint(x: inner.minX, y: gy))
+            gl.line(to: CGPoint(x: inner.maxX, y: gy))
+            gl.lineWidth = 0.5
+            gl.stroke()
+            gy += gridStep
+        }
+
+        // Blue crosshair through center
+        let cx = inner.midX
+        let cy = inner.midY
+        NSColor.systemBlue.withAlphaComponent(0.55).setStroke()
+        let ch = NSBezierPath()
+        ch.move(to: CGPoint(x: inner.minX, y: cy))
+        ch.line(to: CGPoint(x: inner.maxX, y: cy))
+        ch.lineWidth = 1
+        ch.stroke()
+
+        let cv = NSBezierPath()
+        cv.move(to: CGPoint(x: cx, y: inner.minY))
+        cv.line(to: CGPoint(x: cx, y: inner.maxY))
+        cv.lineWidth = 1
+        cv.stroke()
+
+        // Center hollow square — sampling point marker
+        let markerSize: CGFloat = 9
+        let marker = CGRect(
+            x: cx - markerSize / 2,
+            y: cy - markerSize / 2,
+            width: markerSize,
+            height: markerSize
+        )
+        color.withAlphaComponent(0.35).setFill()
+        marker.fill()
+        NSColor.systemBlue.setStroke()
+        let mp = NSBezierPath(rect: marker)
+        mp.lineWidth = 1.5
+        mp.stroke()
+
+        // Blue border — thin, light, sharp corners
+        NSColor.systemBlue.withAlphaComponent(0.5).setStroke()
+        let bp = NSBezierPath(rect: box)
+        bp.lineWidth = borderWidth
+        bp.stroke()
+
+        // Text attributes
+        let nameAttr: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 13, weight: .bold),
+            .foregroundColor: NSColor.white
+        ]
+        let valueAttr: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular),
+            .foregroundColor: NSColor.white
+        ]
+
+        // Color name — top center
+        let nameStr = NSAttributedString(string: name, attributes: nameAttr)
+        let nameSize = nameStr.size()
+        nameStr.draw(at: CGPoint(
+            x: inner.midX - nameSize.width / 2,
+            y: inner.maxY - nameSize.height - pad
+        ))
+
+        // Coordinates — bottom-left
+        if !posText.isEmpty {
+            let posStr = NSAttributedString(string: posText, attributes: valueAttr)
+            posStr.draw(at: CGPoint(
+                x: inner.minX + pad,
+                y: inner.minY + pad
+            ))
+        }
+
+        // RGB — bottom-right, upper line
+        let rgbText = "\(r),\(g),\(b)"
+        let rgbStr = NSAttributedString(string: rgbText, attributes: valueAttr)
+        let rgbSize = rgbStr.size()
+        rgbStr.draw(at: CGPoint(
+            x: inner.maxX - rgbSize.width - pad,
+            y: inner.minY + pad + 12
+        ))
+
+        // HEX — bottom-right, lower line (no # prefix, matching iShot)
+        let hexStr = NSAttributedString(string: hex, attributes: valueAttr)
+        let hexSize = hexStr.size()
+        hexStr.draw(at: CGPoint(
+            x: inner.maxX - hexSize.width - pad,
+            y: inner.minY + pad
+        ))
     }
 
     private func drawHint(_ text: String, at point: NSPoint) {
