@@ -1740,7 +1740,6 @@ final class SelectionOverlayView: NSView {
             actionBar.isHidden = true
             addSubview(gifConfirmBar)
             gifConfirmBar.isHidden = true
-            preselectFullScreenIfNeeded()
         case .longCapture, .gifCapture:
             addSubview(longCaptureBar)
             longCaptureBar.isHidden = true
@@ -1754,7 +1753,7 @@ final class SelectionOverlayView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        if isSelectionFinalized, selectionHandle(at: point) != nil {
+        if isSelectionFinalized, !isPreselected, selectionHandle(at: point) != nil {
             return self
         }
         return super.hitTest(point)
@@ -1796,7 +1795,6 @@ final class SelectionOverlayView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         window?.makeFirstResponder(self)
-        preselectFullScreenIfNeeded()
         window?.invalidateCursorRects(for: self)
         // Set crosshair immediately — the window may not be key yet, so
         // cursor rects won't take effect until becomeKey() is called.
@@ -1834,6 +1832,11 @@ final class SelectionOverlayView: NSView {
         // the crosshair so the user never sees an arrow.
         if isColorSamplerActive {
             NSCursor.crosshair.set()
+            let location = convert(event.locationInWindow, from: nil)
+            detectWindowUnderCursor(at: location)
+            colorSamplerLocation = location
+            sampleColorAtCursor()
+            needsDisplay = true
         }
     }
 
@@ -1855,6 +1858,9 @@ final class SelectionOverlayView: NSView {
         }
 
         let location = convert(event.locationInWindow, from: nil)
+        // iShot-style smart window detection: snap selection to the
+        // window under the cursor (desktop fallback: full screen).
+        detectWindowUnderCursor(at: location)
         colorSamplerLocation = location
         sampleColorAtCursor()
         needsDisplay = true
@@ -1961,23 +1967,78 @@ final class SelectionOverlayView: NSView {
         return best
     }
 
-    /// On launch the regular capture overlay preselects the whole screen so
-    /// the user can confirm immediately (like iShot/Xnip) or drag to refine.
-    /// Long-capture/GIF overlays still start empty because their region must
-    /// be chosen deliberately.
-    private func preselectFullScreenIfNeeded() {
+    /// iShot-style smart window detection: finds the topmost window under
+    /// the cursor and snaps the selection to its bounds.  Falls back to
+    /// full-screen preselection when the cursor is on the desktop.
+    private func detectWindowUnderCursor(at location: CGPoint) {
         guard purpose == .regular,
-              !isSelectionFinalized,
-              startPoint == nil,
-              bounds.width > 0,
-              bounds.height > 0 else { return }
+              !isPreparingAnnotation,
+              !isSubmitting, !isGIFConfirming,
+              annotationCanvas == nil,
+              dragOperation == nil,
+              preselectClickStart == nil,
+              bounds.width > 0, bounds.height > 0,
+              let window else { return }
+
+        // Convert view point → AppKit screen point → CG display point
+        let windowPoint = convert(location, to: nil)
+        let screenPoint = window.convertToScreen(
+            CGRect(origin: windowPoint, size: .zero)).origin
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? screenPoint.y
+        let cgPoint = CGPoint(x: screenPoint.x, y: primaryHeight - screenPoint.y)
+
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+
+        if let windowList = CGWindowListCopyWindowInfo(
+            .optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] {
+            // Windows are listed front-to-back; pick the first match.
+            for info in windowList {
+                guard let layer = info[kCGWindowLayer as String] as? Int,
+                      layer == 0,
+                      let pid = info[kCGWindowOwnerPID as String] as? Int,
+                      pid != ownPID,
+                      let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
+                      let x = boundsDict["X"] as? CGFloat,
+                      let y = boundsDict["Y"] as? CGFloat,
+                      let w = boundsDict["Width"] as? CGFloat,
+                      let h = boundsDict["Height"] as? CGFloat
+                else { continue }
+
+                // Skip tiny windows (menus, tooltips, etc.)
+                guard w > 10, h > 10 else { continue }
+
+                let cgRect = CGRect(x: x, y: y, width: w, height: h)
+                guard cgRect.contains(cgPoint) else { continue }
+
+                // Convert CG rect → AppKit screen rect → view rect
+                let appKitOrigin = CGPoint(x: x, y: primaryHeight - y - h)
+                let appKitRect = CGRect(
+                    origin: appKitOrigin,
+                    size: CGSize(width: w, height: h))
+                let windowRect = window.convertFromScreen(appKitRect)
+                let viewRect = convert(windowRect, from: nil)
+
+                // Clip to this screen's bounds
+                let clipped = viewRect.intersection(bounds)
+                guard !clipped.isNull,
+                      clipped.width > 10, clipped.height > 10 else { continue }
+
+                startPoint = clipped.origin
+                currentPoint = CGPoint(x: clipped.maxX, y: clipped.maxY)
+                isSelectionFinalized = true
+                isPreselected = true
+                window.invalidateCursorRects(for: self)
+                needsDisplay = true
+                return
+            }
+        }
+
+        // Desktop fallback: full-screen preselection
         startPoint = .zero
         currentPoint = CGPoint(x: bounds.maxX, y: bounds.maxY)
         isSelectionFinalized = true
         isPreselected = true
-        // Don't show the toolbar yet — like iShot/Xnip, the user clicks
-        // once to enter annotation mode or drags to draw a new region.
-        window?.invalidateCursorRects(for: self)
+        window.invalidateCursorRects(for: self)
         needsDisplay = true
     }
 
@@ -2201,7 +2262,7 @@ final class SelectionOverlayView: NSView {
         path.lineWidth = 2
         path.stroke()
 
-        if isSelectionFinalized, annotationCanvas == nil {
+        if isSelectionFinalized, !isPreselected, annotationCanvas == nil {
             drawSelectionHandles(for: selection)
         }
 
