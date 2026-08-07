@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Carbon
 import CoreGraphics
 import ImageIO
@@ -203,6 +204,12 @@ enum ShortcutAction: UInt32, CaseIterable, Hashable {
             )
         }
     }
+
+    /// Actions that present a capture overlay and therefore benefit from
+    /// tooltip-preserving pre-capture.
+    static var screenshotActions: [ShortcutAction] {
+        [.capture, .longCapture, .gifCapture]
+    }
 }
 
 enum ShortcutConflict: Equatable {
@@ -361,6 +368,217 @@ enum AppPreferences {
     }
 }
 
+// Thread-safe container for pre-captured screen images.  The Carbon hotkey
+// callback captures screens synchronously into this store BEFORE any async
+// dispatch (Task/@MainActor), so tooltips and other transient UI are still
+// on screen at the moment of capture.
+private final class PreCaptureStore: @unchecked Sendable {
+    static let shared = PreCaptureStore()
+    private let lock = NSLock()
+
+    struct Entry: Sendable {
+        let displayID: CGDirectDisplayID
+        let image: CGImage
+        let scale: CGFloat
+    }
+
+    private var entries: [Entry] = []
+    private init() {}
+
+    /// Synchronously capture all displays using CG APIs only (no AppKit),
+    /// so it is safe to call from the Carbon event-handler C callback.
+    func capture() {
+        var displayCount: UInt32 = 0
+        CGGetActiveDisplayList(0, nil, &displayCount)
+        var displayIDs = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
+        CGGetActiveDisplayList(UInt32(displayIDs.count), &displayIDs, &displayCount)
+
+        var captured: [Entry] = []
+        for displayID in displayIDs {
+            let bounds = CGDisplayBounds(displayID)
+            guard let cgImage = CGWindowListCreateImage(
+                bounds,
+                .optionOnScreenOnly,
+                kCGNullWindowID,
+                [.bestResolution]
+            ) else { continue }
+            let mode = CGDisplayCopyDisplayMode(displayID)
+            let scale: CGFloat
+            if let mode = mode, mode.width > 0 {
+                scale = CGFloat(mode.pixelWidth) / CGFloat(mode.width)
+            } else {
+                scale = 1
+            }
+            captured.append(Entry(displayID: displayID, image: cgImage, scale: scale))
+        }
+        lock.withLock { entries = captured }
+    }
+
+    func retrieve() -> [Entry] {
+        lock.withLock {
+            let result = entries
+            entries = []
+            return result
+        }
+    }
+
+    /// True if there are captured entries, without consuming them.  The
+    /// Carbon hotkey callback uses this to decide whether to fall back to
+    /// its own capture: if the event tap already captured (tooltip
+    /// preserved), skip; otherwise capture now so a pre-captured frame is
+    /// always available and we never fall back to SCStream.
+    var hasEntries: Bool {
+        lock.withLock { !entries.isEmpty }
+    }
+}
+
+// MARK: - Tooltip-preserving event tap
+
+/// Installs a CGEventTap at the session layer to intercept modifier-key
+/// events *before* they are dispatched to the foreground app.
+///
+/// macOS dismisses a tooltip the instant the focused app receives a
+/// modifier-key (Cmd/Shift/Option/Control) event.  The Carbon hotkey
+/// callback runs at the AppKit layer — after dispatch — so by the time it
+/// fires the tooltip is already gone, and capturing there is too late.
+/// A session-layer CGEventTap runs synchronously *before* the event reaches
+/// any app, so a capture performed inside the tap callback still sees the
+/// tooltip on screen.
+///
+/// Strategy: on the rising edge of a modifier press whose set overlaps the
+/// modifiers of any registered screenshot shortcut, capture all displays
+/// into ``PreCaptureStore`` exactly once per key-hold.  The Carbon callback
+/// later retrieves that pre-captured frame (tooltip included).
+///
+/// Requires Accessibility permission.  When unavailable, `CGEventTapCreate`
+/// returns nil and the tap stays disabled; capture still works but without
+/// tooltip preservation (the Carbon callback falls back to its own capture).
+final class TooltipPreCaptureEventTap: @unchecked Sendable {
+    static let shared = TooltipPreCaptureEventTap()
+
+    private let lock = NSLock()
+    private var machPort: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+
+    /// Carbon-style modifier bitmask currently held down (cmd/shift/opt/ctrl).
+    private var currentModifiers: UInt32 = 0
+    /// True once we have captured during the current modifier hold; cleared
+    /// when all modifiers release, so we capture at most once per key sequence.
+    private var capturedThisHold = false
+    /// Carbon-style modifier masks of the screenshot shortcuts we watch.
+    private var watchedModifierMasks: [UInt32] = []
+
+    private init() {}
+
+    /// Update the watched shortcut modifier masks.  Call whenever hotkeys are
+    /// registered or changed.  Shortcuts with no modifiers are ignored.
+    func setWatchedShortcuts(_ shortcuts: [KeyboardShortcut]) {
+        lock.withLock {
+            watchedModifierMasks = shortcuts
+                .map(\.modifiers)
+                .filter { $0 != 0 }
+        }
+    }
+
+    /// Attempt to install the event tap.  Returns true if the tap is (or was
+    /// already) installed and enabled.  Returns false when Accessibility
+    /// permission is missing or the system refused the tap — callers should
+    /// then rely on the Carbon-based capture fallback.
+    @discardableResult
+    func install() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if let port = machPort, CGEvent.tapIsEnabled(tap: port) { return true }
+
+        let mask = CGEventMask(1 << CGEventType.flagsChanged.rawValue)
+        guard let port = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: { _, type, event, _ in
+                TooltipPreCaptureEventTap.shared.handle(type: type, event: event)
+                // Pass the event through unchanged so modifier state stays
+                // consistent for the foreground app.
+                return Unmanaged.passRetained(event)
+            },
+            userInfo: nil
+        ) else {
+            NSLog("SnapInk: CGEventTapCreate returned nil - Accessibility permission missing or tap unavailable")
+            return false
+        }
+
+        machPort = port
+        runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+        CGEvent.tapEnable(tap: port, enable: true)
+        NSLog("SnapInk: tooltip-preserving event tap installed")
+        return true
+    }
+
+    func uninstall() {
+        lock.lock()
+        defer { lock.unlock() }
+        if let port = machPort { CGEvent.tapEnable(tap: port, enable: false) }
+        if let source = runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+        }
+        runLoopSource = nil
+        machPort = nil
+        currentModifiers = 0
+        capturedThisHold = false
+    }
+
+    /// True when the tap is installed and currently enabled.
+    var isActive: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let port = machPort else { return false }
+        return CGEvent.tapIsEnabled(tap: port)
+    }
+
+    // MARK: - Tap callback
+
+    private func handle(type: CGEventType, event: CGEvent) {
+        // The system can disable the tap after a timeout or user input.
+        // Re-enable it transparently so capture keeps working.
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let port = machPort { CGEvent.tapEnable(tap: port, enable: true) }
+            return
+        }
+        guard type == .flagsChanged else { return }
+
+        let newMods = Self.carbonModifiers(from: event.flags)
+
+        lock.lock()
+        let masks = watchedModifierMasks
+        let shouldCapture = !capturedThisHold
+            && newMods != 0
+            && masks.contains { newMods & $0 != 0 }
+        if shouldCapture { capturedThisHold = true }
+        currentModifiers = newMods
+        if newMods == 0 { capturedThisHold = false }
+        lock.unlock()
+
+        guard shouldCapture else { return }
+
+        // Synchronous capture while the event is still in the session layer,
+        // before it is delivered to the foreground app.  PreCaptureStore
+        // uses only CG APIs, so this is safe to call from the tap callback.
+        NSLog("SnapInk: eventtap precapture (mods=\(newMods))")
+        PreCaptureStore.shared.capture()
+    }
+
+    private static func carbonModifiers(from flags: CGEventFlags) -> UInt32 {
+        var m: UInt32 = 0
+        if flags.contains(.maskCommand) { m |= UInt32(cmdKey) }
+        if flags.contains(.maskShift) { m |= UInt32(shiftKey) }
+        if flags.contains(.maskAlternate) { m |= UInt32(optionKey) }
+        if flags.contains(.maskControl) { m |= UInt32(controlKey) }
+        return m
+    }
+}
+
 @MainActor
 @objcMembers
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -373,13 +591,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pinVisibilityMenuItem: NSMenuItem!
     private let pinManager = PinManager.shared
     private var shortcuts = ShortcutPreferences.loadAll()
+    private let tooltipEventTap = TooltipPreCaptureEventTap.shared
+    private var isRequestingAccessibilityPermission = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         configureStatusItem()
         installHotKeyHandler()
         registerInitialHotKeys()
+        installTooltipEventTap()
         AppPreferences.syncLaunchAtLogin()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        // A CGEventTap can be disabled by the system (e.g. after sleep, or
+        // if the user toggled Accessibility off and back on). Reinstall it
+        // whenever we return to the foreground so tooltip capture resumes.
+        guard AXIsProcessTrusted() else { return }
+        if !tooltipEventTap.isActive {
+            _ = tooltipEventTap.install()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -388,6 +619,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let eventHandlerRef {
             RemoveEventHandler(eventHandlerRef)
         }
+        tooltipEventTap.uninstall()
     }
 
     private func configureStatusItem() {
@@ -563,6 +795,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
 
             guard let action = ShortcutAction(rawValue: eventID.id) else { return noErr }
+
+            // Capture screens IMMEDIATELY — before any Task dispatch — so
+            // transient UI is still visible.  When the session-layer event
+            // tap (TooltipPreCaptureEventTap) is active it has already
+            // captured the instant the modifier key went down (tooltip still
+            // on screen); we only fall back to capturing here when the tap
+            // is unavailable (no Accessibility permission).
+            // If the event tap already captured a frame (tooltip preserved),
+            // keep it. Otherwise capture now so a pre-captured frame is always
+            // available and we never fall back to SCStream (which triggers the
+            // system "capturing your screen" banner).
+            if action == .capture && !PreCaptureStore.shared.hasEntries {
+                NSLog("SnapInk: carbon fallback capture (no eventtap frame)")
+                PreCaptureStore.shared.capture()
+            }
+
             Task { @MainActor in
                 let delegate = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
                 delegate.performShortcutAction(action)
@@ -573,6 +821,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if status != noErr {
             NSLog("SnapInk failed to install hotkey handler: \(status)")
         }
+    }
+
+    // MARK: - Accessibility permission & tooltip event tap
+
+    /// Install the session-layer event tap used to capture screens while
+    /// tooltips are still visible.  Requests Accessibility permission first
+    /// if it has not been granted.
+    private func installTooltipEventTap() {
+        syncWatchedShortcutsToEventTap()
+        if AXIsProcessTrusted() {
+            _ = tooltipEventTap.install()
+            return
+        }
+        requestAccessibilityPermission { [weak self] in
+            guard let self else { return }
+            _ = self.tooltipEventTap.install()
+        }
+    }
+
+    /// Ask macOS for Accessibility permission (one-time).  The system shows
+    /// its own prompt; we poll until the user grants it (or 60s elapse).
+    /// Capture keeps working without this permission — only tooltip
+    /// preservation is unavailable.
+    private func requestAccessibilityPermission(then action: @escaping @MainActor () -> Void) {
+        guard !isRequestingAccessibilityPermission else { return }
+        isRequestingAccessibilityPermission = true
+
+        // kAXTrustedCheckOptionPrompt is a non-Sendable C global that Swift 6
+        // rejects; use its underlying string value directly.
+        let options: CFDictionary = [
+            "AXTrustedCheckOptionPrompt" as CFString: true
+        ] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.isRequestingAccessibilityPermission = false }
+            for _ in 0..<60 {
+                try? await Task.sleep(for: .seconds(1))
+                if AXIsProcessTrusted() {
+                    action()
+                    return
+                }
+            }
+            NSLog("SnapInk: accessibility permission not granted within 60s - tooltip capture disabled")
+        }
+    }
+
+    /// Keep the event tap's watched modifier set in sync with the currently
+    /// registered screenshot shortcuts.
+    private func syncWatchedShortcutsToEventTap() {
+        let screenshotShortcuts = ShortcutAction.screenshotActions.compactMap { shortcuts[$0] }
+        tooltipEventTap.setWatchedShortcuts(screenshotShortcuts)
     }
 
     @discardableResult
@@ -623,6 +924,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             registeredShortcuts[action] = candidate
         }
+        syncWatchedShortcutsToEventTap()
     }
 
     private func updateShortcut(_ shortcut: KeyboardShortcut, for action: ShortcutAction) {
@@ -650,6 +952,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let item = shortcutMenuItems[action] {
             applyShortcut(shortcut, to: item)
         }
+        syncWatchedShortcutsToEventTap()
     }
 
     private func showHotKeyConflictAlert() {
@@ -1055,6 +1358,7 @@ enum OCRSource {
 @MainActor
 final class CaptureController {
     private var overlayWindows: [SelectionOverlayWindow] = []
+    private var preCapturedScreens: [(screen: NSScreen, image: CGImage, scale: CGFloat)] = []
     private var isRequestingScreenCapturePermission = false
     private var isPreparingLongCapture = false
     private var longCaptureSession: LongCaptureSessionController?
@@ -1090,8 +1394,81 @@ final class CaptureController {
 
     func beginSelectionCapture() {
         requestScreenCapturePermission { [weak self] in
-            self?.presentSelectionOverlays()
+            self?.preCaptureAndPresentOverlays()
         }
+    }
+
+    private func preCaptureAndPresentOverlays() {
+        // Synchronous capture + present — no Task/await hop so the tooltip
+        // is still on screen when the grab happens.
+        preCaptureScreens()
+        presentSelectionOverlays()
+    }
+
+    /// Capture each screen synchronously before the overlay appears so
+    /// transient UI like tooltips, popovers, and hover states are preserved.
+    /// Uses CGWindowListCreateImage (synchronous) instead of ScreenCaptureKit
+    /// (async) to avoid the delay that lets tooltips disappear.
+    private func preCaptureScreens() {
+        // First, try to retrieve images captured synchronously in the
+        // Carbon event handler callback (before any Task dispatch).
+        // These preserve tooltips and other transient UI.
+        let preCaptured = PreCaptureStore.shared.retrieve()
+        if !preCaptured.isEmpty {
+            preCapturedScreens.removeAll()
+            for screen in NSScreen.screens {
+                guard let screenNumber = screen.deviceDescription[
+                    NSDeviceDescriptionKey("NSScreenNumber")
+                ] as? NSNumber else { continue }
+                let displayID = CGDirectDisplayID(screenNumber.uint32Value)
+                if let match = preCaptured.first(where: { $0.displayID == displayID }) {
+                    preCapturedScreens.append((screen: screen, image: match.image, scale: match.scale))
+                }
+            }
+            return
+        }
+
+        // Fallback: capture synchronously here (shouldn't normally happen).
+        preCapturedScreens.removeAll()
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        for screen in NSScreen.screens {
+            let cgRect = CGRect(
+                x: screen.frame.minX,
+                y: primaryHeight - screen.frame.maxY,
+                width: screen.frame.width,
+                height: screen.frame.height
+            )
+            guard let cgImage = CGWindowListCreateImage(
+                cgRect,
+                .optionOnScreenOnly,
+                kCGNullWindowID,
+                [.bestResolution]
+            ) else { continue }
+            let scale = CGFloat(cgImage.width) / screen.frame.width
+            preCapturedScreens.append((screen: screen, image: cgImage, scale: scale))
+        }
+    }
+
+    /// Crop a region from a pre-captured full-screen image.  Returns nil
+    /// if no pre-captured image covers the requested region.
+    private func cropFromPreCaptured(globalRect: CGRect) -> CGImage? {
+        for entry in preCapturedScreens {
+            let screen = entry.screen
+            guard screen.frame.intersects(globalRect) else { continue }
+            let selection = globalRect.intersection(screen.frame).integral
+            guard !selection.isNull, selection.width >= 1, selection.height >= 1 else { continue }
+            let scale = entry.scale
+            let cropRect = CGRect(
+                x: (selection.minX - screen.frame.minX) * scale,
+                y: (screen.frame.maxY - selection.maxY) * scale,
+                width: selection.width * scale,
+                height: selection.height * scale
+            ).integral
+            if let cropped = entry.image.cropping(to: cropRect) {
+                return cropped
+            }
+        }
+        return nil
     }
 
     func beginLongCapture() {
@@ -1188,6 +1565,16 @@ final class CaptureController {
         // mouse click (the click is consumed by the activation transition
         // instead of reaching the panel).  iShot/Xnip/Snipaste don't have
         // this problem because they don't toggle activation policy.
+        // Pass pre-captured images to each overlay window (freeze screen).
+        // The overlay displays the captured image as its opaque background,
+        // so tooltips and other transient UI are still visible even though
+        // they disappeared from the live screen.
+        for window in overlayWindows {
+            if let entry = preCapturedScreens.first(where: { $0.screen.frame == window.frame }) {
+                window.setPreCapturedScreenImage(entry.image)
+            }
+        }
+
         overlayWindows.forEach { $0.orderFrontRegardless() }
 
         // On multi-display setups only one window can be key.  Make the one
@@ -1357,11 +1744,42 @@ final class CaptureController {
     private func finishCapture(globalRect: CGRect, action: CaptureAction) {
         closeOverlays()
 
-        guard globalRect.width >= 2, globalRect.height >= 2 else { return }
+        guard globalRect.width >= 2, globalRect.height >= 2 else {
+            preCapturedScreens.removeAll()
+            return
+        }
 
-        // Give WindowServer one frame to remove the selection overlays.
+        // Use pre-captured image if available (preserves tooltips and
+        // other transient UI that disappeared when the overlay appeared).
+        if let cropped = cropFromPreCaptured(globalRect: globalRect) {
+            preCapturedScreens.removeAll()
+            do {
+                try output(cropped, action: action, pinDisplaySize: globalRect.size)
+            } catch {
+                showFailureAlert(message: error.localizedDescription)
+            }
+            return
+        }
+
+        // Fall back to live capture if pre-capture was unavailable.
+        // Prefer CGWindowListCreateImage (no SCStream) to avoid triggering
+        // the system "SnapInk is capturing your screen" banner.
+        NSLog("SnapInk: finishCapture fallback - preCapture empty")
+        preCapturedScreens.removeAll()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-            self?.capture(globalRect: globalRect, action: action)
+            guard let self else { return }
+            self.preCaptureScreens()
+            if let cropped = self.cropFromPreCaptured(globalRect: globalRect) {
+                do {
+                    try self.output(cropped, action: action, pinDisplaySize: globalRect.size)
+                } catch {
+                    self.showFailureAlert(message: error.localizedDescription)
+                }
+                return
+            }
+            // Ultimate fallback: SCStream (may briefly show the capture banner).
+            NSLog("SnapInk: finishCapture ultimate fallback - SCStream")
+            self.capture(globalRect: globalRect, action: action)
         }
     }
 
@@ -1383,11 +1801,16 @@ final class CaptureController {
         tool: AnnotationTool,
         window: SelectionOverlayWindow
     ) {
+        // Use pre-captured image if available (preserves tooltips).
+        if let image = cropFromPreCaptured(globalRect: window.frame) {
+            preCapturedScreens.removeAll()
+            window.enterAnnotationEditing(baseImage: image, initialTool: tool)
+            return
+        }
+
         Task { [weak self, weak window] in
             guard let self, let window else { return }
             do {
-                // Freeze the whole display so the selection can still be
-                // enlarged or reduced after annotation mode has started.
                 let image = try await makeScreenshot(globalRect: window.frame)
                 window.enterAnnotationEditing(baseImage: image, initialTool: tool)
             } catch {
@@ -1419,8 +1842,12 @@ final class CaptureController {
                 let image: CGImage
                 switch source {
                 case .globalRect(let rect):
-                    try await Task.sleep(for: .milliseconds(50))
-                    image = try await makeScreenshot(globalRect: rect)
+                    if let preCaptured = cropFromPreCaptured(globalRect: rect) {
+                        image = preCaptured
+                    } else {
+                        try await Task.sleep(for: .milliseconds(50))
+                        image = try await makeScreenshot(globalRect: rect)
+                    }
                 case .image(let sourceImage):
                     image = sourceImage
                 }
@@ -1493,6 +1920,7 @@ final class CaptureController {
     }
 
     private func makeScreenshot(globalRect: CGRect) async throws -> CGImage {
+        NSLog("SnapInk: makeScreenshot via SCStream")
         let capturer = try await ScreenRegionCapturer(globalRect: globalRect)
         return try await capturer.capture()
     }
@@ -1636,6 +2064,10 @@ final class SelectionOverlayWindow: NSPanel {
 
     func annotationEditingDidFail() {
         overlayView?.annotationEditingDidFail()
+    }
+
+    func setPreCapturedScreenImage(_ image: CGImage) {
+        overlayView?.setPreCapturedScreenImage(image)
     }
 
     override var canBecomeKey: Bool { true }
@@ -2326,7 +2758,24 @@ final class SelectionOverlayView: NSView {
         }
     }
 
+    /// Set the pre-captured full-screen image as the overlay background.
+    /// This creates a "freeze screen" effect: the user sees the captured
+    /// content (including tooltips that have since disappeared) instead
+    /// of the live screen behind a transparent overlay.
+    func setPreCapturedScreenImage(_ image: CGImage) {
+        frozenScreenImage = image
+        needsDisplay = true
+    }
+
     override func draw(_ dirtyRect: NSRect) {
+        // Draw the frozen screen image as an opaque background so the
+        // overlay shows the captured content (with tooltips) instead of
+        // the live screen (where tooltips have disappeared).
+        if let frozenScreenImage,
+           let ctx = NSGraphicsContext.current?.cgContext {
+            ctx.draw(frozenScreenImage, in: bounds)
+        }
+
         NSColor.black.withAlphaComponent(0.34).setFill()
         guard let selection = currentSelection() else {
             bounds.fill()
@@ -2438,6 +2887,8 @@ final class SelectionOverlayView: NSView {
         actionBar.setBusy(false)
         actionBar.setLongCaptureEnabled(false)
         actionBar.setGIFEnabled(false)
+        // frozenScreenImage may already be set from the pre-capture;
+        // overwrite with the annotation-specific base image.
         frozenScreenImage = baseImage
         guard let croppedImage = croppedFrozenImage(for: selection) else {
             onAnnotationFailed?(NSError(
