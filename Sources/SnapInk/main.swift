@@ -144,13 +144,13 @@ enum ShortcutAction: UInt32, CaseIterable, Hashable {
     case pinLibrary = 3
     case togglePins = 4
     case longCapture = 5
-    case gifCapture = 6
+    case recording = 6
 
     var title: String {
         switch self {
         case .capture: "区域截图"
         case .longCapture: "长截图"
-        case .gifCapture: "GIF 录制"
+        case .recording: "录屏…"
         case .pinClipboard: "从剪贴板贴图"
         case .pinLibrary: "贴图库…"
         case .togglePins: "隐藏全部贴图"
@@ -161,7 +161,7 @@ enum ShortcutAction: UInt32, CaseIterable, Hashable {
         switch self {
         case .capture: "captureShortcut"
         case .longCapture: "longCaptureShortcut"
-        case .gifCapture: "gifCaptureShortcut"
+        case .recording: "recordingShortcut"
         case .pinClipboard: "pinClipboardShortcut"
         case .pinLibrary: "pinLibraryShortcut"
         case .togglePins: "togglePinsShortcut"
@@ -178,11 +178,11 @@ enum ShortcutAction: UInt32, CaseIterable, Hashable {
                 modifiers: UInt32(controlKey | optionKey),
                 keyLabel: "L"
             )
-        case .gifCapture:
+        case .recording:
             KeyboardShortcut(
-                keyCode: UInt32(kVK_ANSI_G),
+                keyCode: UInt32(kVK_ANSI_R),
                 modifiers: UInt32(optionKey),
-                keyLabel: "G"
+                keyLabel: "R"
             )
         case .pinClipboard:
             KeyboardShortcut(
@@ -208,7 +208,7 @@ enum ShortcutAction: UInt32, CaseIterable, Hashable {
     /// Actions that present a capture overlay and therefore benefit from
     /// tooltip-preserving pre-capture.
     static var screenshotActions: [ShortcutAction] {
-        [.capture, .longCapture, .gifCapture]
+        [.capture, .longCapture, .recording]
     }
 }
 
@@ -237,6 +237,18 @@ enum ShortcutPreferences {
         defaults: UserDefaults = .standard
     ) -> KeyboardShortcut {
         let prefix = action.preferencePrefix
+        if action == .recording,
+           defaults.object(forKey: "\(prefix).keyCode") == nil,
+           defaults.object(forKey: "gifCaptureShortcut.keyCode") != nil,
+           let label = defaults.string(forKey: "gifCaptureShortcut.keyLabel") {
+            let migrated = KeyboardShortcut(
+                keyCode: UInt32(defaults.integer(forKey: "gifCaptureShortcut.keyCode")),
+                modifiers: UInt32(defaults.integer(forKey: "gifCaptureShortcut.modifiers")),
+                keyLabel: label
+            )
+            save(migrated, for: action, defaults: defaults)
+            return migrated
+        }
         guard defaults.object(forKey: "\(prefix).keyCode") != nil,
               let label = defaults.string(forKey: "\(prefix).keyLabel") else {
             return action.defaultShortcut
@@ -602,6 +614,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registerInitialHotKeys()
         installTooltipEventTap()
         AppPreferences.syncLaunchAtLogin()
+        RecordingPreviewWindowController.cleanupExpiredClipboardFiles()
     }
 
     /// Accessory applications do not get the standard application menu that
@@ -711,12 +724,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         menu.addItem(longCapture)
 
-        let gifCapture = makeShortcutMenuItem(
-            action: .gifCapture,
-            title: "GIF 录制",
-            selector: #selector(captureGIF)
+        let recording = makeShortcutMenuItem(
+            action: .recording,
+            title: "录屏…",
+            selector: #selector(captureRecording)
         )
-        menu.addItem(gifCapture)
+        menu.addItem(recording)
 
         let pinItem = NSMenuItem(title: "贴图", action: nil, keyEquivalent: "")
         let pinMenu = NSMenu(title: "贴图")
@@ -1031,7 +1044,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch action {
         case .capture: captureSelection()
         case .longCapture: captureLongScreenshot()
-        case .gifCapture: captureGIF()
+        case .recording: captureRecording()
         case .pinClipboard: pinClipboard()
         case .pinLibrary: showPinLibrary()
         case .togglePins: toggleAllPins()
@@ -1046,8 +1059,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         captureController.beginLongCapture()
     }
 
-    @objc private func captureGIF() {
-        captureController.beginGIFCapture()
+    @objc private func captureRecording() {
+        captureController.beginRecordingCapture()
     }
 
     @objc private func showSettings() {
@@ -1417,7 +1430,10 @@ final class CaptureController {
     private var isPreparingLongCapture = false
     private var longCaptureSession: LongCaptureSessionController?
     private var longCapturePreview: LongCapturePreviewWindowController?
-    private var gifSession: GIFSessionController?
+    private var recordingSession: RecordingSessionController?
+    private var recordingPreview: RecordingPreviewWindowController?
+    private var recordingExportProgress: RecordingExportProgressWindowController?
+    private var isExportingRecording = false
     private let textRecognizer: any TextRecognizing
     private var ocrResultWindowController: OCRResultWindowController?
     private var isTranslationEnabled = TranslationPreferences.isEnabled()
@@ -1447,6 +1463,7 @@ final class CaptureController {
     }
 
     func beginSelectionCapture() {
+        guard recordingSession == nil, !isExportingRecording else { NSSound.beep(); return }
         requestScreenCapturePermission { [weak self] in
             self?.preCaptureAndPresentOverlays()
         }
@@ -1526,7 +1543,10 @@ final class CaptureController {
     }
 
     func beginLongCapture() {
-        guard longCaptureSession == nil, !isPreparingLongCapture else {
+        guard recordingSession == nil,
+              !isExportingRecording,
+              longCaptureSession == nil,
+              !isPreparingLongCapture else {
             NSSound.beep()
             return
         }
@@ -1535,13 +1555,13 @@ final class CaptureController {
         }
     }
 
-    func beginGIFCapture() {
-        guard gifSession == nil else {
+    func beginRecordingCapture() {
+        guard recordingSession == nil, !isExportingRecording else {
             NSSound.beep()
             return
         }
         requestScreenCapturePermission { [weak self] in
-            self?.presentGIFCaptureOverlays()
+            self?.presentRecordingCaptureOverlays()
         }
     }
 
@@ -1607,8 +1627,14 @@ final class CaptureController {
             window.onLongCaptureRequested = { [weak self] rect in
                 self?.startLongCapture(globalRect: rect)
             }
-            window.onGIFCaptureRequested = { [weak self] rect in
-                self?.startGIFCapture(globalRect: rect)
+            window.onRecordingRequested = { [weak self] rect, format, systemAudio, microphone, deviceID in
+                self?.startRecording(
+                    globalRect: rect,
+                    format: format,
+                    systemAudio: systemAudio,
+                    microphone: microphone,
+                    microphoneDeviceID: deviceID
+                )
             }
             return window
         }
@@ -1665,15 +1691,21 @@ final class CaptureController {
         }
     }
 
-    private func presentGIFCaptureOverlays() {
+    private func presentRecordingCaptureOverlays() {
         closeOverlays()
         overlayWindows = NSScreen.screens.map { screen in
-            let window = SelectionOverlayWindow(screen: screen, purpose: .gifCapture)
+            let window = SelectionOverlayWindow(screen: screen, purpose: .recording)
             window.onSelectionCancelled = { [weak self] in
                 self?.closeOverlays()
             }
-            window.onGIFCaptureRequested = { [weak self] rect in
-                self?.startGIFCapture(globalRect: rect)
+            window.onRecordingRequested = { [weak self] rect, format, systemAudio, microphone, deviceID in
+                self?.startRecording(
+                    globalRect: rect,
+                    format: format,
+                    systemAudio: systemAudio,
+                    microphone: microphone,
+                    microphoneDeviceID: deviceID
+                )
             }
             return window
         }
@@ -1729,34 +1761,45 @@ final class CaptureController {
         }
     }
 
-    private func startGIFCapture(globalRect: CGRect) {
-        guard gifSession == nil else { return }
+    private func startRecording(
+        globalRect: CGRect,
+        format: RecordingFormat,
+        systemAudio: Bool,
+        microphone: Bool,
+        microphoneDeviceID: String?
+    ) {
+        guard recordingSession == nil, !isExportingRecording else { return }
         closeOverlays()
         Task { [weak self] in
             guard let self else { return }
             do {
                 try await Task.sleep(for: .milliseconds(90))
                 let capturer = try await ScreenRegionCapturer(globalRect: globalRect)
-                let session = GIFSessionController(
+                let session = RecordingSessionController(
                     selectionRect: globalRect,
                     capturer: capturer,
-                    fps: 15,
-                    maxDuration: 30,
-                    maxWidth: 720,
-                    onFinish: { [weak self] data in
+                    configuration: RecordingConfiguration(
+                        format: format,
+                        fps: 30,
+                        capturesSystemAudio: format == .video && systemAudio,
+                        capturesMicrophone: format == .video && microphone,
+                        microphoneDeviceID: microphoneDeviceID,
+                        showsCursor: true
+                    ),
+                    onFinish: { [weak self] result in
                         guard let self else { return }
-                        self.gifSession = nil
-                        self.finishGIFCapture(data: data)
+                        self.recordingSession = nil
+                        self.finishRecording(result)
                     },
                     onCancel: { [weak self] in
-                        self?.gifSession = nil
+                        self?.recordingSession = nil
                     },
                     onError: { [weak self] error in
-                        self?.gifSession = nil
+                        self?.recordingSession = nil
                         self?.showFailureAlert(message: error.localizedDescription)
                     }
                 )
-                gifSession = session
+                recordingSession = session
                 session.start()
                 await capturer.prepareForOverlayExclusion()
             } catch {
@@ -1765,13 +1808,50 @@ final class CaptureController {
         }
     }
 
-    private func finishGIFCapture(data: Data) {
-        do {
-            let url = try ScreenshotWriter.writeGIF(data)
-            NSSound(named: "Glass")?.play()
-            NSWorkspace.shared.activateFileViewerSelecting([url])
-        } catch {
-            showFailureAlert(message: error.localizedDescription)
+    private func finishRecording(_ result: RecordingResult) {
+        isExportingRecording = true
+        let progressWindow = RecordingExportProgressWindowController(format: result.format)
+        recordingExportProgress = progressWindow
+        progressWindow.showWindow(nil)
+        progressWindow.window?.makeKeyAndOrderFront(nil)
+        let exportedURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SnapInk-Export-\(UUID().uuidString)")
+            .appendingPathExtension(result.format.fileExtension)
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let url = try await RecordingExporter.export(
+                    source: result.sourceURL,
+                    format: result.format,
+                    destination: exportedURL,
+                    progress: { [weak progressWindow] stage, fraction in
+                        Task { @MainActor in progressWindow?.update(stage: stage, fraction: fraction) }
+                    }
+                )
+                try? FileManager.default.removeItem(at: result.sourceURL)
+                progressWindow.close()
+                self.recordingExportProgress = nil
+                let preview = RecordingPreviewWindowController(
+                    fileURL: url,
+                    format: result.format,
+                    duration: result.duration,
+                    pixelSize: result.pixelSize,
+                    onClose: { [weak self] in self?.recordingPreview = nil }
+                )
+                self.recordingPreview?.close()
+                self.recordingPreview = preview
+                self.isExportingRecording = false
+                preview.showWindow(nil)
+                preview.window?.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            } catch {
+                self.isExportingRecording = false
+                progressWindow.close()
+                self.recordingExportProgress = nil
+                try? FileManager.default.removeItem(at: result.sourceURL)
+                try? FileManager.default.removeItem(at: exportedURL)
+                self.showFailureAlert(message: error.localizedDescription)
+            }
         }
     }
 
@@ -1996,7 +2076,7 @@ final class CaptureController {
             window.onAnnotationFailed = nil
             window.onOCRRequested = nil
             window.onLongCaptureRequested = nil
-            window.onGIFCaptureRequested = nil
+            window.onRecordingRequested = nil
             window.orderOut(nil)
         }
 
@@ -2046,7 +2126,7 @@ final class CaptureController {
 enum SelectionPurpose {
     case regular
     case longCapture
-    case gifCapture
+    case recording
 }
 
 final class SelectionOverlayWindow: NSPanel {
@@ -2057,7 +2137,7 @@ final class SelectionOverlayWindow: NSPanel {
     var onAnnotationFailed: ((Error) -> Void)?
     var onOCRRequested: ((OCRSource) -> Void)?
     var onLongCaptureRequested: ((CGRect) -> Void)?
-    var onGIFCaptureRequested: ((CGRect) -> Void)?
+    var onRecordingRequested: ((CGRect, RecordingFormat, Bool, Bool, String?) -> Void)?
 
     private var overlayView: SelectionOverlayView? {
         contentView as? SelectionOverlayView
@@ -2107,8 +2187,8 @@ final class SelectionOverlayWindow: NSPanel {
         view.onLongCaptureRequested = { [weak self] rect in
             self?.onLongCaptureRequested?(rect)
         }
-        view.onGIFCaptureRequested = { [weak self] rect in
-            self?.onGIFCaptureRequested?(rect)
+        view.onRecordingRequested = { [weak self] rect, format, systemAudio, microphone, deviceID in
+            self?.onRecordingRequested?(rect, format, systemAudio, microphone, deviceID)
         }
     }
 
@@ -2165,7 +2245,7 @@ final class SelectionOverlayView: NSView {
     var onAnnotationFailed: ((Error) -> Void)?
     var onOCRRequested: ((OCRSource) -> Void)?
     var onLongCaptureRequested: ((CGRect) -> Void)?
-    var onGIFCaptureRequested: ((CGRect) -> Void)?
+    var onRecordingRequested: ((CGRect, RecordingFormat, Bool, Bool, String?) -> Void)?
 
     private let purpose: SelectionPurpose
     private var startPoint: NSPoint?
@@ -2183,7 +2263,7 @@ final class SelectionOverlayView: NSView {
     private var magnifierImage: CGImage?
     private var mouseTrackingTimer: Timer?
     private var lastPolledMouseLocation: CGPoint?
-    private var isGIFConfirming = false
+    private var isRecordingConfirming = false
     private var isPreparingAnnotation = false
     private var isSubmitting = false
     private var annotationCanvas: AnnotationCanvasView?
@@ -2196,28 +2276,18 @@ final class SelectionOverlayView: NSView {
     )
     private lazy var actionBar = makeActionBar()
     private lazy var longCaptureBar: LongCaptureStartBar = {
-        let hint: String
-        let title: String
-        switch purpose {
-        case .gifCapture:
-            hint = "框选录制区域 · 最长 30 秒"
-            title = "录制 GIF"
-        default:
-            hint = "框内内容需全部能够上下滚动"
-            title = "开始长截图"
-        }
-        let bar = LongCaptureStartBar(frame: CGRect(x: 0, y: 0, width: 430, height: 48), hint: hint, startTitle: title)
+        let bar = LongCaptureStartBar(
+            frame: CGRect(x: 0, y: 0, width: 430, height: 48),
+            hint: "框内内容需全部能够上下滚动",
+            startTitle: "开始长截图"
+        )
         bar.onStart = { [weak self] in self?.requestLongCapture() }
         bar.onCancel = { [weak self] in self?.onSelectionCancelled?() }
         return bar
     }()
-    private lazy var gifConfirmBar: LongCaptureStartBar = {
-        let bar = LongCaptureStartBar(
-            frame: CGRect(x: 0, y: 0, width: 430, height: 48),
-            hint: "点击「录制 GIF」开始 · 最长 30 秒",
-            startTitle: "录制 GIF"
-        )
-        bar.onStart = { [weak self] in
+    private lazy var recordingBar: RecordingStartBar = {
+        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 82))
+        bar.onStart = { [weak self] format, systemAudio, microphone, deviceID in
             guard let self,
                   let selection = self.currentSelection(),
                   selection.width >= 80,
@@ -2228,13 +2298,15 @@ final class SelectionOverlayView: NSView {
             }
             self.isSubmitting = true
             self.hideSelectionControls()
-            self.onGIFCaptureRequested?(globalRect)
+            self.onRecordingRequested?(globalRect, format, systemAudio, microphone, deviceID)
         }
         bar.onCancel = { [weak self] in
             guard let self else { return }
-            self.isGIFConfirming = false
-            self.gifConfirmBar.isHidden = true
-            if let selection = self.currentSelection() {
+            if self.purpose == .recording {
+                self.onSelectionCancelled?()
+            } else if let selection = self.currentSelection() {
+                self.isRecordingConfirming = false
+                self.recordingBar.isHidden = true
                 self.positionSelectionControls(for: selection)
             }
         }
@@ -2253,11 +2325,14 @@ final class SelectionOverlayView: NSView {
         case .regular:
             addSubview(actionBar)
             actionBar.isHidden = true
-            addSubview(gifConfirmBar)
-            gifConfirmBar.isHidden = true
-        case .longCapture, .gifCapture:
+            addSubview(recordingBar)
+            recordingBar.isHidden = true
+        case .longCapture:
             addSubview(longCaptureBar)
             longCaptureBar.isHidden = true
+        case .recording:
+            addSubview(recordingBar)
+            recordingBar.isHidden = true
         }
     }
 
@@ -2334,7 +2409,9 @@ final class SelectionOverlayView: NSView {
         // and before the app is fully activated.  The timer refines the
         // full-screen fallback to the actual window under the cursor.
         let timer = Timer(timeInterval: 0.03, repeats: true) { [weak self] _ in
-            self?.pollMousePosition()
+            MainActor.assumeIsolated {
+                self?.pollMousePosition()
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
         mouseTrackingTimer = timer
@@ -2378,7 +2455,7 @@ final class SelectionOverlayView: NSView {
         guard annotationCanvas == nil,
               !isPreparingAnnotation,
               !isSubmitting,
-              !isGIFConfirming else { return false }
+              !isRecordingConfirming else { return false }
         if case .moving = dragOperation { return false }
         if case .resizing = dragOperation { return false }
         if isSelectionFinalized && !isPreselected { return false }
@@ -2545,7 +2622,7 @@ final class SelectionOverlayView: NSView {
     private func detectWindowUnderCursor(at location: CGPoint) {
         guard purpose == .regular,
               !isPreparingAnnotation,
-              !isSubmitting, !isGIFConfirming,
+              !isSubmitting, !isRecordingConfirming,
               annotationCanvas == nil,
               dragOperation == nil,
               preselectClickStart == nil,
@@ -2635,7 +2712,7 @@ final class SelectionOverlayView: NSView {
            let selection = currentSelection(),
            selection.contains(location) {
             if event.clickCount >= 2 {
-                if purpose == .longCapture || purpose == .gifCapture {
+                if purpose == .longCapture || purpose == .recording {
                     requestLongCapture()
                 } else {
                     submitSelection(action: .copy)
@@ -3095,7 +3172,7 @@ final class SelectionOverlayView: NSView {
             self?.requestLongCapture()
         }
         bar.onGIF = { [weak self] in
-            self?.showGIFConfirmBar()
+            self?.showRecordingConfirmBar()
         }
         bar.onCopy = { [weak self] in
             self?.submitSelection(action: .copy)
@@ -3118,10 +3195,10 @@ final class SelectionOverlayView: NSView {
 
     private func positionSelectionControls(for selection: CGRect) {
         let controls: NSView
-        if purpose == .longCapture || purpose == .gifCapture {
+        if purpose == .longCapture {
             controls = longCaptureBar
-        } else if isGIFConfirming {
-            controls = gifConfirmBar
+        } else if purpose == .recording || isRecordingConfirming {
+            controls = recordingBar
         } else {
             controls = actionBar
         }
@@ -3147,15 +3224,17 @@ final class SelectionOverlayView: NSView {
         switch purpose {
         case .regular:
             actionBar.isHidden = true
-            gifConfirmBar.isHidden = true
-        case .longCapture, .gifCapture:
+            recordingBar.isHidden = true
+        case .longCapture:
             longCaptureBar.isHidden = true
+        case .recording:
+            recordingBar.isHidden = true
         }
     }
 
-    /// Switch from the annotation toolbar to a "录制 GIF" confirm bar
+    /// Switch from the annotation toolbar to the shared recording format bar
     /// that reuses the current selection (no re-drawing needed).
-    private func showGIFConfirmBar() {
+    private func showRecordingConfirmBar() {
         guard purpose == .regular,
               isSelectionFinalized,
               !isSubmitting,
@@ -3166,13 +3245,13 @@ final class SelectionOverlayView: NSView {
             return
         }
         actionBar.isHidden = true
-        isGIFConfirming = true
+        isRecordingConfirming = true
         positionSelectionControls(for: selection)
         needsDisplay = true
     }
 
     private func requestLongCapture() {
-        let needsBar = (purpose == .longCapture || purpose == .gifCapture)
+        let needsBar = purpose == .longCapture
         guard (needsBar || annotationCanvas == nil),
               isSelectionFinalized,
               !isSubmitting,
@@ -3185,11 +3264,7 @@ final class SelectionOverlayView: NSView {
         }
         isSubmitting = true
         hideSelectionControls()
-        if purpose == .gifCapture {
-            onGIFCaptureRequested?(globalRect)
-        } else {
-            onLongCaptureRequested?(globalRect)
-        }
+        onLongCaptureRequested?(globalRect)
     }
 
     private func currentSelection() -> CGRect? {

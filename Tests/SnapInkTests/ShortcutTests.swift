@@ -49,6 +49,27 @@ final class ShortcutTests: XCTestCase {
         XCTAssertEqual(ShortcutPreferences.load(.pinLibrary, defaults: defaults), replacement)
     }
 
+    func testRecordingShortcutDefaultsToOptionRAndMigratesLegacyGIFValue() throws {
+        let freshSuite = "SnapInk.RecordingShortcutFresh.\(UUID().uuidString)"
+        let fresh = try XCTUnwrap(UserDefaults(suiteName: freshSuite))
+        defer { fresh.removePersistentDomain(forName: freshSuite) }
+        let defaultShortcut = ShortcutPreferences.load(.recording, defaults: fresh)
+        XCTAssertEqual(defaultShortcut.keyCode, UInt32(kVK_ANSI_R))
+        XCTAssertEqual(defaultShortcut.modifiers, UInt32(optionKey))
+
+        let legacySuite = "SnapInk.RecordingShortcutLegacy.\(UUID().uuidString)"
+        let legacy = try XCTUnwrap(UserDefaults(suiteName: legacySuite))
+        defer { legacy.removePersistentDomain(forName: legacySuite) }
+        legacy.set(Int(kVK_ANSI_K), forKey: "gifCaptureShortcut.keyCode")
+        legacy.set(Int(optionKey | shiftKey), forKey: "gifCaptureShortcut.modifiers")
+        legacy.set("K", forKey: "gifCaptureShortcut.keyLabel")
+
+        let migrated = ShortcutPreferences.load(.recording, defaults: legacy)
+        XCTAssertEqual(migrated.keyCode, UInt32(kVK_ANSI_K))
+        XCTAssertEqual(migrated.modifiers, UInt32(optionKey | shiftKey))
+        XCTAssertEqual(legacy.object(forKey: "recordingShortcut.keyCode") as? Int, kVK_ANSI_K)
+    }
+
     func testValidatorRejectsInternalConflictsAndAllowsCommandComma() {
         let shortcuts = ShortcutPreferences.loadAll(
             defaults: UserDefaults(suiteName: "SnapInk.ShortcutDefaults.\(UUID().uuidString)")!
@@ -87,6 +108,9 @@ final class ShortcutTests: XCTestCase {
         let longCapture = try XCTUnwrap(menu.items.first { $0.title == "长截图" })
         XCTAssertEqual(longCapture.keyEquivalent, "l")
         XCTAssertEqual(longCapture.keyEquivalentModifierMask, [.control, .option])
+        let recording = try XCTUnwrap(menu.items.first { $0.title == "录屏…" })
+        XCTAssertEqual(recording.keyEquivalent, "r")
+        XCTAssertEqual(recording.keyEquivalentModifierMask, [.option])
         let pinItem = try XCTUnwrap(menu.items.first { $0.title == "贴图" })
         let pinMenu = try XCTUnwrap(pinItem.submenu)
 

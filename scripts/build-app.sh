@@ -27,6 +27,7 @@ for ARCH in "${ARCHS[@]}"; do
         -target "${ARCH}-apple-macosx13.0" \
         -module-cache-path "$ARCH_MODULE_CACHE_DIR" \
         -framework AppKit \
+        -framework AVFoundation \
         -framework Carbon \
         -framework CoreGraphics \
         -framework CoreImage \

@@ -19,7 +19,9 @@ It supports macOS 13 or later on both Apple Silicon and Intel Macs through a Uni
 - right-click or double-click secondary annotation for pinned images
 - on-device Chinese and English text recognition using macOS Vision, with editable result preview
 - on-device English-to-Simplified-Chinese translation on macOS 15 or later using Apple Translation
-- screen recording permission prompt
+- unified MP4 video and adaptive GIF area recording with optional system audio, selectable built-in/external microphone, cursor capture, pause/resume, and live annotations
+- recording preview with save, clipboard copy, and discard actions
+- screen, system audio, and microphone recording permission prompts
 
 ## Capture Workflow
 
@@ -38,6 +40,17 @@ Double-click an empty part of the annotated screenshot or any non-text annotatio
 
 Sequence annotations are numeric badges only and increment automatically. Add explanatory text next to a badge with the separate text tool.
 
+## Recording Workflow
+
+1. Choose `录屏…` from the menu bar or press its configurable shortcut (default `Option + R`).
+2. Select an area, then choose `录制视频` or `录制 GIF`. Video can capture system audio, a selected built-in/USB/Bluetooth microphone, or both; GIF is always silent.
+3. During recording, use the floating controls to pause, resume, stop, or cancel. The pen, rectangle, and arrow tools draw directly into both video and GIF output; the red border and controls stay excluded.
+4. After export, preview the result and save it to the configured location, copy it to the clipboard, or discard it.
+
+Video is captured at 30 FPS and exported as network-optimized H.264/AAC MP4. When system audio and microphone are both enabled, they are synchronized and mixed into the exported audio. GIF export defaults to 720 pixels wide and 15 FPS; long recordings automatically reduce sampling to keep the result at approximately 600 frames instead of imposing the previous 30-second limit.
+
+GIF recording stops automatically at 3 minutes. Video recording stops automatically at 2 hours and shows the remaining time after the first hour. Recording is blocked when less than 1 GB is available, and an active recording is safely stopped if free space falls below that threshold.
+
 ## Pin Workflow
 
 - Click the pin button in the screenshot toolbar to float the selected or annotated result above other windows.
@@ -47,7 +60,7 @@ Sequence annotations are numeric badges only and increment automatically. Add ex
 - Right-click a pin to change opacity or corner radius, keep it on the current desktop or show it on every desktop, copy/save it, or annotate it again.
 - Double-clicking a pin opens the complete annotation toolset; completing the edit updates the pin and adds the edited result to history.
 - Use `隐藏全部贴图` / `显示全部贴图` from the menu bar to temporarily toggle every open pin.
-- Choose `快捷键设置…` to customize all four global actions. SnapInk rejects duplicate combinations and shortcuts already reserved by macOS or other applications.
+- Choose `快捷键设置…` to customize all global actions. SnapInk rejects duplicate combinations and shortcuts already reserved by macOS or other applications.
 
 ## Run From Source
 

@@ -1520,9 +1520,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
         action: #selector(longCaptureAction)
     )
     private lazy var gifButton: AnnotationHoverButton = {
-        let button = makeButton(symbol: "", title: "GIF", action: #selector(gifAction))
-        button.image = makeTextIcon("GIF")
-        return button
+        makeButton(symbol: "record.circle", title: "录屏", action: #selector(gifAction))
     }()
     private lazy var ocrButton = makeButton(symbol: "text.viewfinder", title: "识别文字", action: #selector(ocrAction))
     private lazy var pinButton = makeButton(symbol: "pin", title: "贴图", action: #selector(pinAction))

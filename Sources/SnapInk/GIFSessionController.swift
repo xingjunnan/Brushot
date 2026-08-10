@@ -157,20 +157,16 @@ private final class GIFBorderView: NSView {
     }
 }
 
-/// Owns the GIF recording phase after the capture rectangle has been chosen.
-/// A red border marks the region while a small HUD panel shows elapsed time /
-/// frame count and offers Finish and Cancel. Recording runs until the user
-/// finishes, cancels, or the max duration is reached; on finish the buffered
-/// frames are encoded to a GIF via `GIFEncoder`.
+/// Owns the video/GIF recording phase after the capture rectangle has been
+/// chosen. Both formats share the same streaming recorder and live annotation
+/// overlay; format-specific export happens after the recording stops.
 @MainActor
-final class GIFSessionController: NSObject {
+final class RecordingSessionController: NSObject {
     private let selectionRect: CGRect
     private let capturer: ScreenRegionCapturer
-    private let recorder = GIFRecorder()
-    private let fps: Double
-    private let maxDuration: TimeInterval
-    private let maxWidth: Int
-    private let onFinish: (Data) -> Void
+    private let engine = RecordingEngine()
+    private let configuration: RecordingConfiguration
+    private let onFinish: (RecordingResult) -> Void
     private let onCancel: () -> Void
     private let onError: (Error) -> Void
 
@@ -179,35 +175,31 @@ final class GIFSessionController: NSObject {
     private let annotationWindow: GIFAnnotationPanel
     private let annotationView: GIFAnnotationView
     private let statusLabel = NSTextField(labelWithString: "")
-    private let finishButton = NSButton(title: "完成", target: nil, action: nil)
+    private let pauseButton = NSButton(title: "暂停", target: nil, action: nil)
+    private let finishButton = NSButton(title: "停止", target: nil, action: nil)
     private let cancelButton = NSButton(title: "取消", target: nil, action: nil)
     private var selectToolButton: NSButton!
     private var penToolButton: NSButton!
     private var rectToolButton: NSButton!
     private var arrowToolButton: NSButton!
 
-    private var startedAt = Date()
     private var timer: Timer?
     private var isFinished = false
-    private var isEncoding = false
+    private var lastDiskCheckAt = Date.distantPast
 
     nonisolated static let borderExpansion: CGFloat = 3
 
     init(
         selectionRect: CGRect,
         capturer: ScreenRegionCapturer,
-        fps: Double = 15,
-        maxDuration: TimeInterval = 30,
-        maxWidth: Int = 720,
-        onFinish: @escaping (Data) -> Void,
+        configuration: RecordingConfiguration,
+        onFinish: @escaping (RecordingResult) -> Void,
         onCancel: @escaping () -> Void,
         onError: @escaping (Error) -> Void
     ) {
         self.selectionRect = selectionRect
         self.capturer = capturer
-        self.fps = fps
-        self.maxDuration = maxDuration
-        self.maxWidth = maxWidth
+        self.configuration = configuration
         self.onFinish = onFinish
         self.onCancel = onCancel
         self.onError = onError
@@ -229,7 +221,7 @@ final class GIFSessionController: NSObject {
         borderWindow.isReleasedWhenClosed = false
 
         controlWindow = GIFOverlayPanel(
-            contentRect: CGRect(x: 0, y: 0, width: 480, height: 52),
+            contentRect: CGRect(x: 0, y: 0, width: 680, height: 52),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -253,6 +245,11 @@ final class GIFSessionController: NSObject {
         annotationWindow.contentView = annotationView
 
         super.init()
+        engine.onUnexpectedStop = { [weak self] error in
+            guard let self, !self.isFinished else { return }
+            self.cleanup()
+            self.onError(error)
+        }
         configureControlPanel()
     }
 
@@ -263,8 +260,7 @@ final class GIFSessionController: NSObject {
         borderWindow.orderFrontRegardless()
         controlWindow.orderFrontRegardless()
         capturer.exceptedWindowIDs.insert(CGWindowID(annotationWindow.windowNumber))
-        startedAt = Date()
-        updateStatus(frameCount: 0, elapsed: 0)
+        updateStatus(elapsed: 0)
 
         Task { [weak self] in
             guard let self else { return }
@@ -272,16 +268,9 @@ final class GIFSessionController: NSObject {
             // are on screen, so they are excluded from every recorded frame.
             await self.capturer.prepareForOverlayExclusion()
             do {
-                try self.recorder.start(
+                try await self.engine.start(
                     capturer: self.capturer,
-                    fps: self.fps,
-                    maxWidth: self.maxWidth,
-                    onFrame: { [weak self] count in
-                        self?.updateStatus(frameCount: count)
-                    },
-                    onError: { [weak self] error in
-                        self?.handleRecorderError(error)
-                    }
+                    configuration: self.configuration
                 )
             } catch {
                 self.cleanup()
@@ -300,30 +289,36 @@ final class GIFSessionController: NSObject {
         finish()
     }
 
+    @objc private func pauseAction() {
+        if engine.state == .recording {
+            engine.pause()
+            pauseButton.title = "继续"
+            updateStatus(elapsed: engine.elapsedTime)
+        } else if engine.state == .paused {
+            engine.resume()
+            pauseButton.title = "暂停"
+        }
+    }
+
     @objc private func cancelAction() {
         cancel()
     }
 
     func finish() {
-        guard !isFinished, !isEncoding else { return }
-        isEncoding = true
+        guard !isFinished,
+              engine.state == .recording || engine.state == .paused else { return }
         finishButton.isEnabled = false
+        pauseButton.isEnabled = false
         cancelButton.isEnabled = false
         timer?.invalidate()
         timer = nil
 
-        let fps = self.fps
-        let maxWidth = self.maxWidth
         Task { [weak self] in
             guard let self else { return }
-            let frames = await self.recorder.stop()
             do {
-                let data = try GIFEncoder.encode(
-                    frames: frames,
-                    options: GIFEncodingOptions(fps: fps, maxWidth: maxWidth, loopCount: 0)
-                )
+                let result = try await self.engine.stop()
                 self.cleanup()
-                self.onFinish(data)
+                self.onFinish(result)
             } catch {
                 self.cleanup()
                 self.onError(error)
@@ -332,40 +327,55 @@ final class GIFSessionController: NSObject {
     }
 
     func cancel() {
-        guard !isFinished, !isEncoding else { return }
+        guard !isFinished else { return }
         isFinished = true
         timer?.invalidate()
         timer = nil
         Task { [weak self] in
-            _ = await self?.recorder.stop()
+            guard let self else { return }
+            await self.engine.cancel()
+            self.cleanup()
+            self.onCancel()
         }
-        cleanup()
-        onCancel()
     }
 
     // MARK: - Private
 
     private func tick() {
-        guard !isFinished, !isEncoding else { return }
-        let elapsed = Date().timeIntervalSince(startedAt)
-        updateStatus(frameCount: recorder.frameCount, elapsed: elapsed)
-        if elapsed >= maxDuration {
+        guard !isFinished else { return }
+        let elapsed = engine.elapsedTime
+        updateStatus(elapsed: elapsed)
+        if elapsed >= RecordingLimits.maximumDuration(for: configuration.format) {
             finish()
+            return
+        }
+        let now = Date()
+        if now.timeIntervalSince(lastDiskCheckAt) >= 5 {
+            lastDiskCheckAt = now
+            if !RecordingDiskSpace.hasEnoughSpace() {
+                statusLabel.stringValue = "磁盘空间不足，正在安全停止…"
+                finish()
+            }
         }
     }
 
-    private func updateStatus(frameCount: Int, elapsed: TimeInterval? = nil) {
-        let e = elapsed ?? Date().timeIntervalSince(startedAt)
-        let total = Int(max(0, e))
-        statusLabel.stringValue = String(format: "%02d:%02d · %d 帧", total / 60, total % 60, frameCount)
+    private func updateStatus(elapsed: TimeInterval) {
+        let e = elapsed
+        let paused = engine.state == .paused ? " · 已暂停" : ""
+        let microphone = configuration.capturesMicrophone ? " · 麦克风" : ""
+        var timeText = Self.clockText(e)
+        if let remaining = RecordingLimits.remainingTime(for: configuration.format, elapsed: e) {
+            timeText += " · 剩余 \(Self.clockText(remaining))"
+        }
+        statusLabel.stringValue = "\(configuration.format.displayName)\(microphone) · \(timeText)\(paused)"
     }
 
-    private func handleRecorderError(_ error: Error) {
-        guard !isFinished else { return }
-        timer?.invalidate()
-        timer = nil
-        cleanup()
-        onError(error)
+    private static func clockText(_ interval: TimeInterval) -> String {
+        let total = Int(max(0, interval.rounded(.down)))
+        if total >= 3_600 {
+            return String(format: "%02d:%02d:%02d", total / 3_600, (total / 60) % 60, total % 60)
+        }
+        return String(format: "%02d:%02d", total / 60, total % 60)
     }
 
     private func cleanup() {
@@ -422,6 +432,8 @@ final class GIFSessionController: NSObject {
         finishButton.action = #selector(finishAction)
         finishButton.keyEquivalent = "\r"
         finishButton.bezelColor = NSColor.systemRed
+        pauseButton.target = self
+        pauseButton.action = #selector(pauseAction)
         cancelButton.target = self
         cancelButton.action = #selector(cancelAction)
         cancelButton.keyEquivalent = "\u{1b}"
@@ -440,7 +452,7 @@ final class GIFSessionController: NSObject {
             makeSeparator(),
             undoButton, clearButton,
             makeSeparator(),
-            dotContainer, statusLabel, cancelButton, finishButton
+            dotContainer, statusLabel, pauseButton, cancelButton, finishButton
         ])
         stack.orientation = .horizontal
         stack.alignment = .centerY
@@ -451,7 +463,7 @@ final class GIFSessionController: NSObject {
             stack.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 12),
             stack.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -10),
             stack.centerYAnchor.constraint(equalTo: background.centerYAnchor),
-            statusLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 120)
+            statusLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 230)
         ])
     }
 
@@ -549,4 +561,126 @@ final class GIFSessionController: NSObject {
         ])
         return sep
     }
+}
+
+@MainActor
+final class RecordingStartBar: NSVisualEffectView {
+    var onStart: ((RecordingFormat, Bool, Bool, String?) -> Void)?
+    var onCancel: (() -> Void)?
+    private let audioCheckbox = NSButton(
+        checkboxWithTitle: "系统音频（仅视频）",
+        target: nil,
+        action: nil
+    )
+    private let microphoneCheckbox = NSButton(
+        checkboxWithTitle: "麦克风（仅视频）",
+        target: nil,
+        action: nil
+    )
+    private let microphonePopup = NSPopUpButton()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        material = .hudWindow
+        blendingMode = .withinWindow
+        state = .active
+        wantsLayer = true
+        layer?.cornerRadius = 9
+        layer?.masksToBounds = true
+
+        let hint = NSTextField(labelWithString: "选择输出格式")
+        hint.font = .systemFont(ofSize: 12)
+        hint.textColor = .secondaryLabelColor
+        audioCheckbox.state = RecordingPreferences.systemAudioEnabled() ? .on : .off
+        audioCheckbox.target = self
+        audioCheckbox.action = #selector(audioChanged)
+        audioCheckbox.identifier = NSUserInterfaceItemIdentifier("recordingSystemAudio")
+
+        let devices = RecordingMicrophones.availableDevices()
+        for device in devices {
+            microphonePopup.addItem(withTitle: device.name)
+            microphonePopup.lastItem?.representedObject = device.id
+        }
+        if let saved = RecordingPreferences.microphoneDeviceID(),
+           let index = microphonePopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == saved }) {
+            microphonePopup.selectItem(at: index)
+        } else if let selected = microphonePopup.selectedItem?.representedObject as? String {
+            RecordingPreferences.setMicrophoneDeviceID(selected)
+        }
+        microphoneCheckbox.state = RecordingPreferences.microphoneEnabled() ? .on : .off
+        microphoneCheckbox.isEnabled = !devices.isEmpty
+        microphoneCheckbox.target = self
+        microphoneCheckbox.action = #selector(microphoneChanged)
+        microphoneCheckbox.identifier = NSUserInterfaceItemIdentifier("recordingMicrophone")
+        microphonePopup.isEnabled = microphoneCheckbox.state == .on && !devices.isEmpty
+        microphonePopup.target = self
+        microphonePopup.action = #selector(microphoneDeviceChanged)
+        microphonePopup.identifier = NSUserInterfaceItemIdentifier("recordingMicrophoneDevice")
+        microphonePopup.toolTip = devices.isEmpty ? "未检测到麦克风" : "选择内置或外置麦克风"
+        microphonePopup.widthAnchor.constraint(lessThanOrEqualToConstant: 210).isActive = true
+
+        let cancel = NSButton(title: "取消", target: self, action: #selector(cancelAction))
+        let gif = NSButton(title: "录制 GIF", target: self, action: #selector(gifAction))
+        gif.identifier = NSUserInterfaceItemIdentifier("recordGIFAction")
+        let video = NSButton(title: "录制视频", target: self, action: #selector(videoAction))
+        video.identifier = NSUserInterfaceItemIdentifier("recordVideoAction")
+        video.keyEquivalent = "\r"
+        video.contentTintColor = .controlAccentColor
+        let options = NSStackView(views: [audioCheckbox, microphoneCheckbox, microphonePopup])
+        options.orientation = .horizontal
+        options.alignment = .centerY
+        options.spacing = 10
+        let actions = NSStackView(views: [hint, cancel, gif, video])
+        actions.orientation = .horizontal
+        actions.alignment = .centerY
+        actions.spacing = 10
+        let stack = NSStackView(views: [options, actions])
+        stack.orientation = .vertical
+        stack.alignment = .trailing
+        stack.spacing = 6
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc private func audioChanged() {
+        RecordingPreferences.setSystemAudioEnabled(audioCheckbox.state == .on)
+    }
+
+    @objc private func microphoneChanged() {
+        let enabled = microphoneCheckbox.state == .on
+        RecordingPreferences.setMicrophoneEnabled(enabled)
+        microphonePopup.isEnabled = enabled && microphonePopup.numberOfItems > 0
+    }
+
+    @objc private func microphoneDeviceChanged() {
+        RecordingPreferences.setMicrophoneDeviceID(selectedMicrophoneID)
+    }
+
+    private var selectedMicrophoneID: String? {
+        microphonePopup.selectedItem?.representedObject as? String
+    }
+
+    @objc private func videoAction() {
+        onStart?(
+            .video,
+            audioCheckbox.state == .on,
+            microphoneCheckbox.state == .on && microphoneCheckbox.isEnabled,
+            selectedMicrophoneID
+        )
+    }
+
+    @objc private func gifAction() {
+        onStart?(.gif, false, false, nil)
+    }
+
+    @objc private func cancelAction() { onCancel?() }
 }

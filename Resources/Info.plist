@@ -15,14 +15,16 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.7.0</string>
+    <string>0.9.1</string>
     <key>CFBundleVersion</key>
-    <string>29</string>
+    <string>34</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>SnapInk needs screen access to capture selected areas and scrolling screenshots.</string>
+    <string>SnapInk needs screen and system audio access for screenshots, scrolling capture, and screen recording.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>SnapInk uses the selected built-in or external microphone when you enable microphone recording.</string>
 </dict>
 </plist>
