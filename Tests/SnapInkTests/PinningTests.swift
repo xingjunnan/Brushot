@@ -102,6 +102,50 @@ final class PinningTests: XCTestCase {
         XCTAssertEqual(contentSize.height, 140, accuracy: 0.001)
     }
 
+    func testExtremeAndTinyPinImagesKeepTheirOriginalAspectRatio() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let manager = PinManager(historyStore: PinHistoryStore(directoryURL: directory))
+        let dimensions = [(400, 30), (30, 400), (30, 30)]
+
+        for (width, height) in dimensions {
+            let image = try makeImage(width: width, height: height, color: .white)
+            let controller = try manager.pin(image, recordHistory: false)
+            defer { manager.closePin(id: controller.id) }
+            let contentSize = try XCTUnwrap(controller.window?.contentView?.frame.size)
+
+            XCTAssertEqual(
+                contentSize.width / contentSize.height,
+                CGFloat(width) / CGFloat(height),
+                accuracy: 0.001
+            )
+            if width == height {
+                XCTAssertEqual(contentSize, CGSize(width: 80, height: 80))
+            }
+        }
+    }
+
+    func testMismatchedPreferredSizeIsProjectedOntoImageAspectRatio() throws {
+        let image = try makeImage(width: 400, height: 100, color: .white)
+
+        let size = PinWindowController.displaySize(
+            for: image,
+            preferredSize: CGSize(width: 200, height: 200)
+        )
+
+        XCTAssertEqual(size.width / size.height, 4, accuracy: 0.001)
+        XCTAssertEqual(size.width * size.height, 40_000, accuracy: 0.001)
+    }
+
+    func testPinDrawingUsesAspectFitAsLastLineOfDefense() throws {
+        let destination = try XCTUnwrap(PinImageView.aspectFitRect(
+            imageSize: CGSize(width: 400, height: 100),
+            in: CGRect(x: 0, y: 0, width: 200, height: 200)
+        ))
+
+        XCTAssertEqual(destination, CGRect(x: 0, y: 75, width: 200, height: 50))
+    }
+
     func testClipboardImagePins() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

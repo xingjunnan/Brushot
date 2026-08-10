@@ -191,11 +191,54 @@ final class PinImageView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        window?.makeKey()
+        window?.makeFirstResponder(self)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
-        NSImage(cgImage: image, size: bounds.size).draw(in: bounds)
+        guard let destination = Self.aspectFitRect(
+            imageSize: CGSize(width: image.width, height: image.height),
+            in: bounds
+        ) else { return }
+        NSGraphicsContext.current?.imageInterpolation = .high
+        NSImage(
+            cgImage: image,
+            size: CGSize(width: image.width, height: image.height)
+        ).draw(in: destination)
+    }
+
+    static func aspectFitRect(imageSize: CGSize, in bounds: CGRect) -> CGRect? {
+        guard imageSize.width > 0,
+              imageSize.height > 0,
+              bounds.width > 0,
+              bounds.height > 0 else { return nil }
+        let scale = min(bounds.width / imageSize.width, bounds.height / imageSize.height)
+        let size = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+        return CGRect(
+            x: bounds.midX - size.width / 2,
+            y: bounds.midY - size.height / 2,
+            width: size.width,
+            height: size.height
+        )
     }
 
     override func mouseDown(with event: NSEvent) {
+        // magnify(with:) 等手势事件只派发给 key window 的 first responder。
+        // .nonactivatingPanel 失去 key 后点击不会自动恢复 key，必须显式 makeKey
+        // （不会激活 App，不会触发激活竞争）。
+        window?.makeKey()
         window?.makeFirstResponder(self)
         if event.clickCount >= 2 {
             owner?.beginAnnotation()
@@ -272,7 +315,8 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
     ) {
         self.image = image
         self.manager = manager
-        let size = Self.validDisplaySize(displaySize) ?? Self.initialSize(for: image)
+        let size = Self.displaySize(for: image, preferredSize: displaySize)
+        let imageSize = CGSize(width: image.width, height: image.height)
         imageView = PinImageView(frame: CGRect(origin: .zero, size: size), image: image)
         let panel = PinPanel(
             contentRect: CGRect(origin: origin ?? .zero, size: size),
@@ -291,8 +335,8 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.animationBehavior = .none
-        panel.minSize = CGSize(width: 80, height: 60)
-        panel.aspectRatio = size
+        panel.minSize = Self.minimumSize(for: image)
+        panel.aspectRatio = imageSize
         applyCornerRadius()
         setDesktopBehavior(.currentDesktop)
         if origin == nil { centerNearPointer(size: size) }
@@ -307,6 +351,10 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
         window.orderFrontRegardless()
         window.makeKey()
         window.makeFirstResponder(imageView)
+        // magnify 等手势事件只路由到 active app 的 key window。
+        // .accessory App 截图后可能失活，贴图虽 makeKey 但 app 非 active，
+        // 手势不路由。激活 App 让贴图能接收捏合手势。
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func setImage(_ image: CGImage) {
@@ -317,6 +365,7 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
         let ratio = CGFloat(image.width) / CGFloat(max(1, image.height))
         let width = sqrt(currentArea * ratio)
         let height = width / ratio
+        window.minSize = Self.minimumSize(for: image)
         window.aspectRatio = CGSize(width: image.width, height: image.height)
         window.setContentSize(CGSize(width: width, height: height))
     }
@@ -524,25 +573,40 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private static func initialSize(for image: CGImage) -> CGSize {
-        let ratio = CGFloat(image.width) / CGFloat(max(1, image.height))
+        let pixelSize = CGSize(width: image.width, height: image.height)
         let maxWidth: CGFloat = 640
         let maxHeight: CGFloat = 480
-        var width = min(CGFloat(image.width), maxWidth)
-        var height = width / ratio
-        if height > maxHeight {
-            height = maxHeight
-            width = height * ratio
+        let downscale = min(1, maxWidth / pixelSize.width, maxHeight / pixelSize.height)
+        var size = CGSize(width: pixelSize.width * downscale, height: pixelSize.height * downscale)
+        let longestSide = max(size.width, size.height)
+        if longestSide < 80 {
+            let upscale = 80 / longestSide
+            size.width *= upscale
+            size.height *= upscale
         }
-        return CGSize(width: max(80, width), height: max(60, height))
+        return size
     }
 
-    private static func validDisplaySize(_ size: CGSize?) -> CGSize? {
-        guard let size,
-              size.width.isFinite,
-              size.height.isFinite,
-              size.width > 0,
-              size.height > 0 else { return nil }
-        return size
+    static func displaySize(for image: CGImage, preferredSize: CGSize?) -> CGSize {
+        guard let preferredSize,
+              preferredSize.width.isFinite,
+              preferredSize.height.isFinite,
+              preferredSize.width > 0,
+              preferredSize.height > 0 else {
+            return initialSize(for: image)
+        }
+        let ratio = CGFloat(image.width) / CGFloat(max(1, image.height))
+        let area = preferredSize.width * preferredSize.height
+        let width = sqrt(area * ratio)
+        return CGSize(width: width, height: width / ratio)
+    }
+
+    private static func minimumSize(for image: CGImage) -> CGSize {
+        let ratio = CGFloat(image.width) / CGFloat(max(1, image.height))
+        if ratio >= 1 {
+            return CGSize(width: 80, height: 80 / ratio)
+        }
+        return CGSize(width: 80 * ratio, height: 80)
     }
 
     private func showError(_ message: String) {

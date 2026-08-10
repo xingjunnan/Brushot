@@ -596,11 +596,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        NSApp.mainMenu = makeApplicationMenu()
         configureStatusItem()
         installHotKeyHandler()
         registerInitialHotKeys()
         installTooltipEventTap()
         AppPreferences.syncLaunchAtLogin()
+    }
+
+    /// Accessory applications do not get the standard application menu that
+    /// AppKit normally creates from a storyboard or nib. Text controls rely on
+    /// these responder-chain actions for their conventional keyboard shortcuts.
+    func makeApplicationMenu() -> NSMenu {
+        let mainMenu = NSMenu(title: "Main Menu")
+
+        let applicationItem = NSMenuItem()
+        let applicationMenu = NSMenu(title: "SnapInk")
+        let quitItem = NSMenuItem(
+            title: "退出 SnapInk",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: ""
+        )
+        quitItem.keyEquivalentModifierMask = []
+        applicationMenu.addItem(quitItem)
+        applicationItem.submenu = applicationMenu
+        mainMenu.addItem(applicationItem)
+
+        let editItem = NSMenuItem()
+        let editMenu = NSMenu(title: "编辑")
+        editMenu.addItem(makeResponderMenuItem(title: "撤销", action: Selector(("undo:")), key: "z"))
+        editMenu.addItem(makeResponderMenuItem(
+            title: "重做",
+            action: Selector(("redo:")),
+            key: "z",
+            modifiers: [.command, .shift]
+        ))
+        editMenu.addItem(.separator())
+        editMenu.addItem(makeResponderMenuItem(title: "剪切", action: #selector(NSText.cut(_:)), key: "x"))
+        editMenu.addItem(makeResponderMenuItem(title: "复制", action: #selector(NSText.copy(_:)), key: "c"))
+        editMenu.addItem(makeResponderMenuItem(title: "粘贴", action: #selector(NSText.paste(_:)), key: "v"))
+        editMenu.addItem(.separator())
+        editMenu.addItem(makeResponderMenuItem(title: "全选", action: #selector(NSText.selectAll(_:)), key: "a"))
+        editItem.submenu = editMenu
+        mainMenu.addItem(editItem)
+
+        return mainMenu
+    }
+
+    private func makeResponderMenuItem(
+        title: String,
+        action: Selector,
+        key: String,
+        modifiers: NSEvent.ModifierFlags = .command
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.keyEquivalentModifierMask = modifiers
+        // A nil target sends the action through the current key window's
+        // responder chain, so this works for NSTextField and NSTextView alike.
+        item.target = nil
+        return item
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {

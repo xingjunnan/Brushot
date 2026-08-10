@@ -5,6 +5,32 @@ import XCTest
 
 @MainActor
 final class ShortcutTests: XCTestCase {
+    @MainActor
+    func testApplicationEditMenuProvidesStandardTextResponderShortcuts() throws {
+        let menu = AppDelegate().makeApplicationMenu()
+        let applicationMenu = try XCTUnwrap(menu.items.first?.submenu)
+        let editMenu = try XCTUnwrap(menu.items.first { $0.submenu?.title == "编辑" }?.submenu)
+
+        let quitItem = try XCTUnwrap(applicationMenu.items.first { $0.action == #selector(NSApplication.terminate(_:)) })
+        XCTAssertEqual(quitItem.keyEquivalent, "", "保持菜单栏应用现有的退出快捷键行为")
+
+        let expected: [(Selector, String, NSEvent.ModifierFlags)] = [
+            (Selector(("undo:")), "z", .command),
+            (Selector(("redo:")), "z", [.command, .shift]),
+            (#selector(NSText.cut(_:)), "x", .command),
+            (#selector(NSText.copy(_:)), "c", .command),
+            (#selector(NSText.paste(_:)), "v", .command),
+            (#selector(NSText.selectAll(_:)), "a", .command)
+        ]
+
+        for (action, key, modifiers) in expected {
+            let item = try XCTUnwrap(editMenu.items.first { $0.action == action })
+            XCTAssertEqual(item.keyEquivalent, key)
+            XCTAssertEqual(item.keyEquivalentModifierMask, modifiers)
+            XCTAssertNil(item.target, "编辑命令必须由当前文本控件通过响应者链处理")
+        }
+    }
+
     func testDefaultShortcutsAreUniqueAndPreferencesRoundTrip() throws {
         let suiteName = "SnapInk.ShortcutTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
