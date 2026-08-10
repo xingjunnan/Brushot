@@ -341,10 +341,12 @@ final class RecordingInteractionTests: XCTestCase {
         }
         RecordingPreferences.setSystemAudioEnabled(false)
         RecordingPreferences.setMicrophoneEnabled(false)
-        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 82))
+        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 104))
         let buttons = descendants(of: bar).compactMap { $0 as? NSButton }
-        let video = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordVideoAction" })
-        let gif = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordGIFAction" })
+        let start = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "startRecordingAction" })
+        let format = try XCTUnwrap(descendants(of: bar).compactMap { $0 as? NSSegmentedControl }.first {
+            $0.identifier?.rawValue == "recordingFormatControl"
+        })
         let audio = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingSystemAudio" })
         XCTAssertNotNil(buttons.first { $0.identifier?.rawValue == "recordingMicrophone" })
         var received: [(RecordingFormat, Bool, Bool)] = []
@@ -353,13 +355,51 @@ final class RecordingInteractionTests: XCTestCase {
         }
 
         audio.performClick(nil)
-        video.performClick(nil)
-        gif.performClick(nil)
+        start.performClick(nil)
+        format.selectedSegment = 1
+        format.performClick(nil)
+        XCTAssertFalse(audio.isEnabled)
+        XCTAssertEqual(start.title, "开始录制 GIF")
+        start.performClick(nil)
 
         XCTAssertEqual(received.map(\.0), [.video, .gif])
         XCTAssertEqual(received.map(\.1), [true, false])
         XCTAssertEqual(received.map(\.2), [false, false])
         XCTAssertTrue(RecordingPreferences.systemAudioEnabled())
+    }
+
+    func testRecordingAnnotationToolbarMatchesScreenshotToolbarStyle() throws {
+        let toolbar = RecordingAnnotationToolbarView(frame: CGRect(x: 0, y: 0, width: 340, height: 72))
+        let buttons = descendants(of: toolbar).compactMap { $0 as? NSButton }
+        let rectangle = try XCTUnwrap(buttons.first {
+            $0.identifier?.rawValue == "recordingAnnotation.rectangle"
+        })
+        XCTAssertFalse(rectangle.isBordered)
+        XCTAssertEqual((rectangle as? AnnotationHoverButton)?.hoverTitle, "矩形")
+
+        var selectedTool: AnnotationTool?
+        toolbar.onToolSelected = { selectedTool = $0 }
+        rectangle.performClick(nil)
+        XCTAssertEqual(selectedTool, .rectangle)
+        XCTAssertEqual(rectangle.state, .on)
+
+        var selectedColor: NSColor?
+        toolbar.onStyleChanged = { color, _ in selectedColor = color }
+        let blue = try XCTUnwrap(buttons.first {
+            $0.identifier?.rawValue == "recordingAnnotation.color.5"
+        })
+        blue.performClick(nil)
+        XCTAssertEqual(selectedColor?.blueComponent ?? 0, 1, accuracy: 0.001)
+
+        let undo = try XCTUnwrap(buttons.first {
+            $0.identifier?.rawValue == "recordingAnnotation.undo"
+        })
+        let redo = try XCTUnwrap(buttons.first {
+            $0.identifier?.rawValue == "recordingAnnotation.redo"
+        })
+        toolbar.setHistory(canUndo: true, canRedo: false)
+        XCTAssertTrue(undo.isEnabled)
+        XCTAssertFalse(redo.isEnabled)
     }
 
     func testRecordingPreviewOffersSaveCopyDiscardAndDiscardDeletesTempFile() throws {

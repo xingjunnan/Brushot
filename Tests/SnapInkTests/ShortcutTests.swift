@@ -39,6 +39,10 @@ final class ShortcutTests: XCTestCase {
         let initial = ShortcutPreferences.loadAll(defaults: defaults)
         XCTAssertEqual(initial.count, ShortcutAction.allCases.count)
         XCTAssertEqual(Set(initial.values).count, ShortcutAction.allCases.count)
+        XCTAssertEqual(initial[.fullscreenCapture]?.keyCode, UInt32(kVK_ANSI_F))
+        XCTAssertEqual(initial[.fullscreenCapture]?.modifiers, UInt32(controlKey | optionKey))
+        XCTAssertEqual(initial[.delayedCapture]?.keyCode, UInt32(kVK_ANSI_D))
+        XCTAssertEqual(initial[.delayedCapture]?.modifiers, UInt32(controlKey | optionKey))
 
         let replacement = KeyboardShortcut(
             keyCode: UInt32(kVK_ANSI_K),
@@ -105,6 +109,15 @@ final class ShortcutTests: XCTestCase {
 
     func testStatusMenuGroupsPinActionsAndQuitHasNoShortcut() throws {
         let menu = AppDelegate().makeStatusMenu()
+        XCTAssertEqual(Array(menu.items.prefix(5).map(\.title)), [
+            "区域截图", "全屏截图", "延时截图…", "长截图", "录屏…"
+        ])
+        let fullscreen = try XCTUnwrap(menu.items.first { $0.title == "全屏截图" })
+        XCTAssertEqual(fullscreen.keyEquivalent, "f")
+        XCTAssertEqual(fullscreen.keyEquivalentModifierMask, [.control, .option])
+        let delayed = try XCTUnwrap(menu.items.first { $0.title == "延时截图…" })
+        XCTAssertEqual(delayed.keyEquivalent, "d")
+        XCTAssertEqual(delayed.keyEquivalentModifierMask, [.control, .option])
         let longCapture = try XCTUnwrap(menu.items.first { $0.title == "长截图" })
         XCTAssertEqual(longCapture.keyEquivalent, "l")
         XCTAssertEqual(longCapture.keyEquivalentModifierMask, [.control, .option])
@@ -148,6 +161,25 @@ final class ShortcutTests: XCTestCase {
         XCTAssertNotNil(recorders.first {
             $0.identifier?.rawValue == "shortcut.\(ShortcutAction.longCapture.rawValue)"
         })
+        XCTAssertNotNil(recorders.first {
+            $0.identifier?.rawValue == "shortcut.\(ShortcutAction.fullscreenCapture.rawValue)"
+        })
+        XCTAssertNotNil(recorders.first {
+            $0.identifier?.rawValue == "shortcut.\(ShortcutAction.delayedCapture.rawValue)"
+        })
+        XCTAssertNotNil(descendants(of: content).first {
+            $0.identifier?.rawValue == "selfTimerDurationStepper"
+        })
+        XCTAssertNotNil(descendants(of: content).first {
+            $0.identifier?.rawValue == "selfTimerTickSound"
+        })
+        let shortcutGrid = try XCTUnwrap(descendants(of: content).first {
+            $0.identifier?.rawValue == "shortcutGrid"
+        } as? NSStackView)
+        XCTAssertEqual(shortcutGrid.spacing, 18)
+        XCTAssertEqual(shortcutGrid.subviews.filter {
+            $0.identifier?.rawValue == "shortcutGridRow"
+        }.count, 4)
         XCTAssertEqual(
             Set(recorders.compactMap { $0.identifier?.rawValue }),
             Set(ShortcutAction.allCases.map { "shortcut.\($0.rawValue)" })

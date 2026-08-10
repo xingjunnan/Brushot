@@ -5,8 +5,10 @@ SnapInk is a lightweight native macOS screenshot app inspired by iShot. The curr
 It supports macOS 13 or later on both Apple Silicon and Intel Macs through a Universal 2 executable.
 
 - menu bar app
-- configurable global shortcuts for capture, clipboard pinning, the pin library, and hiding/showing pins
+- configurable global shortcuts for area, full-screen, delayed, and scrolling capture, recording, clipboard pinning, the pin library, and hiding/showing pins
 - drag-to-select capture overlay
+- single-display full-screen capture with automatic mouse-display targeting
+- 1–60 second delayed area capture with an optional countdown sound
 - selection action bar with cancel, local OCR, copy, and save actions
 - inline annotation tools for rectangle, ellipse, line, arrow, pen, text, numbered steps with optional descriptions, mosaic, and spotlight highlight
 - editable annotation objects with move, resize, restyle, delete, undo, redo, and context-sensitive drawing/move/resize cursors
@@ -34,6 +36,10 @@ The `text.viewfinder` button runs OCR entirely on the Mac and opens an editable 
 
 Use `Command + C` or `Command + S` while the selection is active for the copy and save actions. Global shortcuts can be changed from `快捷键设置…` in the menu bar.
 
+Choose `全屏截图` or press `Control + Option + F` to freeze the display under the mouse and preselect its entire area. The normal SnapInk action and annotation controls remain available, so the selection can still be adjusted before output.
+
+Choose `延时截图…` or press `Control + Option + D` to select an area first, then start the countdown. SnapInk restores the live desktop during the countdown and captures the current pixels when time expires; its border and countdown HUD are hidden before capture. The delay defaults to 5 seconds and can be set from 1 to 60 seconds in Preferences, together with the countdown sound option.
+
 Annotation tool shortcuts are `V/R/O/L/A/P/T/N/M/H`. Use `Command + Z` and `Shift + Command + Z` for undo and redo, and Delete to remove the selected annotation. While editing text, `Command + Return` commits and Escape cancels the text edit.
 
 Double-click an empty part of the annotated screenshot or any non-text annotation to copy the flattened PNG. Double-click text to edit it. While a drawing tool is active, existing annotations take pointer priority; hold Option while dragging to force creation of a new overlapping annotation. Color, opacity, width, and other style choices are applied immediately but are not added to the undo history.
@@ -44,7 +50,7 @@ Sequence annotations are numeric badges only and increment automatically. Add ex
 
 1. Choose `录屏…` from the menu bar or press its configurable shortcut (default `Option + R`).
 2. Select an area, then choose `录制视频` or `录制 GIF`. Video can capture system audio, a selected built-in/USB/Bluetooth microphone, or both; GIF is always silent.
-3. During recording, use the floating controls to pause, resume, stop, or cancel. The pen, rectangle, and arrow tools draw directly into both video and GIF output; the red border and controls stay excluded.
+3. During recording, use the floating controls to pause, resume, stop, or cancel. The real-time annotation bar follows the screenshot toolbar style and provides select, rectangle, arrow, pen, color, stroke width, undo, and redo controls; annotations enter both video and GIF output while the red border and controls stay excluded.
 4. After export, preview the result and save it to the configured location, copy it to the clipboard, or discard it.
 
 Video is captured at 30 FPS and exported as network-optimized H.264/AAC MP4. When system audio and microphone are both enabled, they are synchronized and mixed into the exported audio. GIF export defaults to 720 pixels wide and 15 FPS; long recordings automatically reduce sampling to keep the result at approximately 600 frames instead of imposing the previous 30-second limit.
@@ -96,5 +102,5 @@ The first capture requires macOS screen recording permission. If permission is d
 
 ## Next Core Features
 
-- capture full screen and active window
+- capture active window
 - Developer ID signing and notarization

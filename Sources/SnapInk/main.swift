@@ -145,12 +145,16 @@ enum ShortcutAction: UInt32, CaseIterable, Hashable {
     case togglePins = 4
     case longCapture = 5
     case recording = 6
+    case fullscreenCapture = 7
+    case delayedCapture = 8
 
     var title: String {
         switch self {
         case .capture: "区域截图"
         case .longCapture: "长截图"
         case .recording: "录屏…"
+        case .fullscreenCapture: "全屏截图"
+        case .delayedCapture: "延时截图…"
         case .pinClipboard: "从剪贴板贴图"
         case .pinLibrary: "贴图库…"
         case .togglePins: "隐藏全部贴图"
@@ -162,6 +166,8 @@ enum ShortcutAction: UInt32, CaseIterable, Hashable {
         case .capture: "captureShortcut"
         case .longCapture: "longCaptureShortcut"
         case .recording: "recordingShortcut"
+        case .fullscreenCapture: "fullscreenCaptureShortcut"
+        case .delayedCapture: "delayedCaptureShortcut"
         case .pinClipboard: "pinClipboardShortcut"
         case .pinLibrary: "pinLibraryShortcut"
         case .togglePins: "togglePinsShortcut"
@@ -183,6 +189,18 @@ enum ShortcutAction: UInt32, CaseIterable, Hashable {
                 keyCode: UInt32(kVK_ANSI_R),
                 modifiers: UInt32(optionKey),
                 keyLabel: "R"
+            )
+        case .fullscreenCapture:
+            KeyboardShortcut(
+                keyCode: UInt32(kVK_ANSI_F),
+                modifiers: UInt32(controlKey | optionKey),
+                keyLabel: "F"
+            )
+        case .delayedCapture:
+            KeyboardShortcut(
+                keyCode: UInt32(kVK_ANSI_D),
+                modifiers: UInt32(controlKey | optionKey),
+                keyLabel: "D"
             )
         case .pinClipboard:
             KeyboardShortcut(
@@ -208,7 +226,7 @@ enum ShortcutAction: UInt32, CaseIterable, Hashable {
     /// Actions that present a capture overlay and therefore benefit from
     /// tooltip-preserving pre-capture.
     static var screenshotActions: [ShortcutAction] {
-        [.capture, .longCapture, .recording]
+        [.capture, .fullscreenCapture, .delayedCapture, .longCapture, .recording]
     }
 }
 
@@ -681,6 +699,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        captureController.cancelTransientCapture()
         hotKeyRefs.values.forEach { UnregisterEventHotKey($0) }
         hotKeyRefs.removeAll()
         if let eventHandlerRef {
@@ -716,6 +735,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             selector: #selector(captureSelection)
         )
         menu.addItem(capture)
+
+        let fullscreen = makeShortcutMenuItem(
+            action: .fullscreenCapture,
+            title: "全屏截图",
+            selector: #selector(captureFullscreen)
+        )
+        menu.addItem(fullscreen)
+
+        let delayed = makeShortcutMenuItem(
+            action: .delayedCapture,
+            title: "延时截图…",
+            selector: #selector(captureDelayed)
+        )
+        menu.addItem(delayed)
 
         let longCapture = makeShortcutMenuItem(
             action: .longCapture,
@@ -1045,6 +1078,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .capture: captureSelection()
         case .longCapture: captureLongScreenshot()
         case .recording: captureRecording()
+        case .fullscreenCapture: captureFullscreen()
+        case .delayedCapture: captureDelayed()
         case .pinClipboard: pinClipboard()
         case .pinLibrary: showPinLibrary()
         case .togglePins: toggleAllPins()
@@ -1057,6 +1092,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func captureLongScreenshot() {
         captureController.beginLongCapture()
+    }
+
+    @objc private func captureFullscreen() {
+        captureController.beginFullscreenCapture()
+    }
+
+    @objc private func captureDelayed() {
+        captureController.beginDelayedCapture()
     }
 
     @objc private func captureRecording() {
@@ -1097,6 +1140,9 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     private var translationCheckbox: NSButton!
     private var saveLocationLabel: NSTextField!
     private var formatPopUp: NSPopUpButton!
+    private var selfTimerDurationLabel: NSTextField!
+    private var selfTimerDurationStepper: NSStepper!
+    private var selfTimerTickCheckbox: NSButton!
 
     init(
         shortcuts: [ShortcutAction: KeyboardShortcut],
@@ -1112,7 +1158,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 640),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 660),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -1212,17 +1258,46 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
             views: [locationRow, formatRow]
         )
 
+        // --- 延时截图 ---
+        selfTimerDurationLabel = NSTextField(labelWithString: "\(SelfTimerPreferences.durationSeconds()) 秒")
+        selfTimerDurationLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        selfTimerDurationLabel.alignment = .right
+        selfTimerDurationLabel.identifier = NSUserInterfaceItemIdentifier("selfTimerDurationValue")
+        selfTimerDurationLabel.widthAnchor.constraint(equalToConstant: 44).isActive = true
+
+        selfTimerDurationStepper = NSStepper()
+        selfTimerDurationStepper.minValue = Double(SelfTimerPreferences.durationRange.lowerBound)
+        selfTimerDurationStepper.maxValue = Double(SelfTimerPreferences.durationRange.upperBound)
+        selfTimerDurationStepper.increment = 1
+        selfTimerDurationStepper.integerValue = SelfTimerPreferences.durationSeconds()
+        selfTimerDurationStepper.target = self
+        selfTimerDurationStepper.action = #selector(changeSelfTimerDuration)
+        selfTimerDurationStepper.identifier = NSUserInterfaceItemIdentifier("selfTimerDurationStepper")
+        let durationRow = makeRow(
+            label: "倒计时时长",
+            trailingViews: [selfTimerDurationLabel, selfTimerDurationStepper]
+        )
+
+        selfTimerTickCheckbox = makeCheckbox(
+            title: "播放倒计时提示音",
+            action: #selector(toggleSelfTimerTickSound)
+        )
+        selfTimerTickCheckbox.state = SelfTimerPreferences.playsTickSound() ? .on : .off
+        selfTimerTickCheckbox.identifier = NSUserInterfaceItemIdentifier("selfTimerTickSound")
+        let selfTimerSection = makeSection(
+            title: "延时截图",
+            views: [durationRow, selfTimerTickCheckbox]
+        )
+
         // --- 快捷键 ---
-        let shortcutRows = ShortcutAction.allCases.compactMap { action -> NSView? in
-            guard let recorderButton = recorderButtons[action] else { return nil }
-            recorderButton.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                recorderButton.widthAnchor.constraint(equalToConstant: 160),
-                recorderButton.heightAnchor.constraint(equalToConstant: 28)
-            ])
-            return makeRow(label: action.title, trailingViews: [recorderButton])
-        }
-        let shortcutSection = makeSection(title: "快捷键", views: shortcutRows)
+        let shortcutOrder: [ShortcutAction] = [
+            .capture, .fullscreenCapture,
+            .delayedCapture, .longCapture,
+            .recording, .pinClipboard,
+            .pinLibrary, .togglePins
+        ]
+        let shortcutGrid = makeShortcutGrid(actions: shortcutOrder)
+        let shortcutSection = makeSection(title: "快捷键", views: [shortcutGrid])
 
         // --- Note ---
         let note = NSTextField(labelWithString: "快捷键必须包含 ⌘、⌃ 或 ⌥；重复或已被系统占用的组合不会保存。")
@@ -1233,18 +1308,33 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         note.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         // --- Assemble ---
-        let outerStack = NSStackView(views: [generalSection, imageSection, shortcutSection, note])
+        let outerStack = NSStackView(views: [generalSection, imageSection, selfTimerSection, shortcutSection, note])
         outerStack.orientation = .vertical
         outerStack.alignment = .leading
-        outerStack.spacing = 28
+        outerStack.spacing = 22
         outerStack.translatesAutoresizingMaskIntoConstraints = false
 
-        contentView.addSubview(outerStack)
+        let documentView = FlippedPreferencesView()
+        documentView.translatesAutoresizingMaskIntoConstraints = false
+        documentView.addSubview(outerStack)
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.documentView = documentView
+        contentView.addSubview(scrollView)
         NSLayoutConstraint.activate([
-            outerStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
-            outerStack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
-            outerStack.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 24),
-            outerStack.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -20)
+            scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            documentView.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
+            outerStack.leadingAnchor.constraint(equalTo: documentView.leadingAnchor, constant: 24),
+            outerStack.trailingAnchor.constraint(equalTo: documentView.trailingAnchor, constant: -24),
+            outerStack.topAnchor.constraint(equalTo: documentView.topAnchor, constant: 24),
+            outerStack.bottomAnchor.constraint(equalTo: documentView.bottomAnchor, constant: -24)
         ])
     }
 
@@ -1259,14 +1349,14 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         let content = NSStackView(views: views)
         content.orientation = .vertical
         content.alignment = .leading
-        content.spacing = 16
+        content.spacing = 12
         content.translatesAutoresizingMaskIntoConstraints = false
         views.forEach { $0.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true }
 
         let section = NSStackView(views: [header, content])
         section.orientation = .vertical
         section.alignment = .leading
-        section.spacing = 10
+        section.spacing = 8
         section.translatesAutoresizingMaskIntoConstraints = false
         header.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true
         content.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true
@@ -1294,8 +1384,55 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         row.distribution = .fill
         row.spacing = 16
         row.translatesAutoresizingMaskIntoConstraints = false
-        labelField.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        labelField.widthAnchor.constraint(equalToConstant: 86).isActive = true
         return row
+    }
+
+    private func makeShortcutGrid(actions: [ShortcutAction]) -> NSStackView {
+        let rows = stride(from: 0, to: actions.count, by: 2).map { index -> NSStackView in
+            let pair = Array(actions[index..<min(index + 2, actions.count)])
+            let cells = pair.compactMap { action -> NSView? in
+                guard let recorderButton = recorderButtons[action] else { return nil }
+                return makeShortcutCell(action: action, recorderButton: recorderButton)
+            }
+            let row = NSStackView(views: cells)
+            row.orientation = .horizontal
+            row.alignment = .top
+            row.distribution = .fillEqually
+            row.spacing = 16
+            row.translatesAutoresizingMaskIntoConstraints = false
+            row.identifier = NSUserInterfaceItemIdentifier("shortcutGridRow")
+            return row
+        }
+        let grid = NSStackView(views: rows)
+        grid.orientation = .vertical
+        grid.alignment = .leading
+        grid.spacing = 18
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        grid.identifier = NSUserInterfaceItemIdentifier("shortcutGrid")
+        rows.forEach { $0.widthAnchor.constraint(equalTo: grid.widthAnchor).isActive = true }
+        return grid
+    }
+
+    private func makeShortcutCell(
+        action: ShortcutAction,
+        recorderButton: ShortcutRecorderButton
+    ) -> NSStackView {
+        let title = NSTextField(labelWithString: action.title)
+        title.font = .systemFont(ofSize: 12, weight: .medium)
+        title.textColor = .secondaryLabelColor
+        title.lineBreakMode = .byTruncatingTail
+        recorderButton.translatesAutoresizingMaskIntoConstraints = false
+
+        let cell = NSStackView(views: [title, recorderButton])
+        cell.orientation = .vertical
+        cell.alignment = .leading
+        cell.spacing = 7
+        cell.translatesAutoresizingMaskIntoConstraints = false
+        title.widthAnchor.constraint(equalTo: cell.widthAnchor).isActive = true
+        recorderButton.widthAnchor.constraint(equalTo: cell.widthAnchor).isActive = true
+        recorderButton.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        return cell
     }
 
     private func makeCheckbox(title: String, action: Selector) -> NSButton {
@@ -1338,11 +1475,25 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         AppPreferences.imageFormat = format
     }
 
+    @objc private func changeSelfTimerDuration() {
+        let duration = selfTimerDurationStepper.integerValue
+        SelfTimerPreferences.setDurationSeconds(duration)
+        selfTimerDurationLabel.stringValue = "\(duration) 秒"
+    }
+
+    @objc private func toggleSelfTimerTickSound() {
+        SelfTimerPreferences.setPlaysTickSound(selfTimerTickCheckbox.state == .on)
+    }
+
     private func stopRecording(except activeButton: ShortcutRecorderButton?) {
         for button in recorderButtons.values where button !== activeButton {
             button.stopRecording()
         }
     }
+}
+
+private final class FlippedPreferencesView: NSView {
+    override var isFlipped: Bool { true }
 }
 
 @MainActor
@@ -1422,6 +1573,39 @@ enum OCRSource {
     case image(CGImage)
 }
 
+enum CaptureScreenGeometry {
+    static func targetIndex(at point: CGPoint, frames: [CGRect], fallbackIndex: Int? = nil) -> Int? {
+        frames.firstIndex(where: { $0.contains(point) }) ?? fallbackIndex ?? frames.indices.first
+    }
+
+    @MainActor
+    static func targetScreen(at point: CGPoint, screens: [NSScreen], fallback: NSScreen?) -> NSScreen? {
+        if let screen = screens.first(where: { $0.frame.contains(point) }) { return screen }
+        return fallback ?? screens.first
+    }
+
+    @MainActor
+    static func targetScreen(for rect: CGRect, screens: [NSScreen]) -> NSScreen? {
+        if let containing = screens.first(where: {
+            $0.frame.contains(CGPoint(x: rect.midX, y: rect.midY))
+        }) {
+            return containing
+        }
+        return screens
+            .map { ($0, $0.frame.intersection(rect).area) }
+            .filter { $0.1 > 0 }
+            .max(by: { $0.1 < $1.1 })?.0
+    }
+
+    static func localRect(_ globalRect: CGRect, in screenFrame: CGRect) -> CGRect {
+        globalRect.intersection(screenFrame).offsetBy(dx: -screenFrame.minX, dy: -screenFrame.minY).integral
+    }
+}
+
+private extension CGRect {
+    var area: CGFloat { isNull || isInfinite ? 0 : width * height }
+}
+
 @MainActor
 final class CaptureController {
     private var overlayWindows: [SelectionOverlayWindow] = []
@@ -1434,6 +1618,7 @@ final class CaptureController {
     private var recordingPreview: RecordingPreviewWindowController?
     private var recordingExportProgress: RecordingExportProgressWindowController?
     private var isExportingRecording = false
+    private var selfTimerCountdown: SelfTimerCountdownController?
     private let textRecognizer: any TextRecognizing
     private var ocrResultWindowController: OCRResultWindowController?
     private var isTranslationEnabled = TranslationPreferences.isEnabled()
@@ -1463,10 +1648,40 @@ final class CaptureController {
     }
 
     func beginSelectionCapture() {
-        guard recordingSession == nil, !isExportingRecording else { NSSound.beep(); return }
+        guard canBeginCaptureFlow else { NSSound.beep(); return }
         requestScreenCapturePermission { [weak self] in
             self?.preCaptureAndPresentOverlays()
         }
+    }
+
+    func beginFullscreenCapture() {
+        guard canBeginCaptureFlow else { NSSound.beep(); return }
+        requestScreenCapturePermission { [weak self] in
+            guard let self else { return }
+            self.preCaptureScreens()
+            self.presentFullscreenOverlay()
+        }
+    }
+
+    func beginDelayedCapture() {
+        guard canBeginCaptureFlow else { NSSound.beep(); return }
+        requestScreenCapturePermission { [weak self] in
+            guard let self else { return }
+            self.preCaptureScreens()
+            self.presentDelayedCaptureOverlays()
+        }
+    }
+
+    func cancelTransientCapture() {
+        selfTimerCountdown?.dismiss()
+        selfTimerCountdown = nil
+        closeOverlays()
+    }
+
+    private var canBeginCaptureFlow: Bool {
+        overlayWindows.isEmpty && selfTimerCountdown == nil &&
+            recordingSession == nil && !isExportingRecording &&
+            longCaptureSession == nil && !isPreparingLongCapture
     }
 
     private func preCaptureAndPresentOverlays() {
@@ -1501,16 +1716,13 @@ final class CaptureController {
 
         // Fallback: capture synchronously here (shouldn't normally happen).
         preCapturedScreens.removeAll()
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
         for screen in NSScreen.screens {
-            let cgRect = CGRect(
-                x: screen.frame.minX,
-                y: primaryHeight - screen.frame.maxY,
-                width: screen.frame.width,
-                height: screen.frame.height
-            )
+            guard let screenNumber = screen.deviceDescription[
+                NSDeviceDescriptionKey("NSScreenNumber")
+            ] as? NSNumber else { continue }
+            let displayID = CGDirectDisplayID(screenNumber.uint32Value)
             guard let cgImage = CGWindowListCreateImage(
-                cgRect,
+                CGDisplayBounds(displayID),
                 .optionOnScreenOnly,
                 kCGNullWindowID,
                 [.bestResolution]
@@ -1543,10 +1755,7 @@ final class CaptureController {
     }
 
     func beginLongCapture() {
-        guard recordingSession == nil,
-              !isExportingRecording,
-              longCaptureSession == nil,
-              !isPreparingLongCapture else {
+        guard canBeginCaptureFlow else {
             NSSound.beep()
             return
         }
@@ -1556,7 +1765,7 @@ final class CaptureController {
     }
 
     func beginRecordingCapture() {
-        guard recordingSession == nil, !isExportingRecording else {
+        guard canBeginCaptureFlow else {
             NSSound.beep()
             return
         }
@@ -1569,6 +1778,7 @@ final class CaptureController {
         then action: @escaping @MainActor () -> Void
     ) {
         guard !isRequestingScreenCapturePermission else {
+            NSSound.beep()
             return
         }
 
@@ -1605,37 +1815,7 @@ final class CaptureController {
         let screens = NSScreen.screens
         overlayWindows = screens.map { screen in
             let window = SelectionOverlayWindow(screen: screen)
-            window.onSelectionFinished = { [weak self] rect, action in
-                self?.finishCapture(globalRect: rect, action: action)
-            }
-            window.onSelectionCancelled = { [weak self] in
-                self?.closeOverlays()
-            }
-            window.onEditingRequested = { [weak self, weak window] rect, tool in
-                guard let self, let window else { return }
-                self.beginAnnotationEditing(globalRect: rect, tool: tool, window: window)
-            }
-            window.onAnnotatedFinished = { [weak self] image, action, displaySize in
-                self?.finishAnnotatedCapture(image: image, action: action, displaySize: displaySize)
-            }
-            window.onAnnotationFailed = { [weak self] error in
-                self?.showFailureAlert(message: error.localizedDescription)
-            }
-            window.onOCRRequested = { [weak self] source in
-                self?.finishOCR(source: source)
-            }
-            window.onLongCaptureRequested = { [weak self] rect in
-                self?.startLongCapture(globalRect: rect)
-            }
-            window.onRecordingRequested = { [weak self] rect, format, systemAudio, microphone, deviceID in
-                self?.startRecording(
-                    globalRect: rect,
-                    format: format,
-                    systemAudio: systemAudio,
-                    microphone: microphone,
-                    microphoneDeviceID: deviceID
-                )
-            }
+            configureRegularCaptureCallbacks(for: window)
             return window
         }
 
@@ -1666,6 +1846,118 @@ final class CaptureController {
                 break
             }
         }
+    }
+
+    private func configureRegularCaptureCallbacks(for window: SelectionOverlayWindow) {
+        window.onSelectionFinished = { [weak self] rect, action in
+            self?.finishCapture(globalRect: rect, action: action)
+        }
+        window.onSelectionCancelled = { [weak self] in self?.closeOverlays() }
+        window.onEditingRequested = { [weak self, weak window] rect, tool in
+            guard let self, let window else { return }
+            self.beginAnnotationEditing(globalRect: rect, tool: tool, window: window)
+        }
+        window.onAnnotatedFinished = { [weak self] image, action, displaySize in
+            self?.finishAnnotatedCapture(image: image, action: action, displaySize: displaySize)
+        }
+        window.onAnnotationFailed = { [weak self] error in
+            self?.showFailureAlert(message: error.localizedDescription)
+        }
+        window.onOCRRequested = { [weak self] source in self?.finishOCR(source: source) }
+        window.onLongCaptureRequested = { [weak self] rect in self?.startLongCapture(globalRect: rect) }
+        window.onRecordingRequested = { [weak self] rect, format, systemAudio, microphone, deviceID in
+            self?.startRecording(
+                globalRect: rect,
+                format: format,
+                systemAudio: systemAudio,
+                microphone: microphone,
+                microphoneDeviceID: deviceID
+            )
+        }
+    }
+
+    private func presentFullscreenOverlay() {
+        closeOverlays()
+        guard let screen = CaptureScreenGeometry.targetScreen(
+            at: NSEvent.mouseLocation,
+            screens: NSScreen.screens,
+            fallback: NSScreen.main
+        ), let entry = preCapturedScreens.first(where: { $0.screen.frame == screen.frame }) else {
+            preCapturedScreens.removeAll()
+            showFailureAlert(message: "未找到鼠标所在的显示器，无法进行全屏截图。")
+            return
+        }
+
+        let window = SelectionOverlayWindow(screen: screen, allowsLiveCaptureActions: false)
+        configureRegularCaptureCallbacks(for: window)
+        window.setPreCapturedScreenImage(entry.image)
+        window.presetSelection(CGRect(origin: .zero, size: screen.frame.size))
+        overlayWindows = [window]
+        window.orderFrontRegardless()
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func presentDelayedCaptureOverlays() {
+        closeOverlays()
+        overlayWindows = NSScreen.screens.map { screen in
+            let window = SelectionOverlayWindow(screen: screen, purpose: .delayedCapture)
+            window.onSelectionCancelled = { [weak self] in self?.closeOverlays() }
+            window.onDelayedCaptureRequested = { [weak self] rect in self?.startSelfTimer(globalRect: rect) }
+            if let entry = preCapturedScreens.first(where: { $0.screen.frame == screen.frame }) {
+                window.setPreCapturedScreenImage(entry.image)
+            }
+            return window
+        }
+        overlayWindows.forEach { $0.orderFrontRegardless() }
+        let mouseLocation = NSEvent.mouseLocation
+        overlayWindows.first(where: { $0.frame.contains(mouseLocation) })?.makeKeyAndOrderFront(nil)
+    }
+
+    private func startSelfTimer(globalRect: CGRect) {
+        guard selfTimerCountdown == nil,
+              let screen = CaptureScreenGeometry.targetScreen(for: globalRect, screens: NSScreen.screens) else {
+            closeOverlays()
+            showFailureAlert(message: "所选区域所在的显示器已断开，请重新截图。")
+            return
+        }
+
+        closeOverlays()
+        preCapturedScreens.removeAll()
+        _ = PreCaptureStore.shared.retrieve()
+        selfTimerCountdown = SelfTimerCountdownController(
+            selectionRect: globalRect,
+            screen: screen,
+            duration: SelfTimerPreferences.durationSeconds(),
+            playsTickSound: SelfTimerPreferences.playsTickSound(),
+            onComplete: { [weak self] in self?.finishSelfTimer(globalRect: globalRect) },
+            onCancel: { [weak self] in self?.selfTimerCountdown = nil }
+        )
+    }
+
+    private func finishSelfTimer(globalRect: CGRect) {
+        selfTimerCountdown = nil
+        _ = PreCaptureStore.shared.retrieve()
+        preCaptureScreens()
+        guard let screen = CaptureScreenGeometry.targetScreen(for: globalRect, screens: NSScreen.screens),
+              let entry = preCapturedScreens.first(where: { $0.screen.frame == screen.frame }) else {
+            preCapturedScreens.removeAll()
+            showFailureAlert(message: "延时截图区域已失效，可能是显示器配置发生了变化。")
+            return
+        }
+
+        let localRect = CaptureScreenGeometry.localRect(globalRect, in: screen.frame)
+        guard localRect.width >= 2, localRect.height >= 2 else {
+            preCapturedScreens.removeAll()
+            showFailureAlert(message: "延时截图区域无效，请重新选择。")
+            return
+        }
+        let window = SelectionOverlayWindow(screen: screen, allowsLiveCaptureActions: false)
+        configureRegularCaptureCallbacks(for: window)
+        window.setPreCapturedScreenImage(entry.image)
+        window.presetSelection(localRect)
+        overlayWindows = [window]
+        window.orderFrontRegardless()
+        window.makeKeyAndOrderFront(nil)
     }
 
     private func presentLongCaptureOverlays() {
@@ -2077,6 +2369,7 @@ final class CaptureController {
             window.onOCRRequested = nil
             window.onLongCaptureRequested = nil
             window.onRecordingRequested = nil
+            window.onDelayedCaptureRequested = nil
             window.orderOut(nil)
         }
 
@@ -2127,6 +2420,7 @@ enum SelectionPurpose {
     case regular
     case longCapture
     case recording
+    case delayedCapture
 }
 
 final class SelectionOverlayWindow: NSPanel {
@@ -2138,15 +2432,21 @@ final class SelectionOverlayWindow: NSPanel {
     var onOCRRequested: ((OCRSource) -> Void)?
     var onLongCaptureRequested: ((CGRect) -> Void)?
     var onRecordingRequested: ((CGRect, RecordingFormat, Bool, Bool, String?) -> Void)?
+    var onDelayedCaptureRequested: ((CGRect) -> Void)?
 
     private var overlayView: SelectionOverlayView? {
         contentView as? SelectionOverlayView
     }
 
-    init(screen: NSScreen, purpose: SelectionPurpose = .regular) {
+    init(
+        screen: NSScreen,
+        purpose: SelectionPurpose = .regular,
+        allowsLiveCaptureActions: Bool = true
+    ) {
         let view = SelectionOverlayView(
             frame: CGRect(origin: .zero, size: screen.frame.size),
-            purpose: purpose
+            purpose: purpose,
+            allowsLiveCaptureActions: allowsLiveCaptureActions
         )
         super.init(
             contentRect: screen.frame,
@@ -2190,6 +2490,9 @@ final class SelectionOverlayWindow: NSPanel {
         view.onRecordingRequested = { [weak self] rect, format, systemAudio, microphone, deviceID in
             self?.onRecordingRequested?(rect, format, systemAudio, microphone, deviceID)
         }
+        view.onDelayedCaptureRequested = { [weak self] rect in
+            self?.onDelayedCaptureRequested?(rect)
+        }
     }
 
     func enterAnnotationEditing(baseImage: CGImage, initialTool: AnnotationTool) {
@@ -2202,6 +2505,10 @@ final class SelectionOverlayWindow: NSPanel {
 
     func setPreCapturedScreenImage(_ image: CGImage) {
         overlayView?.setPreCapturedScreenImage(image)
+    }
+
+    func presetSelection(_ rect: CGRect) {
+        overlayView?.presetSelection(rect)
     }
 
     override var canBecomeKey: Bool { true }
@@ -2246,8 +2553,10 @@ final class SelectionOverlayView: NSView {
     var onOCRRequested: ((OCRSource) -> Void)?
     var onLongCaptureRequested: ((CGRect) -> Void)?
     var onRecordingRequested: ((CGRect, RecordingFormat, Bool, Bool, String?) -> Void)?
+    var onDelayedCaptureRequested: ((CGRect) -> Void)?
 
     private let purpose: SelectionPurpose
+    private let allowsLiveCaptureActions: Bool
     private var startPoint: NSPoint?
     private var currentPoint: NSPoint?
     private var dragOperation: DragOperation?
@@ -2286,7 +2595,7 @@ final class SelectionOverlayView: NSView {
         return bar
     }()
     private lazy var recordingBar: RecordingStartBar = {
-        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 82))
+        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 104))
         bar.onStart = { [weak self] format, systemAudio, microphone, deviceID in
             guard let self,
                   let selection = self.currentSelection(),
@@ -2312,14 +2621,28 @@ final class SelectionOverlayView: NSView {
         }
         return bar
     }()
+    private lazy var delayedCaptureBar: DelayedCaptureStartBar = {
+        let bar = DelayedCaptureStartBar(
+            frame: CGRect(x: 0, y: 0, width: 330, height: 48),
+            duration: SelfTimerPreferences.durationSeconds()
+        )
+        bar.onStart = { [weak self] in self?.requestDelayedCapture() }
+        bar.onCancel = { [weak self] in self?.onSelectionCancelled?() }
+        return bar
+    }()
     private let infoAttributes: [NSAttributedString.Key: Any] = [
         .font: NSFont.systemFont(ofSize: 13, weight: .medium),
         .foregroundColor: NSColor.white
     ]
     private let handleHitHalfSize: CGFloat = 10
 
-    init(frame frameRect: NSRect, purpose: SelectionPurpose = .regular) {
+    init(
+        frame frameRect: NSRect,
+        purpose: SelectionPurpose = .regular,
+        allowsLiveCaptureActions: Bool = true
+    ) {
         self.purpose = purpose
+        self.allowsLiveCaptureActions = allowsLiveCaptureActions
         super.init(frame: frameRect)
         switch purpose {
         case .regular:
@@ -2327,12 +2650,16 @@ final class SelectionOverlayView: NSView {
             actionBar.isHidden = true
             addSubview(recordingBar)
             recordingBar.isHidden = true
+            updateLiveCaptureActionAvailability(for: nil)
         case .longCapture:
             addSubview(longCaptureBar)
             longCaptureBar.isHidden = true
         case .recording:
             addSubview(recordingBar)
             recordingBar.isHidden = true
+        case .delayedCapture:
+            addSubview(delayedCaptureBar)
+            delayedCaptureBar.isHidden = true
         }
     }
 
@@ -2712,8 +3039,12 @@ final class SelectionOverlayView: NSView {
            let selection = currentSelection(),
            selection.contains(location) {
             if event.clickCount >= 2 {
-                if purpose == .longCapture || purpose == .recording {
+                if purpose == .longCapture {
                     requestLongCapture()
+                } else if purpose == .recording {
+                    NSSound.beep()
+                } else if purpose == .delayedCapture {
+                    requestDelayedCapture()
                 } else {
                     submitSelection(action: .copy)
                 }
@@ -2874,6 +3205,10 @@ final class SelectionOverlayView: NSView {
                   isSelectionFinalized,
                   event.keyCode == UInt16(kVK_Return) {
             requestLongCapture()
+        } else if purpose == .delayedCapture,
+                  isSelectionFinalized,
+                  event.keyCode == UInt16(kVK_Return) {
+            requestDelayedCapture()
         } else if purpose == .regular,
                   isSelectionFinalized,
                   event.modifierFlags.contains(.command),
@@ -2898,6 +3233,18 @@ final class SelectionOverlayView: NSView {
         needsDisplay = true
     }
 
+    func presetSelection(_ rect: CGRect) {
+        let selection = rect.intersection(bounds).integral
+        guard !selection.isNull, selection.width >= 2, selection.height >= 2 else { return }
+        startPoint = selection.origin
+        currentPoint = CGPoint(x: selection.maxX, y: selection.maxY)
+        isSelectionFinalized = true
+        isPreselected = false
+        positionSelectionControls(for: selection)
+        window?.invalidateCursorRects(for: self)
+        needsDisplay = true
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         // Draw the frozen screen image as an opaque background so the
         // overlay shows the captured content (with tooltips) instead of
@@ -2912,7 +3259,9 @@ final class SelectionOverlayView: NSView {
             bounds.fill()
             let hint = purpose == .longCapture
                 ? "拖动选择可滚动区域，Esc 取消"
-                : "拖动选择截图区域，Esc 取消"
+                : purpose == .delayedCapture
+                    ? "拖动选择延时截图区域，Esc 取消"
+                    : "拖动选择截图区域，Esc 取消"
             drawHint(hint, at: NSPoint(x: bounds.midX - 110, y: bounds.midY))
             drawColorSamplerOverlay()
             return
@@ -3016,8 +3365,7 @@ final class SelectionOverlayView: NSView {
 
         isPreparingAnnotation = false
         actionBar.setBusy(false)
-        actionBar.setLongCaptureEnabled(false)
-        actionBar.setGIFEnabled(false)
+        updateLiveCaptureActionAvailability(for: nil)
         // frozenScreenImage may already be set from the pre-capture;
         // overwrite with the annotation-specific base image.
         frozenScreenImage = baseImage
@@ -3100,8 +3448,7 @@ final class SelectionOverlayView: NSView {
     func annotationEditingDidFail() {
         isPreparingAnnotation = false
         actionBar.setBusy(false)
-        actionBar.setLongCaptureEnabled(true)
-        actionBar.setGIFEnabled(true)
+        updateLiveCaptureActionAvailability(for: currentSelection())
     }
 
     private func requestAnnotationEditing(tool: AnnotationTool) {
@@ -3197,10 +3544,13 @@ final class SelectionOverlayView: NSView {
         let controls: NSView
         if purpose == .longCapture {
             controls = longCaptureBar
+        } else if purpose == .delayedCapture {
+            controls = delayedCaptureBar
         } else if purpose == .recording || isRecordingConfirming {
             controls = recordingBar
         } else {
             controls = actionBar
+            updateLiveCaptureActionAvailability(for: selection)
         }
         let size = controls.frame.size
         let horizontalInset: CGFloat = 8
@@ -3229,6 +3579,8 @@ final class SelectionOverlayView: NSView {
             longCaptureBar.isHidden = true
         case .recording:
             recordingBar.isHidden = true
+        case .delayedCapture:
+            delayedCaptureBar.isHidden = true
         }
     }
 
@@ -3236,6 +3588,8 @@ final class SelectionOverlayView: NSView {
     /// that reuses the current selection (no re-drawing needed).
     private func showRecordingConfirmBar() {
         guard purpose == .regular,
+              allowsLiveCaptureActions,
+              annotationCanvas == nil,
               isSelectionFinalized,
               !isSubmitting,
               let selection = currentSelection(),
@@ -3252,7 +3606,7 @@ final class SelectionOverlayView: NSView {
 
     private func requestLongCapture() {
         let needsBar = purpose == .longCapture
-        guard (needsBar || annotationCanvas == nil),
+        guard (needsBar || (allowsLiveCaptureActions && annotationCanvas == nil)),
               isSelectionFinalized,
               !isSubmitting,
               let selection = currentSelection(),
@@ -3265,6 +3619,34 @@ final class SelectionOverlayView: NSView {
         isSubmitting = true
         hideSelectionControls()
         onLongCaptureRequested?(globalRect)
+    }
+
+    private func updateLiveCaptureActionAvailability(for selection: CGRect?) {
+        guard purpose == .regular else { return }
+        let available = allowsLiveCaptureActions &&
+            annotationCanvas == nil &&
+            !isPreparingAnnotation &&
+            !isSubmitting &&
+            (selection?.width ?? 0) >= 80 &&
+            (selection?.height ?? 0) >= 80
+        actionBar.setLongCaptureEnabled(available)
+        actionBar.setGIFEnabled(available)
+    }
+
+    private func requestDelayedCapture() {
+        guard purpose == .delayedCapture,
+              isSelectionFinalized,
+              !isSubmitting,
+              let selection = currentSelection(),
+              selection.width >= 2,
+              selection.height >= 2,
+              let globalRect = currentGlobalSelectionRect() else {
+            NSSound.beep()
+            return
+        }
+        isSubmitting = true
+        hideSelectionControls()
+        onDelayedCaptureRequested?(globalRect)
     }
 
     private func currentSelection() -> CGRect? {

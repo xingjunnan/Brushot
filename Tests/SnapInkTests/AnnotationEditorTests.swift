@@ -154,6 +154,37 @@ final class AnnotationEditorTests: XCTestCase {
         XCTAssertEqual(regularSubmitCount, 0)
     }
 
+    func testCapturedResultAndSmallSelectionDisableLongCaptureAndRecording() throws {
+        let capturedResult = SelectionOverlayView(
+            frame: CGRect(x: 0, y: 0, width: 500, height: 400),
+            allowsLiveCaptureActions: false
+        )
+        capturedResult.presetSelection(CGRect(x: 20, y: 20, width: 420, height: 320))
+        let resultButtons = descendants(of: capturedResult).compactMap { $0 as? NSButton }
+        let resultLongCapture = try XCTUnwrap(resultButtons.first {
+            $0.identifier?.rawValue == "longCaptureAction"
+        })
+        let resultRecording = try XCTUnwrap(resultButtons.first {
+            $0.identifier?.rawValue == "gifAction"
+        })
+        XCTAssertFalse(resultLongCapture.isEnabled)
+        XCTAssertFalse(resultRecording.isEnabled)
+
+        capturedResult.annotationEditingDidFail()
+        XCTAssertFalse(resultLongCapture.isEnabled, "截图结果页即使标注准备失败也不能恢复长截图")
+        XCTAssertFalse(resultRecording.isEnabled, "截图结果页即使标注准备失败也不能恢复录屏")
+
+        let smallSelection = SelectionOverlayView(frame: CGRect(x: 0, y: 0, width: 300, height: 240))
+        smallSelection.presetSelection(CGRect(x: 20, y: 20, width: 60, height: 60))
+        let smallButtons = descendants(of: smallSelection).compactMap { $0 as? NSButton }
+        XCTAssertFalse(try XCTUnwrap(smallButtons.first {
+            $0.identifier?.rawValue == "longCaptureAction"
+        }).isEnabled)
+        XCTAssertFalse(try XCTUnwrap(smallButtons.first {
+            $0.identifier?.rawValue == "gifAction"
+        }).isEnabled)
+    }
+
     func testSelectionPinButtonSubmitsCurrentRegionForPinning() throws {
         let overlay = SelectionOverlayView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         let window = NSWindow(

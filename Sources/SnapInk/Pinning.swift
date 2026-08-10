@@ -950,6 +950,8 @@ final class PinAnnotationEditorWindowController: NSWindowController {
         content.addSubview(scrollView)
         content.addSubview(toolbar)
         toolbar.setFrameOrigin(CGPoint(x: (content.bounds.width - toolbar.frame.width) / 2, y: 6))
+        toolbar.setLongCaptureEnabled(false)
+        toolbar.setGIFEnabled(false)
         toolbar.onPreferredSizeChanged = { [weak self] in
             guard let self, let content = self.window?.contentView else { return }
             self.toolbar.setFrameOrigin(CGPoint(x: (content.bounds.width - self.toolbar.frame.width) / 2, y: 6))

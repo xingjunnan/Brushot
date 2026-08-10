@@ -168,6 +168,13 @@ final class PinningTests: XCTestCase {
         let editor = PinAnnotationEditorWindowController(image: base) { annotated = $0 } onCancel: {}
         let content = try XCTUnwrap(editor.window?.contentView)
         let canvas = try XCTUnwrap(descendants(of: content).compactMap { $0 as? AnnotationCanvasView }.first)
+        let toolbarButtons = descendants(of: content).compactMap { $0 as? NSButton }
+        XCTAssertFalse(try XCTUnwrap(toolbarButtons.first {
+            $0.identifier?.rawValue == "longCaptureAction"
+        }).isEnabled)
+        XCTAssertFalse(try XCTUnwrap(toolbarButtons.first {
+            $0.identifier?.rawValue == "gifAction"
+        }).isEnabled)
         _ = canvas.document.add(
             tool: .rectangle,
             geometry: .rect(CGRect(x: 5, y: 5, width: 30, height: 20)),
