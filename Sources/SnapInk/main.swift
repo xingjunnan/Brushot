@@ -1290,14 +1290,8 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         )
 
         // --- 快捷键 ---
-        let shortcutOrder: [ShortcutAction] = [
-            .capture, .fullscreenCapture,
-            .delayedCapture, .longCapture,
-            .recording, .pinClipboard,
-            .pinLibrary, .togglePins
-        ]
-        let shortcutGrid = makeShortcutGrid(actions: shortcutOrder)
-        let shortcutSection = makeSection(title: "快捷键", views: [shortcutGrid])
+        let shortcutGroups = makeShortcutGroups()
+        let shortcutSection = makeSection(title: "快捷键", views: [shortcutGroups])
 
         // --- Note ---
         let note = NSTextField(labelWithString: "快捷键必须包含 ⌘、⌃ 或 ⌥；重复或已被系统占用的组合不会保存。")
@@ -1388,51 +1382,84 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         return row
     }
 
-    private func makeShortcutGrid(actions: [ShortcutAction]) -> NSStackView {
-        let rows = stride(from: 0, to: actions.count, by: 2).map { index -> NSStackView in
-            let pair = Array(actions[index..<min(index + 2, actions.count)])
-            let cells = pair.compactMap { action -> NSView? in
-                guard let recorderButton = recorderButtons[action] else { return nil }
-                return makeShortcutCell(action: action, recorderButton: recorderButton)
-            }
-            let row = NSStackView(views: cells)
-            row.orientation = .horizontal
-            row.alignment = .top
-            row.distribution = .fillEqually
-            row.spacing = 16
-            row.translatesAutoresizingMaskIntoConstraints = false
-            row.identifier = NSUserInterfaceItemIdentifier("shortcutGridRow")
-            return row
-        }
-        let grid = NSStackView(views: rows)
-        grid.orientation = .vertical
-        grid.alignment = .leading
-        grid.spacing = 18
-        grid.translatesAutoresizingMaskIntoConstraints = false
-        grid.identifier = NSUserInterfaceItemIdentifier("shortcutGrid")
-        rows.forEach { $0.widthAnchor.constraint(equalTo: grid.widthAnchor).isActive = true }
-        return grid
+    private func makeShortcutGroups() -> NSStackView {
+        let captureGroup = makeShortcutGroup(
+            title: "截图与录制",
+            identifier: "shortcutGroup.capture",
+            actions: [.capture, .fullscreenCapture, .delayedCapture, .longCapture, .recording]
+        )
+        let pinGroup = makeShortcutGroup(
+            title: "贴图",
+            identifier: "shortcutGroup.pin",
+            actions: [.pinClipboard, .pinLibrary, .togglePins]
+        )
+        let groups = NSStackView(views: [captureGroup, pinGroup])
+        groups.orientation = .horizontal
+        groups.alignment = .top
+        groups.distribution = .fillEqually
+        groups.spacing = 16
+        groups.translatesAutoresizingMaskIntoConstraints = false
+        groups.identifier = NSUserInterfaceItemIdentifier("shortcutGroups")
+        pinGroup.heightAnchor.constraint(equalTo: captureGroup.heightAnchor).isActive = true
+        return groups
     }
 
-    private func makeShortcutCell(
-        action: ShortcutAction,
-        recorderButton: ShortcutRecorderButton
-    ) -> NSStackView {
-        let title = NSTextField(labelWithString: action.title)
-        title.font = .systemFont(ofSize: 12, weight: .medium)
-        title.textColor = .secondaryLabelColor
-        title.lineBreakMode = .byTruncatingTail
-        recorderButton.translatesAutoresizingMaskIntoConstraints = false
+    private func makeShortcutGroup(
+        title: String,
+        identifier: String,
+        actions: [ShortcutAction]
+    ) -> NSVisualEffectView {
+        let card = NSVisualEffectView()
+        card.material = .contentBackground
+        card.blendingMode = .withinWindow
+        card.state = .active
+        card.wantsLayer = true
+        card.layer?.cornerRadius = 9
+        card.layer?.masksToBounds = true
+        card.identifier = NSUserInterfaceItemIdentifier(identifier)
 
-        let cell = NSStackView(views: [title, recorderButton])
-        cell.orientation = .vertical
-        cell.alignment = .leading
-        cell.spacing = 7
-        cell.translatesAutoresizingMaskIntoConstraints = false
-        title.widthAnchor.constraint(equalTo: cell.widthAnchor).isActive = true
-        recorderButton.widthAnchor.constraint(equalTo: cell.widthAnchor).isActive = true
-        recorderButton.heightAnchor.constraint(equalToConstant: 28).isActive = true
-        return cell
+        let heading = NSTextField(labelWithString: title)
+        heading.font = .systemFont(ofSize: 12, weight: .semibold)
+        heading.textColor = .secondaryLabelColor
+        heading.identifier = NSUserInterfaceItemIdentifier("\(identifier).heading")
+        heading.setContentCompressionResistancePriority(.required, for: .vertical)
+        heading.heightAnchor.constraint(greaterThanOrEqualToConstant: 17).isActive = true
+
+        let rows = actions.compactMap { action -> NSView? in
+            guard let recorderButton = recorderButtons[action] else { return nil }
+            let label = NSTextField(labelWithString: action.title)
+            label.font = .systemFont(ofSize: 13)
+            label.lineBreakMode = .byTruncatingTail
+            label.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            recorderButton.translatesAutoresizingMaskIntoConstraints = false
+            recorderButton.widthAnchor.constraint(equalToConstant: 112).isActive = true
+            recorderButton.heightAnchor.constraint(equalToConstant: 27).isActive = true
+
+            let row = NSStackView(views: [label, recorderButton])
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.distribution = .fill
+            row.spacing = 10
+            row.translatesAutoresizingMaskIntoConstraints = false
+            return row
+        }
+
+        let content = NSStackView(views: [heading] + rows)
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 10
+        content.setCustomSpacing(12, after: heading)
+        content.translatesAutoresizingMaskIntoConstraints = false
+        rows.forEach { $0.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true }
+        card.addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 12),
+            content.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
+            content.topAnchor.constraint(equalTo: card.topAnchor, constant: 12),
+            content.bottomAnchor.constraint(lessThanOrEqualTo: card.bottomAnchor, constant: -12),
+            card.heightAnchor.constraint(equalToConstant: 236)
+        ])
+        return card
     }
 
     private func makeCheckbox(title: String, action: Selector) -> NSButton {

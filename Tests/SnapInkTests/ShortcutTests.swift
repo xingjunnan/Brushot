@@ -173,13 +173,32 @@ final class ShortcutTests: XCTestCase {
         XCTAssertNotNil(descendants(of: content).first {
             $0.identifier?.rawValue == "selfTimerTickSound"
         })
-        let shortcutGrid = try XCTUnwrap(descendants(of: content).first {
-            $0.identifier?.rawValue == "shortcutGrid"
+        let shortcutGroups = try XCTUnwrap(descendants(of: content).first {
+            $0.identifier?.rawValue == "shortcutGroups"
         } as? NSStackView)
-        XCTAssertEqual(shortcutGrid.spacing, 18)
-        XCTAssertEqual(shortcutGrid.subviews.filter {
-            $0.identifier?.rawValue == "shortcutGridRow"
-        }.count, 4)
+        XCTAssertEqual(shortcutGroups.spacing, 16)
+        XCTAssertEqual(shortcutGroups.arrangedSubviews.count, 2)
+        XCTAssertNotNil(descendants(of: content).first {
+            $0.identifier?.rawValue == "shortcutGroup.capture"
+        })
+        XCTAssertNotNil(descendants(of: content).first {
+            $0.identifier?.rawValue == "shortcutGroup.pin"
+        })
+        controller.window?.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertTrue(recorders.allSatisfy { abs($0.frame.width - 112) < 1 })
+        let captureCard = try XCTUnwrap(descendants(of: content).first {
+            $0.identifier?.rawValue == "shortcutGroup.capture"
+        })
+        let pinCard = try XCTUnwrap(descendants(of: content).first {
+            $0.identifier?.rawValue == "shortcutGroup.pin"
+        })
+        XCTAssertGreaterThan(captureCard.frame.width, 200)
+        XCTAssertEqual(captureCard.frame.width, pinCard.frame.width, accuracy: 1)
+        let captureHeading = try XCTUnwrap(descendants(of: content).compactMap { $0 as? NSTextField }.first {
+            $0.identifier?.rawValue == "shortcutGroup.capture.heading"
+        })
+        XCTAssertEqual(captureHeading.stringValue, "截图与录制")
+        XCTAssertGreaterThanOrEqual(captureHeading.frame.height, 17)
         XCTAssertEqual(
             Set(recorders.compactMap { $0.identifier?.rawValue }),
             Set(ShortcutAction.allCases.map { "shortcut.\($0.rawValue)" })
