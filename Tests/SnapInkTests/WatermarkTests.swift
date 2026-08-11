@@ -12,9 +12,24 @@ final class WatermarkTests: XCTestCase {
         let config = WatermarkPreferences.load(defaults: defaults)
 
         XCTAssertFalse(config.isEnabled)
+        XCTAssertEqual(config.repeatMode, .single)
         XCTAssertEqual(config.opacity, 1)
         XCTAssertEqual(config.scale, 0.5)
         XCTAssertEqual(config.margin, 80)
+    }
+
+    func testPreferencesPersistDiagonalTiledRepeatModeAndFallbackToSingle() {
+        let defaults = UserDefaults(suiteName: "WatermarkTests.\(UUID().uuidString)")!
+        var config = WatermarkConfiguration.default
+        config.repeatMode = .diagonalTiled
+
+        WatermarkPreferences.save(config, defaults: defaults)
+
+        XCTAssertEqual(WatermarkPreferences.load(defaults: defaults).repeatMode, .diagonalTiled)
+
+        defaults.set("unsupported", forKey: "watermark.repeatMode")
+
+        XCTAssertEqual(WatermarkPreferences.load(defaults: defaults).repeatMode, .single)
     }
 
     func testPlaceholderResolutionUsesCapturedDate() {
@@ -54,6 +69,57 @@ final class WatermarkTests: XCTestCase {
         XCTAssertEqual(result.width, base.width)
         XCTAssertEqual(result.height, base.height)
         XCTAssertGreaterThan(try changedPixelCount(between: base, and: result), 0)
+    }
+
+    func testDiagonalTiledRendererDrawsMoreThanSingleWatermark() throws {
+        let base = try makeSolidImage(width: 480, height: 320, color: .black)
+        var singleConfig = WatermarkConfiguration.default
+        singleConfig.isEnabled = true
+        singleConfig.text = "SnapInk"
+        singleConfig.repeatMode = .single
+        singleConfig.position = .bottomRight
+        singleConfig.opacity = 1
+        singleConfig.textColor = .white
+
+        var tiledConfig = singleConfig
+        tiledConfig.repeatMode = .diagonalTiled
+
+        let single = try WatermarkRenderer.render(
+            image: base,
+            configuration: singleConfig,
+            context: WatermarkContext(capturedAt: Date(timeIntervalSince1970: 0))
+        )
+        let tiled = try WatermarkRenderer.render(
+            image: base,
+            configuration: tiledConfig,
+            context: WatermarkContext(capturedAt: Date(timeIntervalSince1970: 0))
+        )
+
+        XCTAssertEqual(tiled.width, base.width)
+        XCTAssertEqual(tiled.height, base.height)
+        XCTAssertGreaterThan(
+            try changedPixelCount(between: base, and: tiled),
+            try changedPixelCount(between: base, and: single)
+        )
+    }
+
+    func testDiagonalTiledRendererHandlesSmallImages() throws {
+        let base = try makeSolidImage(width: 48, height: 36, color: .black)
+        var config = WatermarkConfiguration.default
+        config.isEnabled = true
+        config.text = "S"
+        config.repeatMode = .diagonalTiled
+        config.opacity = 1
+        config.textColor = .white
+
+        let result = try WatermarkRenderer.render(
+            image: base,
+            configuration: config,
+            context: WatermarkContext(capturedAt: Date(timeIntervalSince1970: 0))
+        )
+
+        XCTAssertEqual(result.width, base.width)
+        XCTAssertEqual(result.height, base.height)
     }
 
     private func makeSolidImage(width: Int, height: Int, color: NSColor) throws -> CGImage {

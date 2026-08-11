@@ -1348,6 +1348,7 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
     private var watermarkCheckbox: NSButton!
     private var watermarkTextField: NSTextField!
     private var watermarkLogoLabel: NSTextField!
+    private var watermarkRepeatModePopUp: NSPopUpButton!
     private var watermarkPositionPopUp: NSPopUpButton!
     private var watermarkOpacityLabel: NSTextField!
     private var watermarkOpacitySlider: NSSlider!
@@ -1359,7 +1360,7 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
 
     init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 430),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 470),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -1417,6 +1418,16 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
             trailingViews: [watermarkLogoLabel, chooseLogoButton, removeLogoButton]
         )
 
+        watermarkRepeatModePopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+        WatermarkConfiguration.RepeatMode.allCases.forEach { repeatMode in
+            watermarkRepeatModePopUp.addItem(withTitle: repeatMode.title)
+            watermarkRepeatModePopUp.lastItem?.representedObject = repeatMode.rawValue
+        }
+        watermarkRepeatModePopUp.selectItem(withTitle: watermarkConfig.repeatMode.title)
+        watermarkRepeatModePopUp.target = self
+        watermarkRepeatModePopUp.action = #selector(changeWatermarkRepeatMode)
+        let repeatModeRow = makeRow(label: "重复方式", trailingViews: [watermarkRepeatModePopUp])
+
         watermarkPositionPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
         WatermarkConfiguration.Position.allCases.forEach { position in
             watermarkPositionPopUp.addItem(withTitle: position.title)
@@ -1425,6 +1436,7 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         watermarkPositionPopUp.selectItem(withTitle: watermarkConfig.position.title)
         watermarkPositionPopUp.target = self
         watermarkPositionPopUp.action = #selector(changeWatermarkPosition)
+        watermarkPositionPopUp.isEnabled = watermarkConfig.repeatMode == .single
         let positionRow = makeRow(label: "位置", trailingViews: [watermarkPositionPopUp])
 
         watermarkOpacityLabel = makeValueLabel("\(Int(watermarkConfig.opacity * 100))%", width: 42)
@@ -1472,6 +1484,7 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
                 textRow,
                 helper,
                 logoRow,
+                repeatModeRow,
                 positionRow,
                 opacityRow,
                 scaleRow,
@@ -1596,6 +1609,12 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         WatermarkPreferences.save(config)
     }
 
+    @objc private func changeWatermarkRepeatMode() {
+        let config = currentWatermarkConfiguration()
+        watermarkPositionPopUp.isEnabled = config.repeatMode == .single
+        WatermarkPreferences.save(config)
+    }
+
     @objc private func changeWatermarkOpacity() {
         var config = currentWatermarkConfiguration()
         config.opacity = CGFloat(watermarkOpacitySlider.doubleValue)
@@ -1627,6 +1646,10 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         var config = WatermarkPreferences.load()
         config.isEnabled = watermarkCheckbox.state == .on
         config.text = watermarkTextField.stringValue
+        if let rawValue = watermarkRepeatModePopUp.selectedItem?.representedObject as? String,
+           let repeatMode = WatermarkConfiguration.RepeatMode(rawValue: rawValue) {
+            config.repeatMode = repeatMode
+        }
         if let rawValue = watermarkPositionPopUp.selectedItem?.representedObject as? String,
            let position = WatermarkConfiguration.Position(rawValue: rawValue) {
             config.position = position

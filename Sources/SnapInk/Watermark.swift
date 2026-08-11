@@ -4,6 +4,18 @@ import Foundation
 import ImageIO
 
 struct WatermarkConfiguration: Equatable {
+    enum RepeatMode: String, CaseIterable {
+        case single
+        case diagonalTiled
+
+        var title: String {
+            switch self {
+            case .single: "单个"
+            case .diagonalTiled: "斜向平铺"
+            }
+        }
+    }
+
     enum Position: String, CaseIterable {
         case topLeft
         case topCenter
@@ -33,6 +45,7 @@ struct WatermarkConfiguration: Equatable {
     var isEnabled: Bool
     var text: String
     var logoURL: URL?
+    var repeatMode: RepeatMode
     var position: Position
     var opacity: CGFloat
     var scale: CGFloat
@@ -43,6 +56,7 @@ struct WatermarkConfiguration: Equatable {
         isEnabled: false,
         text: "",
         logoURL: nil,
+        repeatMode: .single,
         position: .bottomRight,
         opacity: 0.65,
         scale: 1,
@@ -59,6 +73,7 @@ enum WatermarkPreferences {
     private static let enabledKey = "watermark.enabled"
     private static let textKey = "watermark.text"
     private static let logoPathKey = "watermark.logoPath"
+    private static let repeatModeKey = "watermark.repeatMode"
     private static let positionKey = "watermark.position"
     private static let opacityKey = "watermark.opacity"
     private static let scaleKey = "watermark.scale"
@@ -76,6 +91,10 @@ enum WatermarkPreferences {
         config.text = defaults.string(forKey: textKey) ?? ""
         if let path = defaults.string(forKey: logoPathKey), !path.isEmpty {
             config.logoURL = URL(fileURLWithPath: path)
+        }
+        if let value = defaults.string(forKey: repeatModeKey),
+           let repeatMode = WatermarkConfiguration.RepeatMode(rawValue: value) {
+            config.repeatMode = repeatMode
         }
         if let value = defaults.string(forKey: positionKey),
            let position = WatermarkConfiguration.Position(rawValue: value) {
@@ -105,6 +124,7 @@ enum WatermarkPreferences {
         defaults.set(config.isEnabled, forKey: enabledKey)
         defaults.set(config.text, forKey: textKey)
         defaults.set(config.logoURL?.path ?? "", forKey: logoPathKey)
+        defaults.set(config.repeatMode.rawValue, forKey: repeatModeKey)
         defaults.set(config.position.rawValue, forKey: positionKey)
         defaults.set(Double(config.opacity), forKey: opacityKey)
         defaults.set(Double(config.scale), forKey: scaleKey)
@@ -200,20 +220,51 @@ enum WatermarkRenderer {
             return try requireImage(from: cgContext)
         }
 
-        let origin = blockOrigin(
-            blockSize: block.size,
-            imageSize: CGSize(width: width, height: height),
-            position: configuration.position,
-            margin: min(configuration.margin * block.pixelScale, CGFloat(min(width, height)) / 5)
-        )
-
         cgContext.saveGState()
         cgContext.setAlpha(configuration.opacity)
-        if let logo = logoImage, !block.logoRect.isEmpty {
+        switch configuration.repeatMode {
+        case .single:
+            let origin = blockOrigin(
+                blockSize: block.size,
+                imageSize: CGSize(width: width, height: height),
+                position: configuration.position,
+                margin: min(configuration.margin * block.pixelScale, CGFloat(min(width, height)) / 5)
+            )
+            drawBlock(
+                block,
+                at: origin,
+                in: cgContext,
+                text: resolvedText,
+                logo: logoImage,
+                configuration: configuration
+            )
+        case .diagonalTiled:
+            drawDiagonalTiles(
+                block,
+                in: cgContext,
+                imageSize: CGSize(width: width, height: height),
+                text: resolvedText,
+                logo: logoImage,
+                configuration: configuration
+            )
+        }
+        cgContext.restoreGState()
+        return try requireImage(from: cgContext)
+    }
+
+    private static func drawBlock(
+        _ block: WatermarkBlock,
+        at origin: CGPoint,
+        in cgContext: CGContext,
+        text: String,
+        logo: CGImage?,
+        configuration: WatermarkConfiguration
+    ) {
+        if let logo, !block.logoRect.isEmpty {
             cgContext.draw(logo, in: block.logoRect.offsetBy(dx: origin.x, dy: origin.y))
         }
 
-        if !resolvedText.isEmpty {
+        if !text.isEmpty {
             let graphicsContext = NSGraphicsContext(cgContext: cgContext, flipped: false)
             NSGraphicsContext.saveGraphicsState()
             NSGraphicsContext.current = graphicsContext
@@ -230,11 +281,56 @@ enum WatermarkRenderer {
                 .shadow: shadow,
                 .paragraphStyle: paragraph
             ]
-            (resolvedText as NSString).draw(in: rect, withAttributes: attrs)
+            (text as NSString).draw(in: rect, withAttributes: attrs)
             NSGraphicsContext.restoreGraphicsState()
         }
-        cgContext.restoreGState()
-        return try requireImage(from: cgContext)
+    }
+
+    private static func drawDiagonalTiles(
+        _ block: WatermarkBlock,
+        in cgContext: CGContext,
+        imageSize: CGSize,
+        text: String,
+        logo: CGImage?,
+        configuration: WatermarkConfiguration
+    ) {
+        let xStep = max(block.size.width * 2.4, 140 * block.pixelScale)
+        let yStep = max(block.size.height * 5, 90 * block.pixelScale)
+        let diagonal = hypot(imageSize.width, imageSize.height)
+        let originX = -diagonal
+        let endX = imageSize.width + diagonal
+        let originY = -diagonal
+        let endY = imageSize.height + diagonal
+        let center = CGPoint(x: imageSize.width / 2, y: imageSize.height / 2)
+
+        var y = originY
+        var row = 0
+        while y <= endY {
+            let rowOffset = row.isMultiple(of: 2) ? 0 : xStep / 2
+            var x = originX - rowOffset
+            while x <= endX {
+                let tileCenter = CGPoint(x: x, y: y)
+                cgContext.saveGState()
+                cgContext.translateBy(x: center.x, y: center.y)
+                cgContext.rotate(by: -.pi / 4)
+                cgContext.translateBy(x: -center.x, y: -center.y)
+                drawBlock(
+                    block,
+                    at: CGPoint(
+                        x: tileCenter.x - block.size.width / 2,
+                        y: tileCenter.y - block.size.height / 2
+                    ),
+                    in: cgContext,
+                    text: text,
+                    logo: logo,
+                    configuration: configuration
+                )
+                cgContext.restoreGState()
+                x += xStep
+            }
+            y += yStep
+            row += 1
+        }
     }
 
     static func resolvePlaceholders(in text: String, date: Date, locale: Locale = .current) -> String {
