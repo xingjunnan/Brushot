@@ -266,6 +266,65 @@ final class LongCaptureTests: XCTestCase {
         preview.close()
     }
 
+    @MainActor
+    func testFinalPreviewExpandsAnnotationToolsInline() throws {
+        let image = try patternedImage(width: 180, height: 720)
+        let preview = LongCapturePreviewWindowController(
+            image: image,
+            logicalWidth: 180,
+            onOCR: { _, completion in completion() },
+            onDismiss: {}
+        )
+        let content = try XCTUnwrap(preview.window?.contentView)
+        let annotate = try XCTUnwrap(allSubviews(of: content).compactMap { $0 as? NSButton }.first {
+            $0.title == "标注"
+        })
+
+        annotate.performClick(nil)
+
+        XCTAssertEqual(annotate.title, "完成标注")
+        let toolbar = try XCTUnwrap(allSubviews(of: content).compactMap { $0 as? AnnotationToolbarView }.first)
+        content.layoutSubtreeIfNeeded()
+        XCTAssertFalse(toolbar.isHidden)
+        XCTAssertGreaterThan(toolbar.frame.height, 60)
+        XCTAssertFalse(NSApp.windows.contains { $0.title == "长截图标注" })
+        preview.close()
+    }
+
+    @MainActor
+    func testFinalPreviewOCRUsesOriginalImageWhenWatermarkIsEnabled() throws {
+        let previousWatermark = WatermarkPreferences.load()
+        defer { WatermarkPreferences.save(previousWatermark) }
+
+        var watermark = WatermarkConfiguration.default
+        watermark.isEnabled = true
+        watermark.text = "SnapInk"
+        watermark.opacity = 1
+        watermark.textColor = .black
+        WatermarkPreferences.save(watermark)
+
+        let image = try patternedImage(width: 180, height: 720)
+        var receivedImage: CGImage?
+        let preview = LongCapturePreviewWindowController(
+            image: image,
+            logicalWidth: 180,
+            onOCR: { image, completion in
+                receivedImage = image
+                completion()
+            },
+            onDismiss: {}
+        )
+        let content = try XCTUnwrap(preview.window?.contentView)
+        let ocr = try XCTUnwrap(allSubviews(of: content).compactMap { $0 as? NSButton }.first {
+            $0.title == "OCR 文字识别"
+        })
+
+        ocr.performClick(nil)
+
+        XCTAssertEqual(try rgbaData(try XCTUnwrap(receivedImage)), try rgbaData(image))
+        preview.close()
+    }
+
     func testLiveBorderIsDrawnOutsideCapturedSelection() {
         let selection = CGRect(x: 120, y: 80, width: 640, height: 360)
         let border = LongCaptureSessionController.borderFrame(for: selection)

@@ -1179,15 +1179,24 @@ private final class LongCapturePreviewImageView: NSView {
 
 @MainActor
 final class LongCapturePreviewWindowController: NSWindowController, NSWindowDelegate {
+    private let originalImage: CGImage
     private var image: CGImage
     private let logicalWidth: CGFloat
     private let scrollView = NSScrollView()
-    private let imageView: LongCapturePreviewImageView
+    private let annotationCanvas: AnnotationCanvasView
+    private let annotationToolbar: AnnotationToolbarView
+    private var annotationToolbarHeightConstraint: NSLayoutConstraint?
+    private let annotationToolbarExpandedHeight: CGFloat = 72
     private let dimensionLabel = NSTextField(labelWithString: "")
+    private let annotateButton = NSButton(title: "标注", target: nil, action: nil)
     private let ocrButton = NSButton(title: "OCR 文字识别", target: nil, action: nil)
     private let onOCR: (CGImage, @escaping () -> Void) -> Void
     private let onDismiss: () -> Void
-    private var annotationEditor: PinAnnotationEditorWindowController?
+    private var isAnnotating = false
+    private var activeTool: AnnotationTool = .select
+    private var styles = Dictionary(uniqueKeysWithValues: AnnotationTool.drawingTools.map {
+        ($0, AnnotationStylePreferences.load(for: $0))
+    })
     private var didDismiss = false
 
     init(
@@ -1196,15 +1205,27 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
         onOCR: @escaping (CGImage, @escaping () -> Void) -> Void,
         onDismiss: @escaping () -> Void
     ) {
-        self.image = image
+        self.originalImage = image
+        let capturedAt = Date()
+        self.image = Self.previewImage(from: image, capturedAt: capturedAt)
         self.logicalWidth = logicalWidth
         self.onOCR = onOCR
         self.onDismiss = onDismiss
         let displayWidth = min(760, max(320, logicalWidth))
-        let displayHeight = displayWidth * CGFloat(image.height) / CGFloat(max(1, image.width))
-        imageView = LongCapturePreviewImageView(
-            image: image,
-            frame: CGRect(x: 0, y: 0, width: displayWidth, height: displayHeight)
+        let displayHeight = displayWidth * CGFloat(self.image.height) / CGFloat(max(1, self.image.width))
+        annotationCanvas = AnnotationCanvasView(
+            frame: CGRect(x: 0, y: 0, width: displayWidth, height: displayHeight),
+            baseImage: self.image
+        )
+        annotationToolbar = AnnotationToolbarView(
+            frame: CGRect(x: 0, y: 0, width: 650, height: 72)
+        )
+        annotationToolbar.isHidden = true
+        annotationToolbar.setLongCaptureEnabled(false)
+        annotationToolbar.setGIFEnabled(false)
+        annotationCanvas.setTool(
+            .select,
+            style: styles[.select] ?? .defaultStyle(for: .rectangle)
         )
         let visible = NSScreen.main?.visibleFrame.size ?? CGSize(width: 1200, height: 800)
         let window = NSWindow(
@@ -1224,6 +1245,7 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
         super.init(window: window)
         window.delegate = self
         configureLayout()
+        configureAnnotationActions()
         updateImageLayout()
         window.center()
     }
@@ -1246,38 +1268,56 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
         updateImageLayout()
     }
 
+    private static func previewImage(from image: CGImage, capturedAt: Date) -> CGImage {
+        let configuration = WatermarkPreferences.load()
+        guard configuration.isEnabled else { return image }
+        return (try? WatermarkRenderer.render(
+            image: image,
+            configuration: configuration,
+            context: WatermarkContext(capturedAt: capturedAt)
+        )) ?? image
+    }
+
     private func configureLayout() {
         guard let content = window?.contentView else { return }
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.borderType = .bezelBorder
-        scrollView.documentView = imageView
+        scrollView.documentView = annotationCanvas
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
         dimensionLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         dimensionLabel.textColor = .secondaryLabelColor
-        let annotate = NSButton(title: "标注…", target: self, action: #selector(annotateAction))
+        annotateButton.target = self
+        annotateButton.action = #selector(annotateAction)
         ocrButton.target = self
         ocrButton.action = #selector(ocrAction)
         let copy = NSButton(title: "复制", target: self, action: #selector(copyAction))
         let save = NSButton(title: "保存", target: self, action: #selector(saveAction))
         save.keyEquivalent = "\r"
         let close = NSButton(title: "关闭", target: self, action: #selector(closeAction))
-        let actions = NSStackView(views: [dimensionLabel, annotate, ocrButton, copy, save, close])
+        let actions = NSStackView(views: [dimensionLabel, annotateButton, ocrButton, copy, save, close])
         actions.orientation = .horizontal
         actions.alignment = .centerY
         actions.spacing = 10
         actions.translatesAutoresizingMaskIntoConstraints = false
         dimensionLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        annotationToolbar.translatesAutoresizingMaskIntoConstraints = false
 
         content.addSubview(scrollView)
+        content.addSubview(annotationToolbar)
         content.addSubview(actions)
+        annotationToolbarHeightConstraint = annotationToolbar.heightAnchor.constraint(equalToConstant: 0)
+        annotationToolbarHeightConstraint?.isActive = true
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
             scrollView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
             scrollView.topAnchor.constraint(equalTo: content.topAnchor, constant: 12),
-            scrollView.bottomAnchor.constraint(equalTo: actions.topAnchor, constant: -10),
+            scrollView.bottomAnchor.constraint(equalTo: annotationToolbar.topAnchor, constant: -8),
+            annotationToolbar.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            annotationToolbar.widthAnchor.constraint(equalToConstant: 650),
+            annotationToolbar.bottomAnchor.constraint(equalTo: actions.topAnchor, constant: -8),
             actions.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
             actions.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
             actions.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
@@ -1290,34 +1330,84 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
         let availableWidth = max(320, scrollView.contentSize.width)
         let displayWidth = min(max(logicalWidth, 320), availableWidth)
         let displayHeight = displayWidth * CGFloat(image.height) / CGFloat(max(1, image.width))
-        imageView.image = image
-        imageView.setFrameSize(CGSize(width: displayWidth, height: displayHeight))
+        annotationCanvas.setFrameSize(CGSize(width: displayWidth, height: displayHeight))
+        annotationCanvas.needsDisplay = true
         dimensionLabel.stringValue = "\(image.width) × \(image.height) px"
     }
 
+    private func configureAnnotationActions() {
+        annotationToolbar.onToolSelected = { [weak self] tool in self?.setAnnotationTool(tool) }
+        annotationToolbar.onStyleChanged = { [weak self] style in
+            guard let self else { return }
+            let target = self.annotationCanvas.document.selectedItem?.tool ?? self.activeTool
+            guard target != .select else { return }
+            self.styles[target] = style
+            AnnotationStylePreferences.save(style, for: target)
+            self.annotationCanvas.applyStyle(style)
+        }
+        annotationToolbar.onUndo = { [weak self] in self?.annotationCanvas.undo() }
+        annotationToolbar.onRedo = { [weak self] in self?.annotationCanvas.redo() }
+        annotationToolbar.onCancel = { [weak self] in self?.endAnnotationMode() }
+        annotationToolbar.onCopy = { [weak self] in self?.copyAction() }
+        annotationToolbar.onSave = { [weak self] in self?.saveAction() }
+        annotationToolbar.onPin = { NSSound.beep() }
+        annotationToolbar.onOCR = { [weak self] in self?.ocrAction() }
+        annotationCanvas.onDocumentChanged = { [weak self] in
+            guard let self else { return }
+            self.annotationToolbar.setUndoEnabled(
+                self.annotationCanvas.document.undoManager.canUndo,
+                redoEnabled: self.annotationCanvas.document.undoManager.canRedo
+            )
+        }
+        annotationCanvas.onSelectionChanged = { [weak self] item in
+            self?.annotationToolbar.setSelectedItem(item)
+        }
+        annotationCanvas.onToolShortcut = { [weak self] tool in self?.setAnnotationTool(tool) }
+        annotationCanvas.onCancelCapture = { [weak self] in self?.endAnnotationMode() }
+    }
+
+    private func setAnnotationTool(_ tool: AnnotationTool) {
+        activeTool = tool
+        let style = styles[tool] ?? .defaultStyle(for: tool)
+        annotationToolbar.setTool(tool, style: style)
+        annotationCanvas.setTool(tool, style: style)
+    }
+
     @objc private func annotateAction() {
-        guard annotationEditor == nil else {
-            annotationEditor?.showWindow(nil)
-            return
+        if isAnnotating {
+            endAnnotationMode()
+        } else {
+            beginAnnotationMode()
         }
-        annotationEditor = PinAnnotationEditorWindowController(
-            image: image,
-            title: "长截图标注"
-        ) { [weak self] updated in
-            self?.image = updated
-            self?.updateImageLayout()
-            self?.annotationEditor = nil
-        } onCancel: { [weak self] in
-            self?.annotationEditor = nil
-        }
-        annotationEditor?.showWindow(nil)
+    }
+
+    private func beginAnnotationMode() {
+        isAnnotating = true
+        annotateButton.title = "完成标注"
+        annotationToolbar.isHidden = false
+        annotationToolbarHeightConstraint?.constant = annotationToolbarExpandedHeight
+        setAnnotationTool(activeTool)
+        window?.contentView?.layoutSubtreeIfNeeded()
+        window?.makeFirstResponder(annotationCanvas)
+        updateImageLayout()
+    }
+
+    private func endAnnotationMode() {
+        isAnnotating = false
+        annotateButton.title = "标注"
+        annotationCanvas.cancelPendingInteraction()
+        setAnnotationTool(.select)
+        annotationToolbar.isHidden = true
+        annotationToolbarHeightConstraint?.constant = 0
+        window?.contentView?.layoutSubtreeIfNeeded()
+        updateImageLayout()
     }
 
     @objc private func ocrAction() {
         guard ocrButton.isEnabled else { return }
         ocrButton.isEnabled = false
         ocrButton.title = "正在识别…"
-        onOCR(image) { [weak self] in
+        onOCR(originalImage) { [weak self] in
             self?.ocrButton.isEnabled = true
             self?.ocrButton.title = "OCR 文字识别"
         }
@@ -1354,13 +1444,7 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
     }
 
     private func outputImage() throws -> CGImage {
-        let configuration = WatermarkPreferences.load()
-        guard configuration.isEnabled else { return image }
-        return try WatermarkRenderer.render(
-            image: image,
-            configuration: configuration,
-            context: WatermarkContext(capturedAt: Date())
-        )
+        try annotationCanvas.renderedImage()
     }
 
     private func showError(_ message: String) {
