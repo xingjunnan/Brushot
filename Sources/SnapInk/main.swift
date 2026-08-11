@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import Carbon
 import CoreGraphics
+import Darwin
 import ImageIO
 import ScreenCaptureKit
 import ServiceManagement
@@ -426,20 +427,8 @@ private final class PreCaptureStore: @unchecked Sendable {
 
         var captured: [Entry] = []
         for displayID in displayIDs {
-            let bounds = CGDisplayBounds(displayID)
-            guard let cgImage = CGWindowListCreateImage(
-                bounds,
-                .optionOnScreenOnly,
-                kCGNullWindowID,
-                [.bestResolution]
-            ) else { continue }
-            let mode = CGDisplayCopyDisplayMode(displayID)
-            let scale: CGFloat
-            if let mode = mode, mode.width > 0 {
-                scale = CGFloat(mode.pixelWidth) / CGFloat(mode.width)
-            } else {
-                scale = 1
-            }
+            guard let cgImage = DisplaySnapshotCapturer.captureDisplay(displayID) else { continue }
+            let scale = DisplaySnapshotCapturer.scale(for: displayID)
             captured.append(Entry(displayID: displayID, image: cgImage, scale: scale))
         }
         lock.withLock { entries = captured }
@@ -460,6 +449,54 @@ private final class PreCaptureStore: @unchecked Sendable {
     /// always available and we never fall back to SCStream.
     var hasEntries: Bool {
         lock.withLock { !entries.isEmpty }
+    }
+}
+
+private enum DisplaySnapshotCapturer {
+    typealias CGDisplayCreateImageFunction = @convention(c) (CGDirectDisplayID) -> CGImage?
+
+    /// Capture the whole display with the lowest-impact synchronous path first.
+    ///
+    /// ``CGDisplayCreateImage`` is deprecated at compile time on newer macOS
+    /// SDKs, but it still exists at runtime and avoids the more visible
+    /// ScreenCaptureKit/stream capture path for the frozen selection backdrop.
+    /// If the symbol disappears or the call fails, fall back to the existing
+    /// CGWindowList path; later call sites still have their SCStream fallback.
+    static func captureDisplay(_ displayID: CGDirectDisplayID) -> CGImage? {
+        if let image = captureWithCGDisplayCreateImage(displayID) {
+            return image
+        }
+        return CGWindowListCreateImage(
+            CGDisplayBounds(displayID),
+            .optionOnScreenOnly,
+            kCGNullWindowID,
+            [.bestResolution]
+        )
+    }
+
+    static func scale(for displayID: CGDirectDisplayID) -> CGFloat {
+        guard let mode = CGDisplayCopyDisplayMode(displayID),
+              mode.width > 0 else {
+            return 1
+        }
+        return CGFloat(mode.pixelWidth) / CGFloat(mode.width)
+    }
+
+    private static func captureWithCGDisplayCreateImage(_ displayID: CGDirectDisplayID) -> CGImage? {
+        guard let handle = dlopen(
+            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
+            RTLD_LAZY
+        ) else {
+            return nil
+        }
+        defer { dlclose(handle) }
+
+        guard let symbol = dlsym(handle, "CGDisplayCreateImage") else {
+            return nil
+        }
+
+        let function = unsafeBitCast(symbol, to: CGDisplayCreateImageFunction.self)
+        return function(displayID)
     }
 }
 
@@ -2061,8 +2098,9 @@ final class CaptureController {
 
     /// Capture each screen synchronously before the overlay appears so
     /// transient UI like tooltips, popovers, and hover states are preserved.
-    /// Uses CGWindowListCreateImage (synchronous) instead of ScreenCaptureKit
-    /// (async) to avoid the delay that lets tooltips disappear.
+    /// Uses a synchronous CoreGraphics display snapshot first instead of
+    /// ScreenCaptureKit (async) to avoid the delay that lets tooltips
+    /// disappear and to reduce the chance of macOS showing the capture banner.
     private func preCaptureScreens() {
         // First, try to retrieve images captured synchronously in the
         // Carbon event handler callback (before any Task dispatch).
@@ -2089,12 +2127,7 @@ final class CaptureController {
                 NSDeviceDescriptionKey("NSScreenNumber")
             ] as? NSNumber else { continue }
             let displayID = CGDirectDisplayID(screenNumber.uint32Value)
-            guard let cgImage = CGWindowListCreateImage(
-                CGDisplayBounds(displayID),
-                .optionOnScreenOnly,
-                kCGNullWindowID,
-                [.bestResolution]
-            ) else { continue }
+            guard let cgImage = DisplaySnapshotCapturer.captureDisplay(displayID) else { continue }
             let scale = CGFloat(cgImage.width) / screen.frame.width
             preCapturedScreens.append((screen: screen, image: cgImage, scale: scale))
         }
@@ -2214,6 +2247,7 @@ final class CaptureController {
                 break
             }
         }
+        overlayWindows.forEach { $0.refreshCursorAfterPresentation() }
     }
 
     private func configureRegularCaptureCallbacks(for window: SelectionOverlayWindow) {
@@ -2268,6 +2302,7 @@ final class CaptureController {
         overlayWindows = [window]
         window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
+        window.refreshCursorAfterPresentation()
     }
 
     private func presentDelayedCaptureOverlays() {
@@ -2284,6 +2319,7 @@ final class CaptureController {
         overlayWindows.forEach { $0.orderFrontRegardless() }
         let mouseLocation = NSEvent.mouseLocation
         overlayWindows.first(where: { $0.frame.contains(mouseLocation) })?.makeKeyAndOrderFront(nil)
+        overlayWindows.forEach { $0.refreshCursorAfterPresentation() }
     }
 
     private func startSelfTimer(globalRect: CGRect) {
@@ -2331,6 +2367,7 @@ final class CaptureController {
         overlayWindows = [window]
         window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
+        window.refreshCursorAfterPresentation()
     }
 
     private func presentLongCaptureOverlays() {
@@ -2354,6 +2391,7 @@ final class CaptureController {
                 break
             }
         }
+        overlayWindows.forEach { $0.refreshCursorAfterPresentation() }
     }
 
     private func presentRecordingCaptureOverlays() {
@@ -2383,6 +2421,7 @@ final class CaptureController {
                 break
             }
         }
+        overlayWindows.forEach { $0.refreshCursorAfterPresentation() }
     }
 
     private func startLongCapture(globalRect: CGRect) {
@@ -2907,11 +2946,17 @@ final class SelectionOverlayWindow: NSPanel {
         // Cursor rects are only evaluated for the key window.  When the
         // overlay first appears there is a brief moment before it becomes
         // key where the system shows the default arrow cursor.  Force the
-        // crosshair immediately and re-invalidate cursor rects so the user
-        // never sees an arrow while selecting.
-        NSCursor.crosshair.set()
+        // selection cursor immediately and re-invalidate cursor rects.
         if let view = overlayView {
+            view.refreshCursor()
             view.window?.invalidateCursorRects(for: view)
+        }
+    }
+
+    func refreshCursorAfterPresentation() {
+        overlayView?.refreshCursor()
+        DispatchQueue.main.async { [weak self] in
+            self?.overlayView?.refreshCursor()
         }
     }
 }
@@ -3024,6 +3069,9 @@ final class SelectionOverlayView: NSView {
         .foregroundColor: NSColor.white
     ]
     private let handleHitHalfSize: CGFloat = 10
+    private var isDrawingSyntheticSelectionCursor = false
+    private var syntheticSelectionCursorLocation: CGPoint?
+    private var didHideSystemCursorForSelection = false
 
     init(
         frame frameRect: NSRect,
@@ -3072,23 +3120,11 @@ final class SelectionOverlayView: NSView {
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .crosshair)
         if isSelectionFinalized, let selection = currentSelection() {
-            // A preselected full-screen region is not draggable; keep the
-            // crosshair so the user can immediately drag out a new selection.
-            if !isPreselected {
-                addCursorRect(selection, cursor: .openHand)
+            addCursorRect(selection, cursor: .crosshair)
+            for controls in visibleSelectionControls {
+                addCursorRect(controls.frame, cursor: .arrow)
             }
             for (handle, point) in selectionHandlePoints(for: selection) {
-                let cursor: NSCursor
-                switch handle {
-                case .left, .right:
-                    cursor = .resizeLeftRight
-                case .top, .bottom:
-                    cursor = .resizeUpDown
-                case .topLeft, .bottomRight:
-                    cursor = AnnotationCursorFactory.cursor(for: .resizeDiagonalDown)
-                case .topRight, .bottomLeft:
-                    cursor = AnnotationCursorFactory.cursor(for: .resizeDiagonalUp)
-                }
                 addCursorRect(
                     CGRect(
                         x: point.x - handleHitHalfSize,
@@ -3096,7 +3132,7 @@ final class SelectionOverlayView: NSView {
                         width: handleHitHalfSize * 2,
                         height: handleHitHalfSize * 2
                     ),
-                    cursor: cursor
+                    cursor: cursor(for: handle)
                 )
             }
         }
@@ -3106,9 +3142,14 @@ final class SelectionOverlayView: NSView {
         super.viewDidMoveToWindow()
         window?.makeFirstResponder(self)
         window?.invalidateCursorRects(for: self)
-        // Set crosshair immediately — the window may not be key yet, so
-        // cursor rects won't take effect until becomeKey() is called.
-        NSCursor.crosshair.set()
+        // The overlay is intentionally non-activating so menus/tooltips can be
+        // preserved. During raw area selection AppKit may hand cursor ownership
+        // back to the foreground app, so we hide the system cursor and draw a
+        // SnapInk reticle until the selection is finalized.
+        updateCursorAtCurrentMouseLocation()
+        DispatchQueue.main.async { [weak self] in
+            self?.updateCursorAtCurrentMouseLocation()
+        }
 
         // Immediate full-screen preselection as fallback.  This does not
         // depend on mouseMoved events, so the user can always click to
@@ -3138,20 +3179,26 @@ final class SelectionOverlayView: NSView {
         if newWindow == nil {
             mouseTrackingTimer?.invalidate()
             mouseTrackingTimer = nil
+            restoreSystemCursorIfNeeded()
         }
     }
 
     /// Timer-based fallback that polls ``NSEvent.mouseLocation`` so window
     /// detection works even when ``mouseMoved`` events are not delivered.
     private func pollMousePosition() {
-        guard isColorSamplerActive, let window = window else { return }
+        guard let window else { return }
 
         let mouseLocation = NSEvent.mouseLocation
         let windowPoint = window.convertFromScreen(
             CGRect(origin: mouseLocation, size: .zero)).origin
         let viewPoint = convert(windowPoint, from: nil)
 
-        guard bounds.contains(viewPoint) else { return }
+        guard bounds.contains(viewPoint) else {
+            restoreSystemCursorIfNeeded()
+            return
+        }
+        updateOverlayCursor(at: viewPoint)
+        guard isColorSamplerActive else { return }
 
         // Skip if the mouse hasn't moved since the last poll.
         if let last = lastPolledMouseLocation, last == viewPoint {
@@ -3162,6 +3209,7 @@ final class SelectionOverlayView: NSView {
         detectWindowUnderCursor(at: viewPoint)
         colorSamplerLocation = viewPoint
         sampleColorAtCursor()
+        updateOverlayCursor(at: viewPoint)
         needsDisplay = true
     }
 
@@ -3178,15 +3226,138 @@ final class SelectionOverlayView: NSView {
         return true
     }
 
+    private var visibleSelectionControls: [NSView] {
+        let candidates: [NSView]
+        switch purpose {
+        case .regular:
+            candidates = [actionBar, recordingBar]
+        case .longCapture:
+            candidates = [longCaptureBar]
+        case .recording:
+            candidates = [recordingBar]
+        case .delayedCapture:
+            candidates = [delayedCaptureBar]
+        }
+        return candidates.filter {
+            $0.superview === self && !$0.isHidden
+        }
+    }
+
+    private func cursor(for handle: SelectionHandle) -> NSCursor {
+        switch handle {
+        case .left, .right:
+            .resizeLeftRight
+        case .top, .bottom:
+            .resizeUpDown
+        case .topLeft, .bottomRight:
+            AnnotationCursorFactory.cursor(for: .resizeDiagonalDown)
+        case .topRight, .bottomLeft:
+            AnnotationCursorFactory.cursor(for: .resizeDiagonalUp)
+        }
+    }
+
+    func refreshCursor() {
+        updateCursorAtCurrentMouseLocation()
+    }
+
+    private func updateCursorAtCurrentMouseLocation() {
+        guard let window else {
+            restoreSystemCursorIfNeeded()
+            NSCursor.crosshair.set()
+            return
+        }
+        let screenPoint = NSEvent.mouseLocation
+        let windowPoint = window.convertFromScreen(CGRect(origin: screenPoint, size: .zero)).origin
+        updateOverlayCursor(at: convert(windowPoint, from: nil))
+    }
+
+    private func updateOverlayCursor(at location: CGPoint) {
+        guard bounds.contains(location) else {
+            restoreSystemCursorIfNeeded()
+            return
+        }
+        if visibleSelectionControls.contains(where: { $0.frame.contains(location) }) {
+            restoreSystemCursorIfNeeded()
+            NSCursor.arrow.set()
+            return
+        }
+        if let handle = selectionHandle(at: location), isSelectionFinalized, !isPreselected {
+            restoreSystemCursorIfNeeded()
+            cursor(for: handle).set()
+            return
+        }
+        if case .moving = dragOperation {
+            restoreSystemCursorIfNeeded()
+            NSCursor.closedHand.set()
+            return
+        }
+        if shouldUseSyntheticSelectionCursor {
+            updateSyntheticSelectionCursor(at: location)
+            return
+        }
+        restoreSystemCursorIfNeeded()
+        NSCursor.crosshair.set()
+    }
+
+    private var shouldUseSyntheticSelectionCursor: Bool {
+        guard annotationCanvas == nil,
+              !isPreparingAnnotation,
+              !isSubmitting,
+              !isRecordingConfirming else {
+            return false
+        }
+        if case .moving = dragOperation { return false }
+        if case .resizing = dragOperation { return false }
+        if isSelectionFinalized && !isPreselected { return false }
+        return true
+    }
+
+    private func updateSyntheticSelectionCursor(at location: CGPoint) {
+        let locationChanged = syntheticSelectionCursorLocation != location
+        let wasDrawing = isDrawingSyntheticSelectionCursor
+
+        if !didHideSystemCursorForSelection {
+            NSCursor.hide()
+            didHideSystemCursorForSelection = true
+        }
+        // Keep a crosshair as the nominal cursor in case macOS briefly reveals
+        // the system cursor while transitioning between displays/spaces.
+        NSCursor.crosshair.set()
+
+        syntheticSelectionCursorLocation = location
+        isDrawingSyntheticSelectionCursor = true
+        if locationChanged || !wasDrawing {
+            needsDisplay = true
+        }
+    }
+
+    private func restoreSystemCursorIfNeeded() {
+        let needsRedraw = isDrawingSyntheticSelectionCursor || syntheticSelectionCursorLocation != nil
+        isDrawingSyntheticSelectionCursor = false
+        syntheticSelectionCursorLocation = nil
+        if didHideSystemCursorForSelection {
+            NSCursor.unhide()
+            didHideSystemCursorForSelection = false
+        }
+        if needsRedraw {
+            needsDisplay = true
+        }
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         for area in trackingAreas { removeTrackingArea(area) }
         addTrackingArea(NSTrackingArea(
             rect: bounds,
-            options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            options: [.mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .activeAlways, .inVisibleRect],
             owner: self,
             userInfo: nil
         ))
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        super.cursorUpdate(with: event)
+        updateOverlayCursor(at: convert(event.locationInWindow, from: nil))
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -3194,9 +3365,9 @@ final class SelectionOverlayView: NSView {
         // Cursor rects only work for the key window.  For non-key overlay
         // windows (multi-display) or before the window becomes key, force
         // the crosshair so the user never sees an arrow.
+        let location = convert(event.locationInWindow, from: nil)
+        updateOverlayCursor(at: location)
         if isColorSamplerActive {
-            NSCursor.crosshair.set()
-            let location = convert(event.locationInWindow, from: nil)
             detectWindowUnderCursor(at: location)
             colorSamplerLocation = location
             sampleColorAtCursor()
@@ -3204,14 +3375,17 @@ final class SelectionOverlayView: NSView {
         }
     }
 
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        restoreSystemCursorIfNeeded()
+    }
+
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
-        // Force crosshair on every mouse move during the selection phase.
-        // On non-key windows cursor rects are ignored, so this is the only
-        // reliable way to keep the crosshair visible.
-        if isColorSamplerActive {
-            NSCursor.crosshair.set()
-        }
+        // Keep the synthetic reticle under the real mouse location while the
+        // non-activating overlay owns selection but not app activation.
+        let location = convert(event.locationInWindow, from: nil)
+        updateOverlayCursor(at: location)
         guard isColorSamplerActive else {
             if colorSamplerLocation != nil {
                 colorSamplerLocation = nil
@@ -3221,7 +3395,6 @@ final class SelectionOverlayView: NSView {
             return
         }
 
-        let location = convert(event.locationInWindow, from: nil)
         // iShot-style smart window detection: snap selection to the
         // window under the cursor (desktop fallback: full screen).
         detectWindowUnderCursor(at: location)
@@ -3446,6 +3619,7 @@ final class SelectionOverlayView: NSView {
             if isPreselected {
                 preselectClickStart = location
                 window?.makeFirstResponder(self)
+                updateOverlayCursor(at: location)
                 return
             }
 
@@ -3465,6 +3639,7 @@ final class SelectionOverlayView: NSView {
         startPoint = location
         currentPoint = startPoint
         window?.invalidateCursorRects(for: self)
+        updateOverlayCursor(at: location)
         needsDisplay = true
     }
 
@@ -3493,11 +3668,13 @@ final class SelectionOverlayView: NSView {
                 moveAnchorPoint = nil
                 moveInitialRect = nil
                 window?.invalidateCursorRects(for: self)
+                updateOverlayCursor(at: location)
             }
             if isColorSamplerActive {
                 colorSamplerLocation = location
                 sampleColorAtCursor()
             }
+            updateOverlayCursor(at: location)
             needsDisplay = true
             return
         }
@@ -3506,6 +3683,7 @@ final class SelectionOverlayView: NSView {
         case .selecting:
             guard startPoint != nil else { return }
             currentPoint = location
+            updateOverlayCursor(at: location)
             if isColorSamplerActive {
                 colorSamplerLocation = location
                 sampleColorAtCursor()
@@ -3534,7 +3712,7 @@ final class SelectionOverlayView: NSView {
                 positionSelectionControls(for: selection)
             }
             window?.invalidateCursorRects(for: self)
-            NSCursor.openHand.set()
+            updateCursorAtCurrentMouseLocation()
             needsDisplay = true
             return
         }
@@ -3577,7 +3755,7 @@ final class SelectionOverlayView: NSView {
         isSelectionFinalized = true
         positionSelectionControls(for: selection)
         window?.invalidateCursorRects(for: self)
-        NSCursor.openHand.set()
+        updateCursorAtCurrentMouseLocation()
         needsDisplay = true
     }
 
@@ -3653,6 +3831,7 @@ final class SelectionOverlayView: NSView {
                     : "拖动选择截图区域，Esc 取消"
             drawHint(hint, at: NSPoint(x: bounds.midX - 110, y: bounds.midY))
             drawColorSamplerOverlay()
+            drawSyntheticSelectionCursor()
             return
         }
 
@@ -3679,6 +3858,7 @@ final class SelectionOverlayView: NSView {
             )
         )
         drawColorSamplerOverlay()
+        drawSyntheticSelectionCursor()
     }
 
     @objc private func cancelSelection() {
@@ -3962,6 +4142,8 @@ final class SelectionOverlayView: NSView {
 
         controls.setFrameOrigin(NSPoint(x: x, y: y))
         controls.isHidden = false
+        window?.invalidateCursorRects(for: self)
+        updateCursorAtCurrentMouseLocation()
     }
 
     private func hideSelectionControls() {
@@ -3976,6 +4158,8 @@ final class SelectionOverlayView: NSView {
         case .delayedCapture:
             delayedCaptureBar.isHidden = true
         }
+        window?.invalidateCursorRects(for: self)
+        updateCursorAtCurrentMouseLocation()
     }
 
     /// Switch from the annotation toolbar to the shared recording format bar
@@ -4140,6 +4324,52 @@ final class SelectionOverlayView: NSView {
 
         startPoint = CGPoint(x: minX, y: minY)
         currentPoint = CGPoint(x: maxX, y: maxY)
+    }
+
+    private func drawSyntheticSelectionCursor() {
+        guard isDrawingSyntheticSelectionCursor,
+              let point = syntheticSelectionCursorLocation,
+              bounds.contains(point),
+              let context = NSGraphicsContext.current?.cgContext else {
+            return
+        }
+
+        let armLength: CGFloat = 12
+        let gap: CGFloat = 3
+        let arms: [(CGPoint, CGPoint)] = [
+            (
+                CGPoint(x: point.x, y: point.y + gap),
+                CGPoint(x: point.x, y: point.y + gap + armLength)
+            ),
+            (
+                CGPoint(x: point.x, y: point.y - gap),
+                CGPoint(x: point.x, y: point.y - gap - armLength)
+            ),
+            (
+                CGPoint(x: point.x + gap, y: point.y),
+                CGPoint(x: point.x + gap + armLength, y: point.y)
+            ),
+            (
+                CGPoint(x: point.x - gap, y: point.y),
+                CGPoint(x: point.x - gap - armLength, y: point.y)
+            )
+        ]
+
+        func stroke(_ color: NSColor, width: CGFloat) {
+            context.saveGState()
+            context.setStrokeColor(color.cgColor)
+            context.setLineWidth(width)
+            context.setLineCap(.round)
+            for (start, end) in arms {
+                context.move(to: start)
+                context.addLine(to: end)
+                context.strokePath()
+            }
+            context.restoreGState()
+        }
+
+        stroke(NSColor.black.withAlphaComponent(0.62), width: 3)
+        stroke(.white, width: 1.25)
     }
 
     // MARK: - Color Sampler Drawing
