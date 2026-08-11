@@ -241,6 +241,60 @@ final class AnnotationEditorTests: XCTestCase {
         XCTAssertEqual(rendered.height, 170)
     }
 
+    func testSelectionConfirmationPreviewShowsWatermarkBeforeChoosingAnnotationTool() throws {
+        let previousWatermark = WatermarkPreferences.load()
+        defer { WatermarkPreferences.save(previousWatermark) }
+
+        var disabled = WatermarkConfiguration.default
+        disabled.isEnabled = false
+        WatermarkPreferences.save(disabled)
+        let withoutWatermark = try renderConfirmedSelectionOverlay()
+
+        var enabled = WatermarkConfiguration.default
+        enabled.isEnabled = true
+        enabled.text = "SnapInk"
+        enabled.position = .center
+        enabled.opacity = 1
+        enabled.textColor = .black
+        WatermarkPreferences.save(enabled)
+        let withWatermark = try renderConfirmedSelectionOverlay()
+
+        XCTAssertGreaterThan(try changedPixelCount(between: withoutWatermark, and: withWatermark), 0)
+    }
+
+    func testAnnotationPreviewShowsWatermarkAndDoesNotApplyItAgainOnSubmit() throws {
+        let overlay = SelectionOverlayView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        overlay.mouseDown(with: try mouseEvent(type: .leftMouseDown, at: CGPoint(x: 50, y: 50)))
+        overlay.mouseDragged(with: try mouseEvent(type: .leftMouseDragged, at: CGPoint(x: 200, y: 180)))
+        overlay.mouseUp(with: try mouseEvent(type: .leftMouseUp, at: CGPoint(x: 200, y: 180)))
+
+        var watermark = WatermarkConfiguration.default
+        watermark.isEnabled = true
+        watermark.text = "SnapInk"
+        watermark.opacity = 1
+        watermark.textColor = .black
+        let capturedAt = Date(timeIntervalSince1970: 0)
+        overlay.enterAnnotationEditing(
+            baseImage: try makeImage(width: 400, height: 300),
+            initialTool: .rectangle,
+            outputOptions: CaptureOutputOptions(watermarkConfiguration: watermark, capturedAt: capturedAt)
+        )
+
+        let canvas = try XCTUnwrap(overlay.subviews.compactMap { $0 as? AnnotationCanvasView }.first)
+        let plainSelection = try makeImage(width: 150, height: 130)
+        XCTAssertGreaterThan(try changedPixelCount(between: plainSelection, and: canvas.baseImage), 0)
+
+        var submittedOptions: CaptureOutputOptions?
+        overlay.onAnnotatedFinished = { _, _, _, options in submittedOptions = options }
+        let copyButton = try XCTUnwrap(descendants(of: overlay).compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "copyAction"
+        })
+        copyButton.performClick(nil)
+
+        XCTAssertNil(submittedOptions?.watermarkConfiguration)
+        XCTAssertEqual(submittedOptions?.capturedAt, capturedAt)
+    }
+
     func testFinalizedCaptureAreaCanResizeBeforeEnteringAnnotationMode() throws {
         let overlay = SelectionOverlayView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         let window = NSWindow(
@@ -845,6 +899,60 @@ final class AnnotationEditorTests: XCTestCase {
         context.setFillColor(NSColor.white.cgColor)
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         return try XCTUnwrap(context.makeImage())
+    }
+
+    private func renderConfirmedSelectionOverlay() throws -> CGImage {
+        let overlay = SelectionOverlayView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        overlay.setPreCapturedScreenImage(try makeImage(width: 400, height: 300))
+        overlay.mouseDown(with: try mouseEvent(type: .leftMouseDown, at: CGPoint(x: 50, y: 50)))
+        overlay.mouseDragged(with: try mouseEvent(type: .leftMouseDragged, at: CGPoint(x: 200, y: 180)))
+        overlay.mouseUp(with: try mouseEvent(type: .leftMouseUp, at: CGPoint(x: 200, y: 180)))
+        return try renderView(overlay, width: 400, height: 300)
+    }
+
+    private func renderView(_ view: NSView, width: Int, height: Int) throws -> CGImage {
+        let context = try XCTUnwrap(CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        let graphicsContext = NSGraphicsContext(cgContext: context, flipped: false)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphicsContext
+        view.displayIgnoringOpacity(view.bounds, in: graphicsContext)
+        NSGraphicsContext.restoreGraphicsState()
+        return try XCTUnwrap(context.makeImage())
+    }
+
+    private func changedPixelCount(between first: CGImage, and second: CGImage) throws -> Int {
+        let firstBytes = try bitmapBytes(first)
+        let secondBytes = try bitmapBytes(second)
+        var count = 0
+        for index in stride(from: 0, to: min(firstBytes.count, secondBytes.count), by: 4) {
+            if firstBytes[index..<(index + 4)] != secondBytes[index..<(index + 4)] {
+                count += 1
+            }
+        }
+        return count
+    }
+
+    private func bitmapBytes(_ image: CGImage) throws -> [UInt8] {
+        var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        let context = try XCTUnwrap(CGContext(
+            data: &bytes,
+            width: image.width,
+            height: image.height,
+            bitsPerComponent: 8,
+            bytesPerRow: image.width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return bytes
     }
 
     private func mouseDownEvent(at point: CGPoint) throws -> NSEvent {

@@ -1751,6 +1751,10 @@ struct CaptureOutputOptions {
     var watermarkConfiguration: WatermarkConfiguration?
     var capturedAt: Date = Date()
 
+    static var noWatermark: CaptureOutputOptions {
+        CaptureOutputOptions(watermarkConfiguration: nil, capturedAt: Date())
+    }
+
     static var currentWatermark: CaptureOutputOptions {
         let configuration = WatermarkPreferences.load()
         return CaptureOutputOptions(
@@ -2029,9 +2033,9 @@ final class CaptureController {
             self?.finishCapture(globalRect: rect, action: action, options: options)
         }
         window.onSelectionCancelled = { [weak self] in self?.closeOverlays() }
-        window.onEditingRequested = { [weak self, weak window] rect, tool in
+        window.onEditingRequested = { [weak self, weak window] rect, tool, options in
             guard let self, let window else { return }
-            self.beginAnnotationEditing(globalRect: rect, tool: tool, window: window)
+            self.beginAnnotationEditing(globalRect: rect, tool: tool, window: window, options: options)
         }
         window.onAnnotatedFinished = { [weak self] image, action, displaySize, options in
             self?.finishAnnotatedCapture(
@@ -2391,12 +2395,13 @@ final class CaptureController {
     private func beginAnnotationEditing(
         globalRect: CGRect,
         tool: AnnotationTool,
-        window: SelectionOverlayWindow
+        window: SelectionOverlayWindow,
+        options: CaptureOutputOptions
     ) {
         // Use the frozen image if available.
         if let image = cropFromPreCaptured(globalRect: window.frame) {
             preCapturedScreens.removeAll()
-            window.enterAnnotationEditing(baseImage: image, initialTool: tool)
+            window.enterAnnotationEditing(baseImage: image, initialTool: tool, outputOptions: options)
             return
         }
 
@@ -2599,7 +2604,7 @@ enum SelectionPurpose {
 final class SelectionOverlayWindow: NSPanel {
     var onSelectionFinished: ((CGRect, CaptureAction, CaptureOutputOptions) -> Void)?
     var onSelectionCancelled: (() -> Void)?
-    var onEditingRequested: ((CGRect, AnnotationTool) -> Void)?
+    var onEditingRequested: ((CGRect, AnnotationTool, CaptureOutputOptions) -> Void)?
     var onAnnotatedFinished: ((CGImage, CaptureAction, CGSize, CaptureOutputOptions) -> Void)?
     var onAnnotationFailed: ((Error) -> Void)?
     var onOCRRequested: ((OCRSource) -> Void)?
@@ -2645,8 +2650,8 @@ final class SelectionOverlayWindow: NSPanel {
         view.onSelectionCancelled = { [weak self] in
             self?.onSelectionCancelled?()
         }
-        view.onEditingRequested = { [weak self] rect, tool in
-            self?.onEditingRequested?(rect, tool)
+        view.onEditingRequested = { [weak self] rect, tool, options in
+            self?.onEditingRequested?(rect, tool, options)
         }
         view.onAnnotatedFinished = { [weak self] image, action, displaySize, options in
             self?.onAnnotatedFinished?(image, action, displaySize, options)
@@ -2668,8 +2673,16 @@ final class SelectionOverlayWindow: NSPanel {
         }
     }
 
-    func enterAnnotationEditing(baseImage: CGImage, initialTool: AnnotationTool) {
-        overlayView?.enterAnnotationEditing(baseImage: baseImage, initialTool: initialTool)
+    func enterAnnotationEditing(
+        baseImage: CGImage,
+        initialTool: AnnotationTool,
+        outputOptions: CaptureOutputOptions = .noWatermark
+    ) {
+        overlayView?.enterAnnotationEditing(
+            baseImage: baseImage,
+            initialTool: initialTool,
+            outputOptions: outputOptions
+        )
     }
 
     func annotationEditingDidFail() {
@@ -2726,7 +2739,7 @@ final class SelectionOverlayView: NSView {
 
     var onSelectionFinished: ((CGRect, CaptureAction, CaptureOutputOptions) -> Void)?
     var onSelectionCancelled: (() -> Void)?
-    var onEditingRequested: ((CGRect, AnnotationTool) -> Void)?
+    var onEditingRequested: ((CGRect, AnnotationTool, CaptureOutputOptions) -> Void)?
     var onAnnotatedFinished: ((CGImage, CaptureAction, CGSize, CaptureOutputOptions) -> Void)?
     var onAnnotationFailed: ((Error) -> Void)?
     var onOCRRequested: ((OCRSource) -> Void)?
@@ -2756,6 +2769,11 @@ final class SelectionOverlayView: NSView {
     private var isPreparingAnnotation = false
     private var isSubmitting = false
     private var annotationCanvas: AnnotationCanvasView?
+    private var annotationPreviewOptions: CaptureOutputOptions?
+    private var annotatedOutputOptions: CaptureOutputOptions?
+    private var selectionOutputOptions: CaptureOutputOptions?
+    private var selectionWatermarkPreviewImage: CGImage?
+    private var selectionWatermarkPreviewRect: CGRect?
     private var frozenScreenImage: CGImage?
     private var activeAnnotationTool: AnnotationTool = .select
     private var annotationStyles: [AnnotationTool: AnnotationStyle] = Dictionary(
@@ -3426,6 +3444,7 @@ final class SelectionOverlayView: NSView {
         moveAnchorPoint = nil
         moveInitialRect = nil
         isSelectionFinalized = false
+        clearSelectionWatermarkPreview()
         hideSelectionControls()
         startPoint = location
         currentPoint = startPoint
@@ -3508,6 +3527,7 @@ final class SelectionOverlayView: NSView {
             dragOperation = nil
             resizeInitialRect = nil
             if let selection = currentSelection() {
+                updateSelectionWatermarkPreview(for: selection)
                 positionSelectionControls(for: selection)
             }
             window?.invalidateCursorRects(for: self)
@@ -3531,6 +3551,7 @@ final class SelectionOverlayView: NSView {
         guard let selection = currentSelection(), selection.width >= 2, selection.height >= 2 else {
             startPoint = nil
             currentPoint = nil
+            clearSelectionWatermarkPreview()
             hideSelectionControls()
             window?.invalidateCursorRects(for: self)
             needsDisplay = true
@@ -3538,6 +3559,7 @@ final class SelectionOverlayView: NSView {
         }
 
         isSelectionFinalized = true
+        updateSelectionWatermarkPreview(for: selection)
         positionSelectionControls(for: selection)
         window?.invalidateCursorRects(for: self)
         updateCursorAtCurrentMouseLocation()
@@ -3582,6 +3604,7 @@ final class SelectionOverlayView: NSView {
     /// of the live screen behind a transparent overlay.
     func setPreCapturedScreenImage(_ image: CGImage) {
         frozenScreenImage = image
+        clearSelectionWatermarkPreview()
         needsDisplay = true
     }
 
@@ -3592,6 +3615,7 @@ final class SelectionOverlayView: NSView {
         currentPoint = CGPoint(x: selection.maxX, y: selection.maxY)
         isSelectionFinalized = true
         isPreselected = false
+        updateSelectionWatermarkPreview(for: selection)
         positionSelectionControls(for: selection)
         window?.invalidateCursorRects(for: self)
         needsDisplay = true
@@ -3625,6 +3649,14 @@ final class SelectionOverlayView: NSView {
         dimmedArea.append(NSBezierPath(rect: selection))
         dimmedArea.windingRule = .evenOdd
         dimmedArea.fill()
+
+        if let preview = selectionWatermarkPreviewImage,
+           selectionWatermarkPreviewRect == selection,
+           isSelectionFinalized,
+           annotationCanvas == nil,
+           let ctx = NSGraphicsContext.current?.cgContext {
+            ctx.draw(preview, in: selection)
+        }
 
         NSColor.systemBlue.setStroke()
         let path = NSBezierPath(rect: selection)
@@ -3692,7 +3724,6 @@ final class SelectionOverlayView: NSView {
 
     private func submitSelection(action: CaptureAction) {
         guard isSelectionFinalized, !isSubmitting else { return }
-        let outputOptions = currentOutputOptions()
         if let annotationCanvas {
             isSubmitting = true
             actionBar.setBusy(true, message: "正在生成图片…")
@@ -3703,7 +3734,7 @@ final class SelectionOverlayView: NSView {
                     return
                 }
                 let image = try annotationCanvas.renderedImage()
-                onAnnotatedFinished?(image, action, selection.size, outputOptions)
+                onAnnotatedFinished?(image, action, selection.size, annotatedOutputOptions ?? .noWatermark)
             } catch {
                 isSubmitting = false
                 actionBar.setBusy(false)
@@ -3713,14 +3744,18 @@ final class SelectionOverlayView: NSView {
         }
 
         guard let globalRect = currentGlobalSelectionRect() else { return }
-        onSelectionFinished?(globalRect, action, outputOptions)
+        onSelectionFinished?(globalRect, action, selectionOutputOptions ?? currentOutputOptions())
     }
 
     private func currentOutputOptions() -> CaptureOutputOptions {
         .currentWatermark
     }
 
-    func enterAnnotationEditing(baseImage: CGImage, initialTool: AnnotationTool) {
+    func enterAnnotationEditing(
+        baseImage: CGImage,
+        initialTool: AnnotationTool,
+        outputOptions: CaptureOutputOptions = .noWatermark
+    ) {
         guard annotationCanvas == nil,
               let selection = currentSelection() else { return }
 
@@ -3738,9 +3773,21 @@ final class SelectionOverlayView: NSView {
             ))
             return
         }
+        let previewImage: CGImage
+        do {
+            previewImage = try previewImageForAnnotation(from: croppedImage, options: outputOptions)
+        } catch {
+            onAnnotationFailed?(error)
+            return
+        }
+        annotationPreviewOptions = outputOptions
+        annotatedOutputOptions = CaptureOutputOptions(
+            watermarkConfiguration: nil,
+            capturedAt: outputOptions.capturedAt
+        )
         let canvas = AnnotationCanvasView(
             frame: selection,
-            baseImage: croppedImage,
+            baseImage: previewImage,
             logicalOrigin: logicalOrigin(for: selection)
         )
         canvas.showsCaptureResizeHandles = true
@@ -3776,11 +3823,62 @@ final class SelectionOverlayView: NSView {
         guard let annotationCanvas,
               let selection = currentSelection(),
               let croppedImage = croppedFrozenImage(for: selection) else { return }
+        let previewImage: CGImage
+        do {
+            previewImage = try previewImageForAnnotation(
+                from: croppedImage,
+                options: annotationPreviewOptions ?? .noWatermark
+            )
+        } catch {
+            onAnnotationFailed?(error)
+            return
+        }
         annotationCanvas.updateCaptureArea(
             frame: selection,
-            baseImage: croppedImage,
+            baseImage: previewImage,
             logicalOrigin: logicalOrigin(for: selection)
         )
+    }
+
+    private func previewImageForAnnotation(
+        from image: CGImage,
+        options: CaptureOutputOptions
+    ) throws -> CGImage {
+        guard let configuration = options.watermarkConfiguration else { return image }
+        return try WatermarkRenderer.render(
+            image: image,
+            configuration: configuration,
+            context: WatermarkContext(capturedAt: options.capturedAt)
+        )
+    }
+
+    private func updateSelectionWatermarkPreview(for selection: CGRect) {
+        let options = currentOutputOptions()
+        selectionOutputOptions = options
+        selectionWatermarkPreviewImage = nil
+        selectionWatermarkPreviewRect = nil
+
+        guard annotationCanvas == nil,
+              isSelectionFinalized,
+              let configuration = options.watermarkConfiguration,
+              let croppedImage = croppedFrozenImage(for: selection) else { return }
+
+        do {
+            selectionWatermarkPreviewImage = try WatermarkRenderer.render(
+                image: croppedImage,
+                configuration: configuration,
+                context: WatermarkContext(capturedAt: options.capturedAt)
+            )
+            selectionWatermarkPreviewRect = selection
+        } catch {
+            onAnnotationFailed?(error)
+        }
+    }
+
+    private func clearSelectionWatermarkPreview() {
+        selectionOutputOptions = nil
+        selectionWatermarkPreviewImage = nil
+        selectionWatermarkPreviewRect = nil
     }
 
     private func logicalOrigin(for selection: CGRect) -> CGPoint {
@@ -3819,7 +3917,7 @@ final class SelectionOverlayView: NSView {
               let globalRect = currentGlobalSelectionRect() else { return }
         isPreparingAnnotation = true
         actionBar.setBusy(true)
-        onEditingRequested?(globalRect, tool)
+        onEditingRequested?(globalRect, tool, selectionOutputOptions ?? currentOutputOptions())
     }
 
     private func activateAnnotationTool(_ tool: AnnotationTool) {
