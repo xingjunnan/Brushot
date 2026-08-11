@@ -177,6 +177,10 @@ final class ShortcutTests: XCTestCase {
         XCTAssertNotNil(descendants(of: content).first {
             $0.identifier?.rawValue == "selfTimerTickSound"
         })
+        let selectionMagnifier = try XCTUnwrap(descendants(of: content).first {
+            $0.identifier?.rawValue == "selectionMagnifierEnabled"
+        } as? NSButton)
+        XCTAssertEqual(selectionMagnifier.state, AppPreferences.selectionMagnifierEnabled ? .on : .off)
         let shortcutGroups = try XCTUnwrap(descendants(of: content).first {
             $0.identifier?.rawValue == "shortcutGroups"
         } as? NSStackView)
@@ -219,6 +223,18 @@ final class ShortcutTests: XCTestCase {
         XCTAssertFalse(TranslationPreferences.isEnabled(defaults: defaults))
         TranslationPreferences.setEnabled(true, defaults: defaults)
         XCTAssertTrue(TranslationPreferences.isEnabled(defaults: defaults))
+    }
+
+    func testSelectionMagnifierPreferenceDefaultsOffAndPersists() throws {
+        let suiteName = "SnapInk.SelectionMagnifier.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertFalse(AppPreferences.selectionMagnifierEnabled(defaults: defaults))
+        AppPreferences.setSelectionMagnifierEnabled(true, defaults: defaults)
+        XCTAssertTrue(AppPreferences.selectionMagnifierEnabled(defaults: defaults))
+        AppPreferences.setSelectionMagnifierEnabled(false, defaults: defaults)
+        XCTAssertFalse(AppPreferences.selectionMagnifierEnabled(defaults: defaults))
     }
 
     private func descendants(of view: NSView) -> [NSView] {
