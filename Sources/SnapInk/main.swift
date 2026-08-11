@@ -2726,6 +2726,7 @@ final class SelectionOverlayView: NSView {
     private var sampledColor: NSColor?
     private var sampledScreenPosition: CGPoint?
     private var magnifierImage: CGImage?
+    private var selectionGuideLocation: CGPoint?
     private var mouseTrackingTimer: Timer?
     private var lastPolledMouseLocation: CGPoint?
     private var isRecordingConfirming = false
@@ -2794,6 +2795,10 @@ final class SelectionOverlayView: NSView {
     private var isDrawingSyntheticSelectionCursor = false
     private var syntheticSelectionCursorLocation: CGPoint?
     private var didHideSystemCursorForSelection = false
+    private static let invisibleSelectionCursor: NSCursor = {
+        let image = NSImage(size: NSSize(width: 1, height: 1))
+        return NSCursor(image: image, hotSpot: .zero)
+    }()
 
     init(
         frame frameRect: NSRect,
@@ -2840,8 +2845,11 @@ final class SelectionOverlayView: NSView {
     }
 
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .crosshair)
-        if isSelectionFinalized, let selection = currentSelection() {
+        addCursorRect(
+            bounds,
+            cursor: shouldUseSyntheticSelectionCursor ? Self.invisibleSelectionCursor : .crosshair
+        )
+        if isSelectionFinalized, !isPreselected, let selection = currentSelection() {
             addCursorRect(selection, cursor: .crosshair)
             for controls in visibleSelectionControls {
                 addCursorRect(controls.frame, cursor: .arrow)
@@ -3028,16 +3036,7 @@ final class SelectionOverlayView: NSView {
     }
 
     private var shouldUseSyntheticSelectionCursor: Bool {
-        guard annotationCanvas == nil,
-              !isPreparingAnnotation,
-              !isSubmitting,
-              !isRecordingConfirming else {
-            return false
-        }
-        if case .moving = dragOperation { return false }
-        if case .resizing = dragOperation { return false }
-        if isSelectionFinalized && !isPreselected { return false }
-        return true
+        isSelectionHoverTrackingActive
     }
 
     private func updateSyntheticSelectionCursor(at location: CGPoint) {
@@ -3048,11 +3047,14 @@ final class SelectionOverlayView: NSView {
             NSCursor.hide()
             didHideSystemCursorForSelection = true
         }
-        // Keep a crosshair as the nominal cursor in case macOS briefly reveals
-        // the system cursor while transitioning between displays/spaces.
-        NSCursor.crosshair.set()
+        // During raw selection the overlay is non-activating, so AppKit and
+        // the foreground app can both try to own the system cursor. Keep the
+        // real cursor invisible and draw SnapInk's reticle ourselves; this
+        // avoids the arrow + crosshair double-cursor artifact.
+        Self.invisibleSelectionCursor.set()
 
         syntheticSelectionCursorLocation = location
+        updateSelectionGuide(at: location)
         isDrawingSyntheticSelectionCursor = true
         if locationChanged || !wasDrawing {
             needsDisplay = true
@@ -3060,9 +3062,12 @@ final class SelectionOverlayView: NSView {
     }
 
     private func restoreSystemCursorIfNeeded() {
-        let needsRedraw = isDrawingSyntheticSelectionCursor || syntheticSelectionCursorLocation != nil
+        let needsRedraw = isDrawingSyntheticSelectionCursor ||
+            syntheticSelectionCursorLocation != nil ||
+            selectionGuideLocation != nil
         isDrawingSyntheticSelectionCursor = false
         syntheticSelectionCursorLocation = nil
+        selectionGuideLocation = nil
         if didHideSystemCursorForSelection {
             NSCursor.unhide()
             didHideSystemCursorForSelection = false
@@ -3147,6 +3152,23 @@ final class SelectionOverlayView: NSView {
         sampledColor = nil
         sampledScreenPosition = nil
         magnifierImage = nil
+        needsDisplay = true
+    }
+
+    private func updateSelectionGuide(at location: CGPoint) {
+        guard isSelectionHoverTrackingActive, bounds.contains(location) else {
+            clearSelectionGuide()
+            return
+        }
+        if selectionGuideLocation != location {
+            selectionGuideLocation = location
+            needsDisplay = true
+        }
+    }
+
+    private func clearSelectionGuide() {
+        guard selectionGuideLocation != nil else { return }
+        selectionGuideLocation = nil
         needsDisplay = true
     }
 
@@ -3570,6 +3592,7 @@ final class SelectionOverlayView: NSView {
                     ? "拖动选择延时截图区域，Esc 取消"
                     : "拖动选择截图区域，Esc 取消"
             drawHint(hint, at: NSPoint(x: bounds.midX - 110, y: bounds.midY))
+            drawSelectionGuideLines()
             drawColorSamplerOverlay()
             drawSyntheticSelectionCursor()
             return
@@ -3597,6 +3620,7 @@ final class SelectionOverlayView: NSView {
                 y: min(selection.maxY + 7, bounds.maxY - 34)
             )
         )
+        drawSelectionGuideLines()
         drawColorSamplerOverlay()
         drawSyntheticSelectionCursor()
     }
@@ -4114,24 +4138,30 @@ final class SelectionOverlayView: NSView {
 
     // MARK: - Color Sampler Drawing
 
-    private func drawColorSamplerOverlay() {
-        guard isColorSamplerActive,
-              let location = colorSamplerLocation,
-              let color = sampledColor else { return }
+    private func drawSelectionGuideLines() {
+        guard isSelectionHoverTrackingActive,
+              let location = selectionGuideLocation,
+              bounds.contains(location) else { return }
 
-        // Crosshair guide lines from cursor to view edges
         NSColor.systemBlue.withAlphaComponent(0.7).setStroke()
+
         let hLine = NSBezierPath()
-        hLine.move(to: CGPoint(x: 0, y: location.y))
+        hLine.move(to: CGPoint(x: bounds.minX, y: location.y))
         hLine.line(to: CGPoint(x: bounds.maxX, y: location.y))
         hLine.lineWidth = 1.5
         hLine.stroke()
 
         let vLine = NSBezierPath()
-        vLine.move(to: CGPoint(x: location.x, y: 0))
+        vLine.move(to: CGPoint(x: location.x, y: bounds.minY))
         vLine.line(to: CGPoint(x: location.x, y: bounds.maxY))
         vLine.lineWidth = 1.5
         vLine.stroke()
+    }
+
+    private func drawColorSamplerOverlay() {
+        guard isColorSamplerActive,
+              let location = colorSamplerLocation,
+              let color = sampledColor else { return }
 
         drawColorInfoPopup(at: location, color: color)
     }
