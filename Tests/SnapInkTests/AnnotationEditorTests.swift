@@ -143,7 +143,7 @@ final class AnnotationEditorTests: XCTestCase {
         var requestedRect: CGRect?
         var regularSubmitCount = 0
         overlay.onLongCaptureRequested = { requestedRect = $0 }
-        overlay.onSelectionFinished = { _, _ in regularSubmitCount += 1 }
+        overlay.onSelectionFinished = { _, _, _ in regularSubmitCount += 1 }
 
         let button = try XCTUnwrap(descendants(of: overlay).compactMap { $0 as? NSButton }.first {
             $0.identifier?.rawValue == "longCaptureAction"
@@ -199,7 +199,7 @@ final class AnnotationEditorTests: XCTestCase {
         overlay.mouseUp(with: try mouseEvent(type: .leftMouseUp, at: CGPoint(x: 210, y: 190)))
         var submittedRect: CGRect?
         var submittedPin = false
-        overlay.onSelectionFinished = { rect, action in
+        overlay.onSelectionFinished = { rect, action, _ in
             submittedRect = rect
             if case .pin = action { submittedPin = true }
         }
@@ -259,7 +259,7 @@ final class AnnotationEditorTests: XCTestCase {
         overlay.mouseUp(with: try mouseEvent(type: .leftMouseUp, at: CGPoint(x: 260, y: 220)))
 
         var submittedRect: CGRect?
-        overlay.onSelectionFinished = { rect, _ in submittedRect = rect }
+        overlay.onSelectionFinished = { rect, _, _ in submittedRect = rect }
         let copyButton = try XCTUnwrap(descendants(of: overlay).compactMap { $0 as? NSButton }.first {
             $0.identifier?.rawValue == "copyAction"
         })
@@ -283,7 +283,7 @@ final class AnnotationEditorTests: XCTestCase {
         var requestedRect: CGRect?
         var regularSubmitCount = 0
         overlay.onLongCaptureRequested = { requestedRect = $0 }
-        overlay.onSelectionFinished = { _, _ in regularSubmitCount += 1 }
+        overlay.onSelectionFinished = { _, _, _ in regularSubmitCount += 1 }
 
         overlay.mouseDown(with: try mouseDownEvent(at: CGPoint(x: 40, y: 60)))
         overlay.mouseDragged(with: try mouseEvent(type: .leftMouseDragged, at: CGPoint(x: 360, y: 300)))

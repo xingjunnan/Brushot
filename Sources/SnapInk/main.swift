@@ -5,6 +5,7 @@ import CoreGraphics
 import ImageIO
 import ScreenCaptureKit
 import ServiceManagement
+import UniformTypeIdentifiers
 
 struct KeyboardShortcut: Hashable {
     let keyCode: UInt32
@@ -618,6 +619,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var eventHandlerRef: EventHandlerRef?
     private let captureController = CaptureController()
     private var settingsWindowController: PreferencesWindowController?
+    private var watermarkSettingsWindowController: WatermarkSettingsWindowController?
     private var pinVisibilityMenuItem: NSMenuItem!
     private let pinManager = PinManager.shared
     private var shortcuts = ShortcutPreferences.loadAll()
@@ -797,6 +799,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.target = self
         settings.keyEquivalentModifierMask = []
         menu.addItem(settings)
+        let watermarkSettings = NSMenuItem(
+            title: "水印设置…",
+            action: #selector(showWatermarkSettings),
+            keyEquivalent: ""
+        )
+        watermarkSettings.target = self
+        watermarkSettings.keyEquivalentModifierMask = []
+        menu.addItem(watermarkSettings)
         menu.addItem(NSMenuItem.separator())
         let quitItem = NSMenuItem(title: "退出 SnapInk", action: #selector(quit), keyEquivalent: "")
         quitItem.target = self
@@ -1122,6 +1132,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindowController?.showWindow(nil)
         settingsWindowController?.window?.center()
         settingsWindowController?.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func showWatermarkSettings() {
+        if watermarkSettingsWindowController == nil {
+            watermarkSettingsWindowController = WatermarkSettingsWindowController()
+        }
+        watermarkSettingsWindowController?.showWindow(nil)
+        watermarkSettingsWindowController?.window?.center()
+        watermarkSettingsWindowController?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -1523,6 +1543,314 @@ private final class FlippedPreferencesView: NSView {
     override var isFlipped: Bool { true }
 }
 
+final class WatermarkSettingsWindowController: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
+    private var watermarkCheckbox: NSButton!
+    private var watermarkTextField: NSTextField!
+    private var watermarkLogoLabel: NSTextField!
+    private var watermarkPositionPopUp: NSPopUpButton!
+    private var watermarkOpacityLabel: NSTextField!
+    private var watermarkOpacitySlider: NSSlider!
+    private var watermarkScaleLabel: NSTextField!
+    private var watermarkScaleSlider: NSSlider!
+    private var watermarkMarginLabel: NSTextField!
+    private var watermarkMarginStepper: NSStepper!
+    private var watermarkColorWell: NSColorWell!
+
+    init() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 430),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "水印设置"
+        window.isReleasedWhenClosed = false
+        super.init(window: window)
+        window.delegate = self
+        configureContentView()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        changeWatermarkText()
+    }
+
+    private func configureContentView() {
+        guard let contentView = window?.contentView else { return }
+        let watermarkConfig = WatermarkPreferences.load()
+        watermarkCheckbox = makeCheckbox(
+            title: "启用截图水印",
+            action: #selector(toggleWatermarkEnabled)
+        )
+        watermarkCheckbox.state = watermarkConfig.isEnabled ? .on : .off
+
+        watermarkTextField = NSTextField(string: watermarkConfig.text)
+        watermarkTextField.placeholderString = "例如：SnapInk {datetime}"
+        watermarkTextField.target = self
+        watermarkTextField.action = #selector(changeWatermarkText)
+        watermarkTextField.delegate = self
+        watermarkTextField.translatesAutoresizingMaskIntoConstraints = false
+        watermarkTextField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let textRow = makeRow(label: "文字", trailingViews: [watermarkTextField])
+
+        let helper = NSTextField(labelWithString: "可使用 {date}、{time}、{datetime}；文字和 Logo 可同时显示。")
+        helper.font = .systemFont(ofSize: 11)
+        helper.textColor = .secondaryLabelColor
+        helper.lineBreakMode = .byWordWrapping
+        helper.maximumNumberOfLines = 2
+
+        watermarkLogoLabel = NSTextField(labelWithString: watermarkConfig.logoURL?.lastPathComponent ?? "未选择")
+        watermarkLogoLabel.font = .systemFont(ofSize: 12)
+        watermarkLogoLabel.textColor = .secondaryLabelColor
+        watermarkLogoLabel.lineBreakMode = .byTruncatingMiddle
+        watermarkLogoLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let chooseLogoButton = NSButton(title: "选择…", target: self, action: #selector(chooseWatermarkLogo))
+        chooseLogoButton.bezelStyle = .rounded
+        let removeLogoButton = NSButton(title: "移除", target: self, action: #selector(removeWatermarkLogo))
+        removeLogoButton.bezelStyle = .rounded
+        let logoRow = makeRow(
+            label: "Logo",
+            trailingViews: [watermarkLogoLabel, chooseLogoButton, removeLogoButton]
+        )
+
+        watermarkPositionPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+        WatermarkConfiguration.Position.allCases.forEach { position in
+            watermarkPositionPopUp.addItem(withTitle: position.title)
+            watermarkPositionPopUp.lastItem?.representedObject = position.rawValue
+        }
+        watermarkPositionPopUp.selectItem(withTitle: watermarkConfig.position.title)
+        watermarkPositionPopUp.target = self
+        watermarkPositionPopUp.action = #selector(changeWatermarkPosition)
+        let positionRow = makeRow(label: "位置", trailingViews: [watermarkPositionPopUp])
+
+        watermarkOpacityLabel = makeValueLabel("\(Int(watermarkConfig.opacity * 100))%", width: 42)
+        watermarkOpacitySlider = NSSlider(
+            value: Double(watermarkConfig.opacity),
+            minValue: 0.1,
+            maxValue: 1,
+            target: self,
+            action: #selector(changeWatermarkOpacity)
+        )
+        watermarkOpacitySlider.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        let opacityRow = makeRow(label: "透明度", trailingViews: [watermarkOpacitySlider, watermarkOpacityLabel])
+
+        watermarkScaleLabel = makeValueLabel("\(Int(watermarkConfig.scale * 100))%", width: 42)
+        watermarkScaleSlider = NSSlider(
+            value: Double(watermarkConfig.scale),
+            minValue: 0.5,
+            maxValue: 2,
+            target: self,
+            action: #selector(changeWatermarkScale)
+        )
+        watermarkScaleSlider.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        let scaleRow = makeRow(label: "大小", trailingViews: [watermarkScaleSlider, watermarkScaleLabel])
+
+        watermarkMarginLabel = makeValueLabel("\(Int(watermarkConfig.margin)) pt", width: 52)
+        watermarkMarginStepper = NSStepper()
+        watermarkMarginStepper.minValue = 0
+        watermarkMarginStepper.maxValue = 80
+        watermarkMarginStepper.increment = 2
+        watermarkMarginStepper.doubleValue = Double(watermarkConfig.margin)
+        watermarkMarginStepper.target = self
+        watermarkMarginStepper.action = #selector(changeWatermarkMargin)
+        let marginRow = makeRow(label: "边距", trailingViews: [watermarkMarginLabel, watermarkMarginStepper])
+
+        watermarkColorWell = NSColorWell()
+        watermarkColorWell.color = watermarkConfig.textColor
+        watermarkColorWell.target = self
+        watermarkColorWell.action = #selector(changeWatermarkColor)
+        let colorRow = makeRow(label: "文字颜色", trailingViews: [watermarkColorWell])
+
+        let section = makeSection(
+            title: "水印",
+            views: [
+                watermarkCheckbox,
+                textRow,
+                helper,
+                logoRow,
+                positionRow,
+                opacityRow,
+                scaleRow,
+                marginRow,
+                colorRow
+            ]
+        )
+        section.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(section)
+        NSLayoutConstraint.activate([
+            section.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
+            section.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
+            section.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 24),
+            section.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -24)
+        ])
+    }
+
+    private func makeSection(title: String, views: [NSView]) -> NSStackView {
+        let header = NSTextField(labelWithString: title)
+        header.font = .systemFont(ofSize: 13, weight: .semibold)
+        header.textColor = .controlAccentColor
+
+        let content = NSStackView(views: views)
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 12
+        views.forEach { $0.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true }
+
+        let section = NSStackView(views: [header, content])
+        section.orientation = .vertical
+        section.alignment = .leading
+        section.spacing = 8
+        header.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true
+        content.widthAnchor.constraint(equalTo: section.widthAnchor).isActive = true
+        return section
+    }
+
+    private func makeRow(label: String, trailingViews: [NSView]) -> NSStackView {
+        let labelField = NSTextField(labelWithString: label)
+        labelField.font = .systemFont(ofSize: 13)
+        labelField.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        labelField.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+
+        let trailing = NSStackView(views: trailingViews)
+        trailing.orientation = .horizontal
+        trailing.alignment = .centerY
+        trailing.spacing = 8
+        trailing.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        let row = NSStackView(views: [labelField, trailing])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.distribution = .fill
+        row.spacing = 16
+        labelField.widthAnchor.constraint(equalToConstant: 86).isActive = true
+        return row
+    }
+
+    private func makeCheckbox(title: String, action: Selector) -> NSButton {
+        let button = NSButton()
+        button.title = title
+        button.setButtonType(.switch)
+        button.target = self
+        button.action = action
+        return button
+    }
+
+    private func makeValueLabel(_ text: String, width: CGFloat) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        label.alignment = .right
+        label.widthAnchor.constraint(equalToConstant: width).isActive = true
+        return label
+    }
+
+    @objc private func toggleWatermarkEnabled() {
+        var config = currentWatermarkConfiguration()
+        config.isEnabled = watermarkCheckbox.state == .on
+        WatermarkPreferences.save(config)
+    }
+
+    @objc private func changeWatermarkText() {
+        var config = currentWatermarkConfiguration()
+        config.text = watermarkTextField.stringValue
+        WatermarkPreferences.save(config)
+    }
+
+    @objc private func chooseWatermarkLogo() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.canCreateDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.png, .jpeg, .heic, .tiff]
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                var config = currentWatermarkConfiguration()
+                let oldLogo = config.logoURL
+                config.logoURL = try WatermarkPreferences.importLogo(from: url)
+                WatermarkPreferences.removeLogoFileIfManaged(oldLogo)
+                WatermarkPreferences.save(config)
+                watermarkLogoLabel.stringValue = config.logoURL?.lastPathComponent ?? "未选择"
+            } catch {
+                showError(title: "水印图片无效", message: error.localizedDescription)
+            }
+        }
+    }
+
+    @objc private func removeWatermarkLogo() {
+        var config = currentWatermarkConfiguration()
+        WatermarkPreferences.removeLogoFileIfManaged(config.logoURL)
+        config.logoURL = nil
+        WatermarkPreferences.save(config)
+        watermarkLogoLabel.stringValue = "未选择"
+    }
+
+    @objc private func changeWatermarkPosition() {
+        guard let rawValue = watermarkPositionPopUp.selectedItem?.representedObject as? String,
+              let position = WatermarkConfiguration.Position(rawValue: rawValue) else { return }
+        var config = currentWatermarkConfiguration()
+        config.position = position
+        WatermarkPreferences.save(config)
+    }
+
+    @objc private func changeWatermarkOpacity() {
+        var config = currentWatermarkConfiguration()
+        config.opacity = CGFloat(watermarkOpacitySlider.doubleValue)
+        watermarkOpacityLabel.stringValue = "\(Int(config.opacity * 100))%"
+        WatermarkPreferences.save(config)
+    }
+
+    @objc private func changeWatermarkScale() {
+        var config = currentWatermarkConfiguration()
+        config.scale = CGFloat(watermarkScaleSlider.doubleValue)
+        watermarkScaleLabel.stringValue = "\(Int(config.scale * 100))%"
+        WatermarkPreferences.save(config)
+    }
+
+    @objc private func changeWatermarkMargin() {
+        var config = currentWatermarkConfiguration()
+        config.margin = CGFloat(watermarkMarginStepper.doubleValue)
+        watermarkMarginLabel.stringValue = "\(Int(config.margin)) pt"
+        WatermarkPreferences.save(config)
+    }
+
+    @objc private func changeWatermarkColor() {
+        var config = currentWatermarkConfiguration()
+        config.textColor = watermarkColorWell.color
+        WatermarkPreferences.save(config)
+    }
+
+    private func currentWatermarkConfiguration() -> WatermarkConfiguration {
+        var config = WatermarkPreferences.load()
+        config.isEnabled = watermarkCheckbox.state == .on
+        config.text = watermarkTextField.stringValue
+        if let rawValue = watermarkPositionPopUp.selectedItem?.representedObject as? String,
+           let position = WatermarkConfiguration.Position(rawValue: rawValue) {
+            config.position = position
+        }
+        config.opacity = CGFloat(watermarkOpacitySlider.doubleValue)
+        config.scale = CGFloat(watermarkScaleSlider.doubleValue)
+        config.margin = CGFloat(watermarkMarginStepper.doubleValue)
+        config.textColor = watermarkColorWell.color
+        return config
+    }
+
+    private func showError(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.runModal()
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        if obj.object as? NSTextField === watermarkTextField {
+            changeWatermarkText()
+        }
+    }
+}
+
 @MainActor
 final class ShortcutRecorderButton: NSButton {
     var onShortcutChange: ((KeyboardShortcut) -> Void)?
@@ -1593,6 +1921,19 @@ enum CaptureAction {
     case copy
     case saveToDownloads
     case pin
+}
+
+struct CaptureOutputOptions {
+    var watermarkConfiguration: WatermarkConfiguration?
+    var capturedAt: Date = Date()
+
+    static var currentWatermark: CaptureOutputOptions {
+        let configuration = WatermarkPreferences.load()
+        return CaptureOutputOptions(
+            watermarkConfiguration: configuration.isEnabled ? configuration : nil,
+            capturedAt: Date()
+        )
+    }
 }
 
 enum OCRSource {
@@ -1876,16 +2217,21 @@ final class CaptureController {
     }
 
     private func configureRegularCaptureCallbacks(for window: SelectionOverlayWindow) {
-        window.onSelectionFinished = { [weak self] rect, action in
-            self?.finishCapture(globalRect: rect, action: action)
+        window.onSelectionFinished = { [weak self] rect, action, options in
+            self?.finishCapture(globalRect: rect, action: action, options: options)
         }
         window.onSelectionCancelled = { [weak self] in self?.closeOverlays() }
         window.onEditingRequested = { [weak self, weak window] rect, tool in
             guard let self, let window else { return }
             self.beginAnnotationEditing(globalRect: rect, tool: tool, window: window)
         }
-        window.onAnnotatedFinished = { [weak self] image, action, displaySize in
-            self?.finishAnnotatedCapture(image: image, action: action, displaySize: displaySize)
+        window.onAnnotatedFinished = { [weak self] image, action, displaySize, options in
+            self?.finishAnnotatedCapture(
+                image: image,
+                action: action,
+                displaySize: displaySize,
+                options: options
+            )
         }
         window.onAnnotationFailed = { [weak self] error in
             self?.showFailureAlert(message: error.localizedDescription)
@@ -2194,7 +2540,7 @@ final class CaptureController {
         preview.showWindow(nil)
     }
 
-    private func finishCapture(globalRect: CGRect, action: CaptureAction) {
+    private func finishCapture(globalRect: CGRect, action: CaptureAction, options: CaptureOutputOptions) {
         closeOverlays()
 
         guard globalRect.width >= 2, globalRect.height >= 2 else {
@@ -2207,7 +2553,7 @@ final class CaptureController {
         if let cropped = cropFromPreCaptured(globalRect: globalRect) {
             preCapturedScreens.removeAll()
             do {
-                try output(cropped, action: action, pinDisplaySize: globalRect.size)
+                try output(cropped, action: action, pinDisplaySize: globalRect.size, options: options)
             } catch {
                 showFailureAlert(message: error.localizedDescription)
             }
@@ -2224,7 +2570,7 @@ final class CaptureController {
             self.preCaptureScreens()
             if let cropped = self.cropFromPreCaptured(globalRect: globalRect) {
                 do {
-                    try self.output(cropped, action: action, pinDisplaySize: globalRect.size)
+                    try self.output(cropped, action: action, pinDisplaySize: globalRect.size, options: options)
                 } catch {
                     self.showFailureAlert(message: error.localizedDescription)
                 }
@@ -2232,17 +2578,17 @@ final class CaptureController {
             }
             // Ultimate fallback: SCStream (may briefly show the capture banner).
             NSLog("SnapInk: finishCapture ultimate fallback - SCStream")
-            self.capture(globalRect: globalRect, action: action)
+            self.capture(globalRect: globalRect, action: action, options: options)
         }
     }
 
-    private func capture(globalRect: CGRect, action: CaptureAction) {
+    private func capture(globalRect: CGRect, action: CaptureAction, options: CaptureOutputOptions) {
         Task { [weak self] in
             guard let self else { return }
 
             do {
                 let cgImage = try await makeScreenshot(globalRect: globalRect)
-                try output(cgImage, action: action, pinDisplaySize: globalRect.size)
+                try output(cgImage, action: action, pinDisplaySize: globalRect.size, options: options)
             } catch {
                 showFailureAlert(message: error.localizedDescription)
             }
@@ -2273,10 +2619,15 @@ final class CaptureController {
         }
     }
 
-    private func finishAnnotatedCapture(image: CGImage, action: CaptureAction, displaySize: CGSize) {
+    private func finishAnnotatedCapture(
+        image: CGImage,
+        action: CaptureAction,
+        displaySize: CGSize,
+        options: CaptureOutputOptions
+    ) {
         closeOverlays()
         do {
-            try output(image, action: action, pinDisplaySize: displaySize)
+            try output(image, action: action, pinDisplaySize: displaySize, options: options)
         } catch {
             showFailureAlert(message: error.localizedDescription)
         }
@@ -2356,8 +2707,10 @@ final class CaptureController {
     private func output(
         _ image: CGImage,
         action: CaptureAction,
-        pinDisplaySize: CGSize? = nil
+        pinDisplaySize: CGSize? = nil,
+        options: CaptureOutputOptions = .currentWatermark
     ) throws {
+        let image = try finalImage(from: image, options: options)
         switch action {
         case .copy:
             try ScreenshotWriter.copyToPasteboard(image)
@@ -2370,6 +2723,15 @@ final class CaptureController {
             _ = try PinManager.shared.pin(image, displaySize: pinDisplaySize)
             NSSound(named: "Tink")?.play()
         }
+    }
+
+    private func finalImage(from image: CGImage, options: CaptureOutputOptions) throws -> CGImage {
+        guard let configuration = options.watermarkConfiguration else { return image }
+        return try WatermarkRenderer.render(
+            image: image,
+            configuration: configuration,
+            context: WatermarkContext(capturedAt: options.capturedAt)
+        )
     }
 
     private func makeScreenshot(globalRect: CGRect) async throws -> CGImage {
@@ -2451,10 +2813,10 @@ enum SelectionPurpose {
 }
 
 final class SelectionOverlayWindow: NSPanel {
-    var onSelectionFinished: ((CGRect, CaptureAction) -> Void)?
+    var onSelectionFinished: ((CGRect, CaptureAction, CaptureOutputOptions) -> Void)?
     var onSelectionCancelled: (() -> Void)?
     var onEditingRequested: ((CGRect, AnnotationTool) -> Void)?
-    var onAnnotatedFinished: ((CGImage, CaptureAction, CGSize) -> Void)?
+    var onAnnotatedFinished: ((CGImage, CaptureAction, CGSize, CaptureOutputOptions) -> Void)?
     var onAnnotationFailed: ((Error) -> Void)?
     var onOCRRequested: ((OCRSource) -> Void)?
     var onLongCaptureRequested: ((CGRect) -> Void)?
@@ -2493,8 +2855,8 @@ final class SelectionOverlayWindow: NSPanel {
         acceptsMouseMovedEvents = true
         becomesKeyOnlyIfNeeded = false
 
-        view.onSelectionFinished = { [weak self] rect, action in
-            self?.onSelectionFinished?(rect, action)
+        view.onSelectionFinished = { [weak self] rect, action, options in
+            self?.onSelectionFinished?(rect, action, options)
         }
         view.onSelectionCancelled = { [weak self] in
             self?.onSelectionCancelled?()
@@ -2502,8 +2864,8 @@ final class SelectionOverlayWindow: NSPanel {
         view.onEditingRequested = { [weak self] rect, tool in
             self?.onEditingRequested?(rect, tool)
         }
-        view.onAnnotatedFinished = { [weak self] image, action, displaySize in
-            self?.onAnnotatedFinished?(image, action, displaySize)
+        view.onAnnotatedFinished = { [weak self] image, action, displaySize, options in
+            self?.onAnnotatedFinished?(image, action, displaySize, options)
         }
         view.onAnnotationFailed = { [weak self] error in
             self?.onAnnotationFailed?(error)
@@ -2572,10 +2934,10 @@ final class SelectionOverlayView: NSView {
         case resizing(SelectionHandle)
     }
 
-    var onSelectionFinished: ((CGRect, CaptureAction) -> Void)?
+    var onSelectionFinished: ((CGRect, CaptureAction, CaptureOutputOptions) -> Void)?
     var onSelectionCancelled: (() -> Void)?
     var onEditingRequested: ((CGRect, AnnotationTool) -> Void)?
-    var onAnnotatedFinished: ((CGImage, CaptureAction, CGSize) -> Void)?
+    var onAnnotatedFinished: ((CGImage, CaptureAction, CGSize, CaptureOutputOptions) -> Void)?
     var onAnnotationFailed: ((Error) -> Void)?
     var onOCRRequested: ((OCRSource) -> Void)?
     var onLongCaptureRequested: ((CGRect) -> Void)?
@@ -3363,6 +3725,7 @@ final class SelectionOverlayView: NSView {
 
     private func submitSelection(action: CaptureAction) {
         guard isSelectionFinalized, !isSubmitting else { return }
+        let outputOptions = currentOutputOptions()
         if let annotationCanvas {
             isSubmitting = true
             actionBar.setBusy(true, message: "正在生成图片…")
@@ -3373,7 +3736,7 @@ final class SelectionOverlayView: NSView {
                     return
                 }
                 let image = try annotationCanvas.renderedImage()
-                onAnnotatedFinished?(image, action, selection.size)
+                onAnnotatedFinished?(image, action, selection.size, outputOptions)
             } catch {
                 isSubmitting = false
                 actionBar.setBusy(false)
@@ -3383,7 +3746,11 @@ final class SelectionOverlayView: NSView {
         }
 
         guard let globalRect = currentGlobalSelectionRect() else { return }
-        onSelectionFinished?(globalRect, action)
+        onSelectionFinished?(globalRect, action, outputOptions)
+    }
+
+    private func currentOutputOptions() -> CaptureOutputOptions {
+        .currentWatermark
     }
 
     func enterAnnotationEditing(baseImage: CGImage, initialTool: AnnotationTool) {

@@ -1325,7 +1325,7 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
 
     @objc private func copyAction() {
         do {
-            try ScreenshotWriter.copyToPasteboard(image)
+            try ScreenshotWriter.copyToPasteboard(outputImage())
             NSSound(named: "Tink")?.play()
         } catch {
             showError(error.localizedDescription)
@@ -1334,7 +1334,7 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
 
     @objc private func saveAction() {
         do {
-            let url = try ScreenshotWriter.writeImage(image)
+            let url = try ScreenshotWriter.writeImage(outputImage())
             NSSound(named: "Glass")?.play()
             NSWorkspace.shared.activateFileViewerSelecting([url])
         } catch {
@@ -1351,6 +1351,16 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
         guard !didDismiss else { return }
         didDismiss = true
         onDismiss()
+    }
+
+    private func outputImage() throws -> CGImage {
+        let configuration = WatermarkPreferences.load()
+        guard configuration.isEnabled else { return image }
+        return try WatermarkRenderer.render(
+            image: image,
+            configuration: configuration,
+            context: WatermarkContext(capturedAt: Date())
+        )
     }
 
     private func showError(_ message: String) {

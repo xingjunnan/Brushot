@@ -15,6 +15,7 @@ It supports macOS 13 or later on both Apple Silicon and Intel Macs through a Uni
 - per-tool color, opacity, width, line, fill, arrow, text, mosaic, and highlight styles
 - per-tool style persistence across launches
 - PNG output to Downloads
+- optional text and Logo watermarks for static screenshots, configured from the menu bar with `{date}`, `{time}`, `{datetime}` placeholders
 - screenshot and clipboard image pinning in always-on-top desktop windows
 - persistent pin library with SHA-256 content deduplication and up to 100 recent images
 - pin opacity, corner radius, current/all-desktop behavior, pixel-level arrow-key movement, and hide/show all
@@ -39,6 +40,8 @@ Use `Command + C` or `Command + S` while the selection is active for the copy an
 Choose `全屏截图` or press `Control + Option + F` to freeze the display under the mouse and preselect its entire area. The normal SnapInk action and annotation controls remain available, so the selection can still be adjusted before output.
 
 Choose `延时截图…` or press `Control + Option + D` to select an area first, then start the countdown. SnapInk restores the live desktop during the countdown and captures the current pixels when time expires; its border and countdown HUD are hidden before capture. The delay defaults to 5 seconds and can be set from 1 to 60 seconds in Preferences, together with the countdown sound option.
+
+Watermarks can be configured from the menu bar via `水印设置…`, below `偏好设置…`. SnapInk supports text, Logo images, or both together, plus position, opacity, size, margin, and text color. Watermarks apply only to static screenshot outputs: area, full-screen, delayed, scrolling capture, copy, save, and screenshot pinning. OCR reads the original image, and video/GIF recording is not watermarked.
 
 Annotation tool shortcuts are `V/R/O/L/A/P/T/N/M/H`. Use `Command + Z` and `Shift + Command + Z` for undo and redo, and Delete to remove the selected annotation. While editing text, `Command + Return` commits and Escape cancels the text edit.
 
