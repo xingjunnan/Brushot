@@ -81,8 +81,16 @@ enum RecordingMicrophones {
         captureDevices().map { RecordingMicrophoneDevice(id: $0.uniqueID, name: $0.localizedName) }
     }
 
+    static func authorizationStatus() -> AVAuthorizationStatus {
+        AVCaptureDevice.authorizationStatus(for: .audio)
+    }
+
+    static func canRequestOrUsePermission() -> Bool {
+        authorizationStatus() != .restricted
+    }
+
     static func requestPermission() async -> Bool {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        switch authorizationStatus() {
         case .authorized: return true
         case .notDetermined:
             return await withCheckedContinuation { continuation in
@@ -90,6 +98,15 @@ enum RecordingMicrophones {
             }
         default: return false
         }
+    }
+
+    static func requestPermissionIfNeeded() async -> AVAuthorizationStatus {
+        let status = authorizationStatus()
+        guard status == .notDetermined else { return status }
+        let granted = await withCheckedContinuation { continuation in
+            AVCaptureDevice.requestAccess(for: .audio) { continuation.resume(returning: $0) }
+        }
+        return granted ? .authorized : authorizationStatus()
     }
 }
 

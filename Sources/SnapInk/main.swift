@@ -2618,6 +2618,14 @@ final class CaptureController {
         Task { [weak self] in
             guard let self else { return }
             do {
+                if format == .video && microphone {
+                    let status = await RecordingMicrophones.requestPermissionIfNeeded()
+                    guard status == .authorized else {
+                        RecordingPreferences.setMicrophoneEnabled(false)
+                        showMicrophonePermissionAlert()
+                        return
+                    }
+                }
                 try await Task.sleep(for: .milliseconds(90))
                 let capturer = try await ScreenRegionCapturer(globalRect: globalRect)
                 let session = RecordingSessionController(
@@ -2959,7 +2967,11 @@ final class CaptureController {
     private func showMicrophonePermissionAlert() {
         let alert = NSAlert()
         alert.messageText = "需要麦克风权限"
-        alert.informativeText = "请在“系统设置 > 隐私与安全性 > 麦克风”中允许 SnapInk，然后重试。"
+        alert.informativeText = """
+        请在“系统设置 > 隐私与安全性 > 麦克风”中允许 SnapInk，然后重试。
+
+        如果列表中没有 SnapInk，请先确认正在运行的是新版 /Applications/SnapInk.app，退出并重新打开后再录制一次；macOS 只有在应用真正请求麦克风权限后才会把它加入列表。
+        """
         alert.addButton(withTitle: "打开系统设置")
         alert.addButton(withTitle: "取消")
         if alert.runModal() == .alertFirstButtonReturn,

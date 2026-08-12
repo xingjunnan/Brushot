@@ -811,6 +811,7 @@ final class RecordingStartBar: NSVisualEffectView {
     }()
     private let silentHint = NSTextField(labelWithString: "GIF 录制为静音")
     private var hasMicrophones = false
+    private var canUseMicrophonePermission = true
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -833,18 +834,27 @@ final class RecordingStartBar: NSVisualEffectView {
         watermarkCheckbox.identifier = NSUserInterfaceItemIdentifier("recordingWatermark")
         let devices = RecordingMicrophones.availableDevices()
         hasMicrophones = !devices.isEmpty
+        canUseMicrophonePermission = RecordingMicrophones.canRequestOrUsePermission()
         for device in devices {
             microphonePopup.addItem(withTitle: device.name)
             microphonePopup.lastItem?.representedObject = device.id
         }
-        if let saved = RecordingPreferences.microphoneDeviceID(),
-           let index = microphonePopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == saved }) {
-            microphonePopup.selectItem(at: index)
-        } else if let selected = microphonePopup.selectedItem?.representedObject as? String {
-            RecordingPreferences.setMicrophoneDeviceID(selected)
+        if hasMicrophones {
+            if let saved = RecordingPreferences.microphoneDeviceID(),
+               let index = microphonePopup.itemArray.firstIndex(where: { ($0.representedObject as? String) == saved }) {
+                microphonePopup.selectItem(at: index)
+            } else if let selected = microphonePopup.selectedItem?.representedObject as? String {
+                RecordingPreferences.setMicrophoneDeviceID(selected)
+            } else {
+                RecordingPreferences.setMicrophoneDeviceID(nil)
+            }
+        } else {
+            microphonePopup.addItem(withTitle: "未检测到麦克风")
+            microphonePopup.lastItem?.representedObject = nil
+            RecordingPreferences.setMicrophoneDeviceID(nil)
         }
         microphoneCheckbox.state = RecordingPreferences.microphoneEnabled() ? .on : .off
-        microphoneCheckbox.isEnabled = hasMicrophones
+        microphoneCheckbox.isEnabled = canUseMicrophonePermission
         microphoneCheckbox.target = self
         microphoneCheckbox.action = #selector(microphoneChanged)
         microphoneCheckbox.identifier = NSUserInterfaceItemIdentifier("recordingMicrophone")
@@ -853,7 +863,9 @@ final class RecordingStartBar: NSVisualEffectView {
         microphonePopup.action = #selector(microphoneDeviceChanged)
         microphonePopup.identifier = NSUserInterfaceItemIdentifier("recordingMicrophoneDevice")
         microphonePopup.toolTip = devices.isEmpty ? "未检测到麦克风" : "选择内置或外置麦克风"
-        microphonePopup.widthAnchor.constraint(lessThanOrEqualToConstant: 210).isActive = true
+        microphonePopup.setContentCompressionResistancePriority(.required, for: .horizontal)
+        microphonePopup.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        microphonePopup.widthAnchor.constraint(equalToConstant: 180).isActive = true
 
         let cancel = NSButton(title: "取消", target: self, action: #selector(cancelAction))
         startButton.identifier = NSUserInterfaceItemIdentifier("startRecordingAction")
@@ -916,19 +928,6 @@ final class RecordingStartBar: NSVisualEffectView {
         let enabled = microphoneCheckbox.state == .on
         RecordingPreferences.setMicrophoneEnabled(enabled)
         microphonePopup.isEnabled = formatControl.selectedSegment == 0 && enabled && hasMicrophones
-        guard enabled else { return }
-
-        Task { [weak self] in
-            let granted = await RecordingMicrophones.requestPermission()
-            guard let self else { return }
-            guard self.microphoneCheckbox.state == .on else { return }
-            if !granted {
-                self.microphoneCheckbox.state = .off
-                RecordingPreferences.setMicrophoneEnabled(false)
-                self.microphonePopup.isEnabled = false
-                self.showMicrophonePermissionAlert()
-            }
-        }
     }
 
     @objc private func microphoneDeviceChanged() {
@@ -971,7 +970,7 @@ final class RecordingStartBar: NSVisualEffectView {
         microphoneCheckbox.isHidden = !isVideo
         microphonePopup.isHidden = !isVideo
         audioCheckbox.isEnabled = isVideo
-        microphoneCheckbox.isEnabled = isVideo && hasMicrophones
+        microphoneCheckbox.isEnabled = isVideo && canUseMicrophonePermission
         microphonePopup.isEnabled = isVideo && hasMicrophones && microphoneCheckbox.state == .on
         silentHint.isHidden = isVideo
         startButton.title = isVideo ? "开始录制视频" : "开始录制 GIF"
@@ -1009,19 +1008,6 @@ final class RecordingStartBar: NSVisualEffectView {
             hasWatermarkContent: hasContent
         )
         popover.show(relativeTo: watermarkInfoButton.bounds, of: watermarkInfoButton, preferredEdge: .maxY)
-    }
-
-    private func showMicrophonePermissionAlert() {
-        let alert = NSAlert()
-        alert.messageText = "需要麦克风权限"
-        alert.informativeText = "请在“系统设置 > 隐私与安全性 > 麦克风”中允许 SnapInk，然后重试。"
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "打开系统设置")
-        alert.addButton(withTitle: "取消")
-        if alert.runModal() == .alertFirstButtonReturn,
-           let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
-            NSWorkspace.shared.open(url)
-        }
     }
 
     private func makeSectionLabel(_ title: String) -> NSTextField {

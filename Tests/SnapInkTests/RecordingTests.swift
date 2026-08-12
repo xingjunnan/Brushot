@@ -59,6 +59,7 @@ final class RecordingCoreTests: XCTestCase {
         XCTAssertFalse(RecordingMicrophones.shouldShowDevice(named: "iFlyrecAudioDevice"))
         XCTAssertFalse(RecordingMicrophones.shouldShowDevice(named: "IdeaShare 2ch"))
         XCTAssertTrue(RecordingMicrophones.shouldShowDevice(named: "MacBook Pro 麦克风"))
+        XCTAssertTrue(RecordingMicrophones.shouldShowDevice(named: "MacBook Pro Microphone"))
         XCTAssertTrue(RecordingMicrophones.shouldShowDevice(named: "外置麦克风"))
     }
 
@@ -421,10 +422,17 @@ final class RecordingInteractionTests: XCTestCase {
         })
         let audio = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingSystemAudio" })
         let microphone = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingMicrophone" })
+        let microphonePopup = try XCTUnwrap(descendants(of: bar).compactMap { $0 as? NSPopUpButton }.first {
+            $0.identifier?.rawValue == "recordingMicrophoneDevice"
+        })
         let watermarkButton = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingWatermark" })
         let watermarkInfo = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingWatermarkInfo" })
         XCTAssertTrue(watermarkButton.isEnabled)
         XCTAssertEqual(watermarkInfo.toolTip, "导出时添加水印，不会出现在录制过程中")
+        XCTAssertFalse(microphonePopup.isHidden)
+        XCTAssertNotNil(microphonePopup.constraints.first {
+            $0.firstAttribute == .width && $0.constant >= 170
+        })
         let labels = descendants(of: bar).compactMap { $0 as? NSTextField }
         let audioLabel = try XCTUnwrap(labels.first { $0.stringValue == "视频音频" })
         let silentHint = try XCTUnwrap(labels.first { $0.stringValue == "GIF 录制为静音" })
@@ -441,6 +449,7 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertTrue(audioLabel.isHidden)
         XCTAssertTrue(audio.isHidden)
         XCTAssertTrue(microphone.isHidden)
+        XCTAssertTrue(microphonePopup.isHidden)
         XCTAssertFalse(silentHint.isHidden)
         XCTAssertEqual(start.title, "开始录制 GIF")
         start.performClick(nil)

@@ -9,6 +9,7 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 APP_RESOURCES_DIR="$CONTENTS_DIR/Resources"
 RESOURCES_DIR="$ROOT_DIR/Resources"
+ENTITLEMENTS_PATH="$RESOURCES_DIR/SnapInk.entitlements"
 SOURCE_DIR="$ROOT_DIR/Sources/SnapInk"
 SOURCE_FILES=("$SOURCE_DIR"/*.swift)
 ARCHS=(arm64 x86_64)
@@ -70,6 +71,7 @@ fi
 CODESIGN_ARGS=(
     --force
     --deep
+    --entitlements "$ENTITLEMENTS_PATH"
     --options runtime
     --identifier "com.snapink.app"
     --sign "$CODE_SIGN_IDENTITY"
@@ -98,6 +100,7 @@ if ! codesign --verify --deep --strict "$APP_DIR" >/dev/null 2>&1; then
     codesign \
         --force \
         --deep \
+        --entitlements "$ENTITLEMENTS_PATH" \
         --options runtime \
         --identifier "com.snapink.app" \
         --sign "$CODE_SIGN_IDENTITY" \
