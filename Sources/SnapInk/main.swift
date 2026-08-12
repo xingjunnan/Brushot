@@ -1346,6 +1346,7 @@ private final class FlippedPreferencesView: NSView {
 
 final class WatermarkSettingsWindowController: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     private var watermarkCheckbox: NSButton!
+    private var watermarkContentHintLabel: NSTextField!
     private var watermarkTextField: NSTextField!
     private var watermarkLogoLabel: NSTextField!
     private var watermarkRepeatModePopUp: NSPopUpButton!
@@ -1360,7 +1361,7 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
 
     init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 470),
+            contentRect: NSRect(x: 0, y: 0, width: 540, height: 520),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -1388,6 +1389,8 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
             action: #selector(toggleWatermarkEnabled)
         )
         watermarkCheckbox.state = watermarkConfig.isEnabled ? .on : .off
+        watermarkContentHintLabel = makeHelperLabel("")
+        updateWatermarkContentHint(for: watermarkConfig)
 
         watermarkTextField = NSTextField(string: watermarkConfig.text)
         watermarkTextField.placeholderString = "例如：SnapInk {datetime}"
@@ -1396,19 +1399,18 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         watermarkTextField.delegate = self
         watermarkTextField.translatesAutoresizingMaskIntoConstraints = false
         watermarkTextField.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let textRow = makeRow(label: "文字", trailingViews: [watermarkTextField])
+        let textHelper = makeHelperLabel("可使用 {date}、{time}、{datetime}")
+        let textGroup = makeFieldGroup(rows: [
+            makeRow(label: "文字", trailingViews: [watermarkTextField]),
+            makeIndentedView(textHelper)
+        ])
 
-        let helper = NSTextField(labelWithString: "可使用 {date}、{time}、{datetime}；文字和 Logo 可同时显示。")
-        helper.font = .systemFont(ofSize: 11)
-        helper.textColor = .secondaryLabelColor
-        helper.lineBreakMode = .byWordWrapping
-        helper.maximumNumberOfLines = 2
-
-        watermarkLogoLabel = NSTextField(labelWithString: watermarkConfig.logoURL?.lastPathComponent ?? "未选择")
+        watermarkLogoLabel = NSTextField(labelWithString: watermarkLogoDisplayName(from: watermarkConfig))
         watermarkLogoLabel.font = .systemFont(ofSize: 12)
         watermarkLogoLabel.textColor = .secondaryLabelColor
         watermarkLogoLabel.lineBreakMode = .byTruncatingMiddle
         watermarkLogoLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        watermarkLogoLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let chooseLogoButton = NSButton(title: "选择…", target: self, action: #selector(chooseWatermarkLogo))
         chooseLogoButton.bezelStyle = .rounded
         let removeLogoButton = NSButton(title: "移除", target: self, action: #selector(removeWatermarkLogo))
@@ -1417,6 +1419,11 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
             label: "Logo",
             trailingViews: [watermarkLogoLabel, chooseLogoButton, removeLogoButton]
         )
+        let logoHelper = makeHelperLabel("支持 PNG/JPG/HEIC，小于 3MB；导入后会自动优化为安全副本")
+        let logoGroup = makeFieldGroup(rows: [
+            logoRow,
+            makeIndentedView(logoHelper)
+        ])
 
         watermarkRepeatModePopUp = NSPopUpButton(frame: .zero, pullsDown: false)
         WatermarkConfiguration.RepeatMode.allCases.forEach { repeatMode in
@@ -1481,9 +1488,9 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
             title: "水印",
             views: [
                 watermarkCheckbox,
-                textRow,
-                helper,
-                logoRow,
+                makeIndentedView(watermarkContentHintLabel, indentation: 18),
+                textGroup,
+                logoGroup,
                 repeatModeRow,
                 positionRow,
                 opacityRow,
@@ -1543,6 +1550,37 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         return row
     }
 
+    private func makeFieldGroup(rows: [NSView]) -> NSStackView {
+        let group = NSStackView(views: rows)
+        group.orientation = .vertical
+        group.alignment = .leading
+        group.spacing = 4
+        rows.forEach { $0.widthAnchor.constraint(equalTo: group.widthAnchor).isActive = true }
+        return group
+    }
+
+    private func makeIndentedView(_ view: NSView, indentation: CGFloat = 102) -> NSView {
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.widthAnchor.constraint(equalToConstant: indentation).isActive = true
+        let row = NSStackView(views: [spacer, view])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 0
+        return row
+    }
+
+    private func makeHelperLabel(_ text: String) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .secondaryLabelColor
+        label.lineBreakMode = .byWordWrapping
+        label.maximumNumberOfLines = 2
+        label.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return label
+    }
+
     private func makeCheckbox(title: String, action: Selector) -> NSButton {
         let button = NSButton()
         button.title = title
@@ -1561,15 +1599,38 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
     }
 
     @objc private func toggleWatermarkEnabled() {
+        let wasEnabled = applyWatermarkEnabledState(watermarkCheckbox.state == .on)
+        if watermarkCheckbox.state == .on, !wasEnabled {
+            showError(title: "无法启用水印", message: "请先填写水印文字或选择 Logo。")
+        }
+    }
+
+    @discardableResult
+    func applyWatermarkEnabledState(_ enabled: Bool) -> Bool {
         var config = currentWatermarkConfiguration()
-        config.isEnabled = watermarkCheckbox.state == .on
+        if enabled, !config.hasRenderableContent {
+            config.isEnabled = false
+            watermarkCheckbox.state = .off
+            WatermarkPreferences.save(config)
+            updateWatermarkContentHint(for: config)
+            return false
+        }
+        config.isEnabled = enabled
+        watermarkCheckbox.state = enabled ? .on : .off
         WatermarkPreferences.save(config)
+        updateWatermarkContentHint(for: config)
+        return true
     }
 
     @objc private func changeWatermarkText() {
         var config = currentWatermarkConfiguration()
         config.text = watermarkTextField.stringValue
+        if config.isEnabled, !config.hasRenderableContent {
+            config.isEnabled = false
+            watermarkCheckbox.state = .off
+        }
         WatermarkPreferences.save(config)
+        updateWatermarkContentHint(for: config)
     }
 
     @objc private func chooseWatermarkLogo() {
@@ -1578,15 +1639,17 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         panel.canChooseDirectories = false
         panel.canCreateDirectories = false
         panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.png, .jpeg, .heic, .tiff]
+        panel.allowedContentTypes = [.png, .jpeg, .heic]
         if panel.runModal() == .OK, let url = panel.url {
             do {
                 var config = currentWatermarkConfiguration()
                 let oldLogo = config.logoURL
                 config.logoURL = try WatermarkPreferences.importLogo(from: url)
+                config.logoDisplayName = url.lastPathComponent
                 WatermarkPreferences.removeLogoFileIfManaged(oldLogo)
                 WatermarkPreferences.save(config)
-                watermarkLogoLabel.stringValue = config.logoURL?.lastPathComponent ?? "未选择"
+                watermarkLogoLabel.stringValue = watermarkLogoDisplayName(from: config)
+                updateWatermarkContentHint(for: config)
             } catch {
                 showError(title: "水印图片无效", message: error.localizedDescription)
             }
@@ -1597,8 +1660,14 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         var config = currentWatermarkConfiguration()
         WatermarkPreferences.removeLogoFileIfManaged(config.logoURL)
         config.logoURL = nil
+        config.logoDisplayName = nil
+        if !config.hasRenderableContent {
+            config.isEnabled = false
+            watermarkCheckbox.state = .off
+        }
         WatermarkPreferences.save(config)
         watermarkLogoLabel.stringValue = "未选择"
+        updateWatermarkContentHint(for: config)
     }
 
     @objc private func changeWatermarkPosition() {
@@ -1659,6 +1728,20 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         config.margin = CGFloat(watermarkMarginStepper.doubleValue)
         config.textColor = watermarkColorWell.color
         return config
+    }
+
+    private func watermarkLogoDisplayName(from config: WatermarkConfiguration) -> String {
+        config.logoURL == nil ? "未选择" : (config.logoDisplayName ?? config.logoURL?.lastPathComponent ?? "已选择")
+    }
+
+    private func updateWatermarkContentHint(for config: WatermarkConfiguration) {
+        if config.hasRenderableContent {
+            watermarkContentHintLabel.stringValue = "已配置水印内容，截图工具栏会显示水印按钮。"
+            watermarkContentHintLabel.textColor = .secondaryLabelColor
+        } else {
+            watermarkContentHintLabel.stringValue = "请先填写文字或选择 Logo，否则无法启用水印，截图工具栏也不会显示水印按钮。"
+            watermarkContentHintLabel.textColor = .systemOrange
+        }
     }
 
     private func showError(title: String, message: String) {
@@ -2774,6 +2857,7 @@ final class SelectionOverlayView: NSView {
     private var selectionOutputOptions: CaptureOutputOptions?
     private var selectionWatermarkPreviewImage: CGImage?
     private var selectionWatermarkPreviewRect: CGRect?
+    private var sessionWatermarkEnabled = WatermarkPreferences.load().isEnabled
     private var frozenScreenImage: CGImage?
     private var activeAnnotationTool: AnnotationTool = .select
     private var annotationStyles: [AnnotationTool: AnnotationStyle] = Dictionary(
@@ -3754,7 +3838,12 @@ final class SelectionOverlayView: NSView {
     }
 
     private func currentOutputOptions() -> CaptureOutputOptions {
-        .currentWatermark
+        var configuration = WatermarkPreferences.load()
+        configuration.isEnabled = true
+        return CaptureOutputOptions(
+            watermarkConfiguration: sessionWatermarkEnabled && configuration.hasRenderableContent ? configuration : nil,
+            capturedAt: Date()
+        )
     }
 
     func enterAnnotationEditing(
@@ -3887,6 +3976,36 @@ final class SelectionOverlayView: NSView {
         selectionWatermarkPreviewRect = nil
     }
 
+    private func setSessionWatermarkEnabled(_ enabled: Bool) {
+        sessionWatermarkEnabled = enabled
+        actionBar.setWatermarkAvailable(
+            WatermarkPreferences.load().hasRenderableContent,
+            enabled: enabled
+        )
+        if let selection = currentSelection(), isSelectionFinalized {
+            updateSelectionWatermarkPreview(for: selection)
+            if let annotationCanvas, let croppedImage = croppedFrozenImage(for: selection) {
+                do {
+                    let options = currentOutputOptions()
+                    let previewImage = try previewImageForAnnotation(from: croppedImage, options: options)
+                    annotationPreviewOptions = options
+                    annotatedOutputOptions = CaptureOutputOptions(
+                        watermarkConfiguration: nil,
+                        capturedAt: options.capturedAt
+                    )
+                    annotationCanvas.updateCaptureArea(
+                        frame: selection,
+                        baseImage: previewImage,
+                        logicalOrigin: logicalOrigin(for: selection)
+                    )
+                } catch {
+                    onAnnotationFailed?(error)
+                }
+            }
+        }
+        needsDisplay = true
+    }
+
     private func logicalOrigin(for selection: CGRect) -> CGPoint {
         CGPoint(x: selection.minX, y: bounds.maxY - selection.maxY)
     }
@@ -3962,8 +4081,12 @@ final class SelectionOverlayView: NSView {
     }
 
     private func makeActionBar() -> AnnotationToolbarView {
-        let width = min(650, max(520, bounds.width - 16))
+        let width = min(720, max(520, bounds.width - 16))
         let bar = AnnotationToolbarView(frame: NSRect(x: 0, y: 0, width: width, height: 82))
+        bar.setWatermarkAvailable(
+            WatermarkPreferences.load().hasRenderableContent,
+            enabled: sessionWatermarkEnabled
+        )
         bar.onToolSelected = { [weak self] tool in
             self?.activateAnnotationTool(tool)
         }
@@ -3997,6 +4120,9 @@ final class SelectionOverlayView: NSView {
         }
         bar.onPin = { [weak self] in
             self?.submitSelection(action: .pin)
+        }
+        bar.onWatermarkToggle = { [weak self] enabled in
+            self?.setSessionWatermarkEnabled(enabled)
         }
         bar.onPreferredSizeChanged = { [weak self] in
             guard let self, let selection = self.currentSelection() else { return }

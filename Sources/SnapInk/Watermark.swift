@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 import ImageIO
+import UniformTypeIdentifiers
 
 struct WatermarkConfiguration: Equatable {
     enum RepeatMode: String, CaseIterable {
@@ -45,6 +46,7 @@ struct WatermarkConfiguration: Equatable {
     var isEnabled: Bool
     var text: String
     var logoURL: URL?
+    var logoDisplayName: String?
     var repeatMode: RepeatMode
     var position: Position
     var opacity: CGFloat
@@ -56,6 +58,7 @@ struct WatermarkConfiguration: Equatable {
         isEnabled: false,
         text: "",
         logoURL: nil,
+        logoDisplayName: nil,
         repeatMode: .single,
         position: .bottomRight,
         opacity: 0.65,
@@ -70,9 +73,14 @@ struct WatermarkConfiguration: Equatable {
 }
 
 enum WatermarkPreferences {
+    static let maxLogoFileSize = 3 * 1024 * 1024
+    static let maxImportedLogoPixelLength = 1_024
+    static let maxSourceLogoPixelLength = 4_096
+
     private static let enabledKey = "watermark.enabled"
     private static let textKey = "watermark.text"
     private static let logoPathKey = "watermark.logoPath"
+    private static let logoDisplayNameKey = "watermark.logoDisplayName"
     private static let repeatModeKey = "watermark.repeatMode"
     private static let positionKey = "watermark.position"
     private static let opacityKey = "watermark.opacity"
@@ -91,6 +99,11 @@ enum WatermarkPreferences {
         config.text = defaults.string(forKey: textKey) ?? ""
         if let path = defaults.string(forKey: logoPathKey), !path.isEmpty {
             config.logoURL = URL(fileURLWithPath: path)
+        }
+        if let displayName = defaults.string(forKey: logoDisplayNameKey), !displayName.isEmpty {
+            config.logoDisplayName = displayName
+        } else {
+            config.logoDisplayName = config.logoURL?.lastPathComponent
         }
         if let value = defaults.string(forKey: repeatModeKey),
            let repeatMode = WatermarkConfiguration.RepeatMode(rawValue: value) {
@@ -124,6 +137,7 @@ enum WatermarkPreferences {
         defaults.set(config.isEnabled, forKey: enabledKey)
         defaults.set(config.text, forKey: textKey)
         defaults.set(config.logoURL?.path ?? "", forKey: logoPathKey)
+        defaults.set(config.logoDisplayName ?? "", forKey: logoDisplayNameKey)
         defaults.set(config.repeatMode.rawValue, forKey: repeatModeKey)
         defaults.set(config.position.rawValue, forKey: positionKey)
         defaults.set(Double(config.opacity), forKey: opacityKey)
@@ -143,20 +157,63 @@ enum WatermarkPreferences {
     }
 
     static func importLogo(from sourceURL: URL) throws -> URL {
-        guard let image = NSImage(contentsOf: sourceURL),
-              let tiff = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiff),
-              let data = bitmap.representation(using: .png, properties: [:]) else {
-            throw NSError(
-                domain: "SnapInk.Watermark",
+        let fileSize = try logoFileSize(sourceURL)
+        guard fileSize <= maxLogoFileSize else {
+            throw makeError(
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "无法读取所选水印图片。"]
+                message: "Logo 图片不能超过 3MB，请选择更小的 PNG/JPG/HEIC 图片。"
             )
         }
 
+        guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, [
+            kCGImageSourceShouldCache: false
+        ] as CFDictionary) else {
+            throw makeError(code: 2, message: "无法读取所选水印图片。")
+        }
+        try validateLogoType(source)
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              width > 0,
+              height > 0 else {
+            throw makeError(code: 3, message: "无法读取所选水印图片尺寸。")
+        }
+        guard max(width, height) <= maxSourceLogoPixelLength else {
+            throw makeError(
+                code: 4,
+                message: "Logo 图片最长边不能超过 4096px，请先压缩后再选择。"
+            )
+        }
+        let ratio = CGFloat(max(width, height)) / CGFloat(max(1, min(width, height)))
+        let isAcceptableShape = height > width ? ratio <= 2 : ratio <= 6
+        guard isAcceptableShape else {
+            throw makeError(
+                code: 5,
+                message: "Logo 图片比例过于细长，请选择独立图标、头像或横向短 Logo。"
+            )
+        }
+
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxImportedLogoPixelLength
+        ]
+        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
+              let destinationData = NSMutableData() as CFMutableData?,
+              let imageDestination = CGImageDestinationCreateWithData(destinationData, UTType.png.identifier as CFString, 1, nil) else {
+            throw makeError(code: 6, message: "无法生成水印 Logo 安全副本。")
+        }
+        CGImageDestinationAddImage(imageDestination, thumbnail, [
+            kCGImageDestinationLossyCompressionQuality: 0.9
+        ] as CFDictionary)
+        guard CGImageDestinationFinalize(imageDestination) else {
+            throw makeError(code: 7, message: "无法保存水印 Logo 安全副本。")
+        }
+
         let directory = try supportDirectory()
-        let destination = directory.appendingPathComponent("logo.png")
-        try data.write(to: destination, options: .atomic)
+        let destination = directory.appendingPathComponent("logo-\(UUID().uuidString).png")
+        try (destinationData as Data).write(to: destination, options: .atomic)
         return destination
     }
 
@@ -177,6 +234,25 @@ enum WatermarkPreferences {
     private static func clamp(_ value: Double, min: Double, max: Double) -> CGFloat {
         CGFloat(Swift.min(Swift.max(value, min), max))
     }
+
+    private static func logoFileSize(_ url: URL) throws -> Int {
+        let values = try url.resourceValues(forKeys: [.fileSizeKey])
+        return values.fileSize ?? 0
+    }
+
+    private static func validateLogoType(_ source: CGImageSource) throws {
+        guard let typeIdentifier = CGImageSourceGetType(source) as String?,
+              let type = UTType(typeIdentifier),
+              type.conforms(to: .png)
+                || type.conforms(to: .jpeg)
+                || type.conforms(to: .heic) else {
+            throw makeError(code: 8, message: "该图片格式不适合作为水印 Logo，请选择 PNG/JPG/HEIC。")
+        }
+    }
+
+    private static func makeError(code: Int, message: String) -> NSError {
+        NSError(domain: "SnapInk.Watermark", code: code, userInfo: [NSLocalizedDescriptionKey: message])
+    }
 }
 
 struct WatermarkContext {
@@ -184,6 +260,33 @@ struct WatermarkContext {
 }
 
 enum WatermarkRenderer {
+    private final class LogoCacheEntry {
+        let image: CGImage
+
+        init(_ image: CGImage) {
+            self.image = image
+        }
+    }
+
+    private final class LogoCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private let cache = NSCache<NSURL, LogoCacheEntry>()
+
+        func image(for url: URL) -> CGImage? {
+            lock.lock()
+            defer { lock.unlock() }
+            return cache.object(forKey: url as NSURL)?.image
+        }
+
+        func set(_ image: CGImage, for url: URL) {
+            lock.lock()
+            defer { lock.unlock() }
+            cache.setObject(LogoCacheEntry(image), forKey: url as NSURL)
+        }
+    }
+
+    private static let logoCache = LogoCache()
+
     static func render(
         image: CGImage,
         configuration: WatermarkConfiguration,
@@ -207,7 +310,7 @@ enum WatermarkRenderer {
 
         cgContext.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
 
-        let logoImage = try loadLogo(from: configuration.logoURL)
+        let logoImage = loadLogo(from: configuration.logoURL)
         let resolvedText = resolvePlaceholders(in: configuration.text, date: context.capturedAt)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let block = makeBlock(
@@ -440,12 +543,16 @@ enum WatermarkRenderer {
         )
     }
 
-    private static func loadLogo(from url: URL?) throws -> CGImage? {
+    private static func loadLogo(from url: URL?) -> CGImage? {
         guard let url else { return nil }
+        if let cached = logoCache.image(for: url) {
+            return cached
+        }
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-            throw makeError(code: 3, message: "无法读取水印图片，请重新选择。")
+            return nil
         }
+        logoCache.set(image, for: url)
         return image
     }
 

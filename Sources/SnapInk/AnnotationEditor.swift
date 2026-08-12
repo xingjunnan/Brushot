@@ -1485,6 +1485,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
     var onPin: (() -> Void)?
     var onCopy: (() -> Void)?
     var onSave: (() -> Void)?
+    var onWatermarkToggle: ((Bool) -> Void)?
     var onPreferredSizeChanged: (() -> Void)?
 
     private var currentTool: AnnotationTool = .select
@@ -1524,6 +1525,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
     }()
     private lazy var ocrButton = makeButton(symbol: "text.viewfinder", title: "识别文字", action: #selector(ocrAction))
     private lazy var pinButton = makeButton(symbol: "pin", title: "贴图", action: #selector(pinAction))
+    private lazy var watermarkButton = makeButton(symbol: "drop", title: "水印", action: #selector(watermarkAction))
     private lazy var copyButton = makeButton(symbol: "doc.on.doc", title: "复制 (⌘C)", action: #selector(copyAction))
     private lazy var saveButton = makeButton(symbol: "square.and.arrow.down", title: "保存 (⌘S)", action: #selector(saveAction))
     private let busyIndicator = NSProgressIndicator()
@@ -1531,6 +1533,8 @@ final class AnnotationToolbarView: NSVisualEffectView {
     private var isBusy = false
     private var isLongCaptureAvailable = true
     private var isGIFAvailable = true
+    private var isWatermarkAvailable = false
+    private var isWatermarkEnabled = false
     private var canUndo = false
     private var canRedo = false
 
@@ -1595,6 +1599,17 @@ final class AnnotationToolbarView: NSVisualEffectView {
         gifButton.isEnabled = !isBusy && enabled
     }
 
+    func setWatermarkAvailable(_ available: Bool, enabled: Bool) {
+        isWatermarkAvailable = available
+        isWatermarkEnabled = enabled
+        watermarkButton.isHidden = !available
+        watermarkButton.state = enabled ? .on : .off
+        watermarkButton.contentTintColor = enabled ? .systemBlue : .labelColor
+        watermarkButton.toolTip = enabled ? "关闭本次截图水印" : "开启本次截图水印"
+        watermarkButton.isEnabled = !isBusy && available
+        updatePreferredSize()
+    }
+
     func setBusy(_ busy: Bool, message: String = "正在冻结截图…") {
         isBusy = busy
         busyLabel.stringValue = message
@@ -1605,6 +1620,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
         gifButton.isEnabled = !busy && isGIFAvailable
         ocrButton.isEnabled = !busy
         pinButton.isEnabled = !busy
+        watermarkButton.isEnabled = !busy && isWatermarkAvailable
         copyButton.isEnabled = !busy
         saveButton.isEnabled = !busy
         cancelButton.isEnabled = true
@@ -1620,7 +1636,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
         let mainRow = NSStackView()
         mainRow.orientation = .horizontal
         mainRow.alignment = .centerY
-        mainRow.spacing = 3
+        mainRow.spacing = 2
 
         let toolDefinitions: [(AnnotationTool, String)] = [
             (.select, "cursorarrow"), (.rectangle, "rectangle"), (.ellipse, "circle"),
@@ -1654,6 +1670,10 @@ final class AnnotationToolbarView: NSVisualEffectView {
         mainRow.addArrangedSubview(ocrButton)
         pinButton.identifier = NSUserInterfaceItemIdentifier("pinAction")
         mainRow.addArrangedSubview(pinButton)
+        watermarkButton.identifier = NSUserInterfaceItemIdentifier("watermarkAction")
+        watermarkButton.setButtonType(.toggle)
+        watermarkButton.isHidden = true
+        mainRow.addArrangedSubview(watermarkButton)
         copyButton.identifier = NSUserInterfaceItemIdentifier("copyAction")
         mainRow.addArrangedSubview(copyButton)
         saveButton.contentTintColor = .systemBlue
@@ -1828,7 +1848,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
     private func updatePreferredSize() {
         let preferredHeight: CGFloat = styleRow.isHidden ? 40 : 72
         layoutSubtreeIfNeeded()
-        let preferredWidth = min(650, max(1, ceil(rootStack.fittingSize.width) + 16))
+        let preferredWidth = min(720, max(1, ceil(rootStack.fittingSize.width) + 16))
         guard abs(frame.height - preferredHeight) > 0.5
                 || abs(frame.width - preferredWidth) > 0.5 else { return }
         setFrameSize(NSSize(width: preferredWidth, height: preferredHeight))
@@ -1912,6 +1932,11 @@ final class AnnotationToolbarView: NSVisualEffectView {
     @objc private func gifAction() { onGIF?() }
     @objc private func ocrAction() { onOCR?() }
     @objc private func pinAction() { onPin?() }
+    @objc private func watermarkAction() {
+        isWatermarkEnabled.toggle()
+        setWatermarkAvailable(isWatermarkAvailable, enabled: isWatermarkEnabled)
+        onWatermarkToggle?(isWatermarkEnabled)
+    }
     @objc private func copyAction() { onCopy?() }
     @objc private func saveAction() { onSave?() }
 
@@ -1955,7 +1980,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
     }
 
     private func makeButton(symbol: String, title: String, action: Selector) -> AnnotationHoverButton {
-        let button = AnnotationHoverButton(frame: NSRect(x: 0, y: 0, width: 30, height: 28))
+        let button = AnnotationHoverButton(frame: NSRect(x: 0, y: 0, width: 28, height: 28))
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
             .withSymbolConfiguration(.init(pointSize: 16, weight: .medium))
         if button.image == nil { button.title = String(title.prefix(1)) }
@@ -1971,7 +1996,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
         button.setAccessibilityLabel(title)
         button.target = self
         button.action = action
-        button.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        button.widthAnchor.constraint(equalToConstant: 28).isActive = true
         button.heightAnchor.constraint(equalToConstant: 28).isActive = true
         return button
     }

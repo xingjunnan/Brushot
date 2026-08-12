@@ -1193,6 +1193,8 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
     private let onOCR: (CGImage, @escaping () -> Void) -> Void
     private let onDismiss: () -> Void
     private var isAnnotating = false
+    private var watermarkCapturedAt = Date()
+    private var sessionWatermarkEnabled = WatermarkPreferences.load().isEnabled
     private var activeTool: AnnotationTool = .select
     private var styles = Dictionary(uniqueKeysWithValues: AnnotationTool.drawingTools.map {
         ($0, AnnotationStylePreferences.load(for: $0))
@@ -1206,8 +1208,12 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
         onDismiss: @escaping () -> Void
     ) {
         self.originalImage = image
-        let capturedAt = Date()
-        self.image = Self.previewImage(from: image, capturedAt: capturedAt)
+        self.watermarkCapturedAt = Date()
+        self.image = Self.previewImage(
+            from: image,
+            capturedAt: watermarkCapturedAt,
+            isWatermarkEnabled: sessionWatermarkEnabled
+        )
         self.logicalWidth = logicalWidth
         self.onOCR = onOCR
         self.onDismiss = onDismiss
@@ -1268,9 +1274,14 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
         updateImageLayout()
     }
 
-    private static func previewImage(from image: CGImage, capturedAt: Date) -> CGImage {
-        let configuration = WatermarkPreferences.load()
-        guard configuration.isEnabled else { return image }
+    private static func previewImage(
+        from image: CGImage,
+        capturedAt: Date,
+        isWatermarkEnabled: Bool
+    ) -> CGImage {
+        var configuration = WatermarkPreferences.load()
+        configuration.isEnabled = true
+        guard isWatermarkEnabled, configuration.hasRenderableContent else { return image }
         return (try? WatermarkRenderer.render(
             image: image,
             configuration: configuration,
@@ -1352,6 +1363,13 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
         annotationToolbar.onSave = { [weak self] in self?.saveAction() }
         annotationToolbar.onPin = { NSSound.beep() }
         annotationToolbar.onOCR = { [weak self] in self?.ocrAction() }
+        annotationToolbar.onWatermarkToggle = { [weak self] enabled in
+            self?.setSessionWatermarkEnabled(enabled)
+        }
+        annotationToolbar.setWatermarkAvailable(
+            WatermarkPreferences.load().hasRenderableContent,
+            enabled: sessionWatermarkEnabled
+        )
         annotationCanvas.onDocumentChanged = { [weak self] in
             guard let self else { return }
             self.annotationToolbar.setUndoEnabled(
@@ -1371,6 +1389,26 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
         let style = styles[tool] ?? .defaultStyle(for: tool)
         annotationToolbar.setTool(tool, style: style)
         annotationCanvas.setTool(tool, style: style)
+    }
+
+    private func setSessionWatermarkEnabled(_ enabled: Bool) {
+        sessionWatermarkEnabled = enabled
+        image = Self.previewImage(
+            from: originalImage,
+            capturedAt: watermarkCapturedAt,
+            isWatermarkEnabled: enabled
+        )
+        annotationCanvas.cancelPendingInteraction()
+        annotationCanvas.updateCaptureArea(
+            frame: annotationCanvas.frame,
+            baseImage: image,
+            logicalOrigin: annotationCanvas.bounds.origin
+        )
+        annotationCanvas.needsDisplay = true
+        annotationToolbar.setWatermarkAvailable(
+            WatermarkPreferences.load().hasRenderableContent,
+            enabled: enabled
+        )
     }
 
     @objc private func annotateAction() {

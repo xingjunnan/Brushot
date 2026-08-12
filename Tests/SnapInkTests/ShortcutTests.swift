@@ -213,6 +213,35 @@ final class ShortcutTests: XCTestCase {
         )
     }
 
+    func testWatermarkSettingsExplainsMissingContentAndBlocksEmptyEnable() throws {
+        let previousWatermark = WatermarkPreferences.load()
+        defer { WatermarkPreferences.save(previousWatermark) }
+
+        WatermarkPreferences.save(.default)
+        let controller = WatermarkSettingsWindowController()
+        let content = try XCTUnwrap(controller.window?.contentView)
+        let labels = descendants(of: content).compactMap { $0 as? NSTextField }
+        XCTAssertTrue(labels.contains {
+            $0.stringValue.contains("无法启用水印") && $0.stringValue.contains("工具栏")
+        })
+
+        XCTAssertFalse(controller.applyWatermarkEnabledState(true))
+        XCTAssertFalse(WatermarkPreferences.load().isEnabled)
+    }
+
+    func testWatermarkSettingsAllowsEnableAfterTextIsConfigured() throws {
+        let previousWatermark = WatermarkPreferences.load()
+        defer { WatermarkPreferences.save(previousWatermark) }
+
+        var config = WatermarkConfiguration.default
+        config.text = "SnapInk"
+        WatermarkPreferences.save(config)
+        let controller = WatermarkSettingsWindowController()
+
+        XCTAssertTrue(controller.applyWatermarkEnabledState(true))
+        XCTAssertTrue(WatermarkPreferences.load().isEnabled)
+    }
+
     func testTranslationPreferenceDefaultsOnAndPersistsToggle() throws {
         let suiteName = "SnapInk.TranslationPreferenceTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

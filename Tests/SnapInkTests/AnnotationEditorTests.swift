@@ -109,6 +109,24 @@ final class AnnotationEditorTests: XCTestCase {
         XCTAssertEqual(pinCount, 1)
     }
 
+    func testToolbarWatermarkButtonTogglesSessionWatermark() throws {
+        let toolbar = AnnotationToolbarView(frame: CGRect(x: 0, y: 0, width: 650, height: 72))
+        var received: [Bool] = []
+        toolbar.onWatermarkToggle = { received.append($0) }
+
+        toolbar.setWatermarkAvailable(true, enabled: true)
+        let button = try XCTUnwrap(descendants(of: toolbar).compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "watermarkAction"
+        })
+
+        XCTAssertFalse(button.isHidden)
+        XCTAssertEqual(button.state, .on)
+        button.performClick(nil)
+
+        XCTAssertEqual(received, [false])
+        XCTAssertEqual(button.state, .off)
+    }
+
     func testToolbarLongCaptureButtonInvokesActionAndCanBeDisabled() throws {
         let toolbar = AnnotationToolbarView(frame: CGRect(x: 0, y: 0, width: 650, height: 72))
         var invocationCount = 0
@@ -260,6 +278,54 @@ final class AnnotationEditorTests: XCTestCase {
         let withWatermark = try renderConfirmedSelectionOverlay()
 
         XCTAssertGreaterThan(try changedPixelCount(between: withoutWatermark, and: withWatermark), 0)
+    }
+
+    func testSelectionToolbarWatermarkToggleUpdatesCurrentPreviewOnly() throws {
+        let previousWatermark = WatermarkPreferences.load()
+        defer { WatermarkPreferences.save(previousWatermark) }
+
+        var enabled = WatermarkConfiguration.default
+        enabled.isEnabled = true
+        enabled.text = "SnapInk"
+        enabled.position = .center
+        enabled.opacity = 1
+        enabled.textColor = .black
+        WatermarkPreferences.save(enabled)
+
+        let overlay = try makeConfirmedSelectionOverlay()
+        let withWatermark = try renderView(overlay, width: 400, height: 300)
+        let button = try XCTUnwrap(descendants(of: overlay).compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "watermarkAction"
+        })
+        button.performClick(nil)
+        let withoutWatermark = try renderView(overlay, width: 400, height: 300)
+
+        XCTAssertGreaterThan(try changedPixelCount(between: withWatermark, and: withoutWatermark), 0)
+        XCTAssertTrue(WatermarkPreferences.load().isEnabled)
+    }
+
+    func testSelectionToolbarWatermarkToggleCanEnableForCurrentCaptureOnly() throws {
+        let previousWatermark = WatermarkPreferences.load()
+        defer { WatermarkPreferences.save(previousWatermark) }
+
+        var disabled = WatermarkConfiguration.default
+        disabled.isEnabled = false
+        disabled.text = "SnapInk"
+        disabled.position = .center
+        disabled.opacity = 1
+        disabled.textColor = .black
+        WatermarkPreferences.save(disabled)
+
+        let overlay = try makeConfirmedSelectionOverlay()
+        let withoutWatermark = try renderView(overlay, width: 400, height: 300)
+        let button = try XCTUnwrap(descendants(of: overlay).compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "watermarkAction"
+        })
+        button.performClick(nil)
+        let withWatermark = try renderView(overlay, width: 400, height: 300)
+
+        XCTAssertGreaterThan(try changedPixelCount(between: withoutWatermark, and: withWatermark), 0)
+        XCTAssertFalse(WatermarkPreferences.load().isEnabled)
     }
 
     func testAnnotationPreviewShowsWatermarkAndDoesNotApplyItAgainOnSubmit() throws {
@@ -902,12 +968,16 @@ final class AnnotationEditorTests: XCTestCase {
     }
 
     private func renderConfirmedSelectionOverlay() throws -> CGImage {
+        try renderView(try makeConfirmedSelectionOverlay(), width: 400, height: 300)
+    }
+
+    private func makeConfirmedSelectionOverlay() throws -> SelectionOverlayView {
         let overlay = SelectionOverlayView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
         overlay.setPreCapturedScreenImage(try makeImage(width: 400, height: 300))
         overlay.mouseDown(with: try mouseEvent(type: .leftMouseDown, at: CGPoint(x: 50, y: 50)))
         overlay.mouseDragged(with: try mouseEvent(type: .leftMouseDragged, at: CGPoint(x: 200, y: 180)))
         overlay.mouseUp(with: try mouseEvent(type: .leftMouseUp, at: CGPoint(x: 200, y: 180)))
-        return try renderView(overlay, width: 400, height: 300)
+        return overlay
     }
 
     private func renderView(_ view: NSView, width: Int, height: Int) throws -> CGImage {

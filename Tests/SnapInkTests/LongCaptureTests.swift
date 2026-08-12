@@ -325,6 +325,82 @@ final class LongCaptureTests: XCTestCase {
         preview.close()
     }
 
+    @MainActor
+    func testFinalPreviewWatermarkToggleUpdatesInlineCanvas() throws {
+        let previousWatermark = WatermarkPreferences.load()
+        defer { WatermarkPreferences.save(previousWatermark) }
+
+        var watermark = WatermarkConfiguration.default
+        watermark.isEnabled = true
+        watermark.text = "SnapInk"
+        watermark.position = .center
+        watermark.opacity = 1
+        watermark.textColor = .black
+        WatermarkPreferences.save(watermark)
+
+        let image = try patternedImage(width: 180, height: 720)
+        let preview = LongCapturePreviewWindowController(
+            image: image,
+            logicalWidth: 180,
+            onOCR: { _, completion in completion() },
+            onDismiss: {}
+        )
+        let content = try XCTUnwrap(preview.window?.contentView)
+        let canvas = try XCTUnwrap(allSubviews(of: content).compactMap { $0 as? AnnotationCanvasView }.first)
+        XCTAssertGreaterThan(try changedPixelCount(between: image, and: canvas.baseImage), 0)
+
+        let annotate = try XCTUnwrap(allSubviews(of: content).compactMap { $0 as? NSButton }.first {
+            $0.title == "标注"
+        })
+        annotate.performClick(nil)
+        let watermarkButton = try XCTUnwrap(allSubviews(of: content).compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "watermarkAction"
+        })
+        watermarkButton.performClick(nil)
+
+        XCTAssertEqual(try rgbaData(canvas.baseImage), try rgbaData(image))
+        XCTAssertTrue(WatermarkPreferences.load().isEnabled)
+        preview.close()
+    }
+
+    @MainActor
+    func testFinalPreviewWatermarkToggleCanEnableForCurrentCaptureOnly() throws {
+        let previousWatermark = WatermarkPreferences.load()
+        defer { WatermarkPreferences.save(previousWatermark) }
+
+        var watermark = WatermarkConfiguration.default
+        watermark.isEnabled = false
+        watermark.text = "SnapInk"
+        watermark.position = .center
+        watermark.opacity = 1
+        watermark.textColor = .black
+        WatermarkPreferences.save(watermark)
+
+        let image = try patternedImage(width: 180, height: 720)
+        let preview = LongCapturePreviewWindowController(
+            image: image,
+            logicalWidth: 180,
+            onOCR: { _, completion in completion() },
+            onDismiss: {}
+        )
+        let content = try XCTUnwrap(preview.window?.contentView)
+        let canvas = try XCTUnwrap(allSubviews(of: content).compactMap { $0 as? AnnotationCanvasView }.first)
+        XCTAssertEqual(try rgbaData(canvas.baseImage), try rgbaData(image))
+
+        let annotate = try XCTUnwrap(allSubviews(of: content).compactMap { $0 as? NSButton }.first {
+            $0.title == "标注"
+        })
+        annotate.performClick(nil)
+        let watermarkButton = try XCTUnwrap(allSubviews(of: content).compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "watermarkAction"
+        })
+        watermarkButton.performClick(nil)
+
+        XCTAssertGreaterThan(try changedPixelCount(between: image, and: canvas.baseImage), 0)
+        XCTAssertFalse(WatermarkPreferences.load().isEnabled)
+        preview.close()
+    }
+
     func testLiveBorderIsDrawnOutsideCapturedSelection() {
         let selection = CGRect(x: 120, y: 80, width: 640, height: 360)
         let border = LongCaptureSessionController.borderFrame(for: selection)
@@ -587,6 +663,18 @@ final class LongCaptureTests: XCTestCase {
             return true
         }
         return try XCTUnwrap(created ? data : nil)
+    }
+
+    private func changedPixelCount(between first: CGImage, and second: CGImage) throws -> Int {
+        let firstBytes = try rgbaData(first)
+        let secondBytes = try rgbaData(second)
+        var count = 0
+        for index in stride(from: 0, to: min(firstBytes.count, secondBytes.count), by: 4) {
+            if firstBytes[index..<(index + 4)] != secondBytes[index..<(index + 4)] {
+                count += 1
+            }
+        }
+        return count
     }
 
     @MainActor
