@@ -967,6 +967,13 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     private var completionSoundCheckbox: NSButton!
     private var saveLocationLabel: NSTextField!
     private var formatPopUp: NSPopUpButton!
+    private var screenshotShadowCheckbox: NSButton!
+    private var screenshotShadowSizeSlider: NSSlider!
+    private var screenshotShadowSizeLabel: NSTextField!
+    private var screenshotShadowColorWell: NSColorWell!
+    private var screenshotRoundedCornersCheckbox: NSButton!
+    private var screenshotCornerRadiusSlider: NSSlider!
+    private var screenshotCornerRadiusLabel: NSTextField!
     private var selectionMagnifierCheckbox: NSButton!
     private var selfTimerDurationLabel: NSTextField!
     private var selfTimerDurationStepper: NSStepper!
@@ -986,7 +993,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 660),
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 680),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -1088,9 +1095,64 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
             trailingViews: [formatPopUp]
         )
 
+        let screenshotAppearance = ScreenshotAppearancePreferences.load()
+        screenshotShadowCheckbox = makeCheckbox(
+            title: "添加阴影",
+            action: #selector(toggleScreenshotShadow)
+        )
+        screenshotShadowCheckbox.state = screenshotAppearance.addsShadow ? .on : .off
+        screenshotShadowCheckbox.identifier = NSUserInterfaceItemIdentifier("screenshotAddsShadow")
+
+        screenshotShadowSizeSlider = makeAppearanceSlider(
+            range: ScreenshotAppearanceConfiguration.shadowSizeRange,
+            value: screenshotAppearance.shadowSize,
+            action: #selector(changeScreenshotShadowSize)
+        )
+        screenshotShadowSizeSlider.identifier = NSUserInterfaceItemIdentifier("screenshotShadowSize")
+        screenshotShadowSizeLabel = makePointValueLabel(screenshotAppearance.shadowSize)
+        screenshotShadowSizeLabel.identifier = NSUserInterfaceItemIdentifier("screenshotShadowSizeValue")
+        screenshotShadowColorWell = NSColorWell(frame: CGRect(x: 0, y: 0, width: 48, height: 24))
+        screenshotShadowColorWell.color = screenshotAppearance.shadowColor
+        screenshotShadowColorWell.target = self
+        screenshotShadowColorWell.action = #selector(changeScreenshotShadowColor)
+        screenshotShadowColorWell.identifier = NSUserInterfaceItemIdentifier("screenshotShadowColor")
+        screenshotShadowColorWell.widthAnchor.constraint(equalToConstant: 52).isActive = true
+
+        let shadowRow = makeAppearanceControlRow(
+            checkbox: screenshotShadowCheckbox,
+            label: "阴影大小:",
+            slider: screenshotShadowSizeSlider,
+            valueLabel: screenshotShadowSizeLabel,
+            extraLabel: "颜色:",
+            extraView: screenshotShadowColorWell
+        )
+
+        screenshotRoundedCornersCheckbox = makeCheckbox(
+            title: "增加圆角",
+            action: #selector(toggleScreenshotRoundedCorners)
+        )
+        screenshotRoundedCornersCheckbox.state = screenshotAppearance.addsRoundedCorners ? .on : .off
+        screenshotRoundedCornersCheckbox.identifier = NSUserInterfaceItemIdentifier("screenshotAddsRoundedCorners")
+
+        screenshotCornerRadiusSlider = makeAppearanceSlider(
+            range: ScreenshotAppearanceConfiguration.cornerRadiusRange,
+            value: screenshotAppearance.cornerRadius,
+            action: #selector(changeScreenshotCornerRadius)
+        )
+        screenshotCornerRadiusSlider.identifier = NSUserInterfaceItemIdentifier("screenshotCornerRadius")
+        screenshotCornerRadiusLabel = makePointValueLabel(screenshotAppearance.cornerRadius)
+        screenshotCornerRadiusLabel.identifier = NSUserInterfaceItemIdentifier("screenshotCornerRadiusValue")
+
+        let cornerRow = makeAppearanceControlRow(
+            checkbox: screenshotRoundedCornersCheckbox,
+            label: "默认圆角大小:",
+            slider: screenshotCornerRadiusSlider,
+            valueLabel: screenshotCornerRadiusLabel
+        )
+
         let imageSection = makeSection(
             title: "图片",
-            views: [locationRow, formatRow]
+            views: [locationRow, formatRow, shadowRow, cornerRow]
         )
 
         // --- 截图 ---
@@ -1332,6 +1394,65 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         return button
     }
 
+    private func makeAppearanceSlider(
+        range: ClosedRange<CGFloat>,
+        value: CGFloat,
+        action: Selector
+    ) -> NSSlider {
+        let slider = NSSlider(
+            value: Double(value),
+            minValue: Double(range.lowerBound),
+            maxValue: Double(range.upperBound),
+            target: self,
+            action: action
+        )
+        slider.numberOfTickMarks = 0
+        slider.widthAnchor.constraint(equalToConstant: 170).isActive = true
+        return slider
+    }
+
+    private func makePointValueLabel(_ value: CGFloat) -> NSTextField {
+        let label = NSTextField(labelWithString: "\(Int(value.rounded())) pt")
+        label.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        label.alignment = .right
+        label.widthAnchor.constraint(equalToConstant: 48).isActive = true
+        return label
+    }
+
+    private func makeAppearanceControlRow(
+        checkbox: NSButton,
+        label: String,
+        slider: NSSlider,
+        valueLabel: NSTextField,
+        extraLabel: String? = nil,
+        extraView: NSView? = nil
+    ) -> NSStackView {
+        checkbox.widthAnchor.constraint(equalToConstant: 154).isActive = true
+
+        let labelField = NSTextField(labelWithString: label)
+        labelField.font = .systemFont(ofSize: 13)
+        labelField.alignment = .right
+        labelField.widthAnchor.constraint(equalToConstant: 116).isActive = true
+
+        let views: [NSView]
+        if let extraLabel, let extraView {
+            let extraLabelField = NSTextField(labelWithString: extraLabel)
+            extraLabelField.font = .systemFont(ofSize: 13)
+            extraLabelField.alignment = .right
+            extraLabelField.widthAnchor.constraint(equalToConstant: 44).isActive = true
+            views = [checkbox, labelField, slider, valueLabel, extraLabelField, extraView]
+        } else {
+            views = [checkbox, labelField, slider, valueLabel]
+        }
+
+        let row = NSStackView(views: views)
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 8
+        row.translatesAutoresizingMaskIntoConstraints = false
+        return row
+    }
+
     // MARK: - Actions
 
     @objc private func toggleLaunchAtLogin() {
@@ -1365,6 +1486,32 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         guard let title = formatPopUp.titleOfSelectedItem,
               let format = AppPreferences.ImageFormat.allCases.first(where: { $0.displayName == title }) else { return }
         AppPreferences.imageFormat = format
+    }
+
+    @objc private func toggleScreenshotShadow() {
+        ScreenshotAppearancePreferences.setAddsShadow(screenshotShadowCheckbox.state == .on)
+    }
+
+    @objc private func toggleScreenshotRoundedCorners() {
+        ScreenshotAppearancePreferences.setAddsRoundedCorners(screenshotRoundedCornersCheckbox.state == .on)
+    }
+
+    @objc private func changeScreenshotShadowSize() {
+        let value = CGFloat(screenshotShadowSizeSlider.doubleValue.rounded())
+        screenshotShadowSizeSlider.doubleValue = Double(value)
+        screenshotShadowSizeLabel.stringValue = "\(Int(value)) pt"
+        ScreenshotAppearancePreferences.setShadowSize(value)
+    }
+
+    @objc private func changeScreenshotShadowColor() {
+        ScreenshotAppearancePreferences.setShadowColor(screenshotShadowColorWell.color)
+    }
+
+    @objc private func changeScreenshotCornerRadius() {
+        let value = CGFloat(screenshotCornerRadiusSlider.doubleValue.rounded())
+        screenshotCornerRadiusSlider.doubleValue = Double(value)
+        screenshotCornerRadiusLabel.stringValue = "\(Int(value)) pt"
+        ScreenshotAppearancePreferences.setCornerRadius(value)
     }
 
     @objc private func toggleSelectionMagnifier() {
@@ -2636,12 +2783,13 @@ final class CaptureController {
         pinDisplaySize: CGSize? = nil,
         options: CaptureOutputOptions = .currentWatermark
     ) throws {
-        let image = try finalImage(from: image, options: options)
         switch action {
         case .copy:
+            let image = try finalImage(from: image, options: options)
             try ScreenshotWriter.copyToPasteboard(image)
             FeedbackSound.playCopyCompleted()
         case .saveToDownloads:
+            let image = try finalImage(from: image, options: options)
             let url = try ScreenshotWriter.writeImage(image)
             FeedbackSound.playSaveCompleted()
             NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -3871,7 +4019,12 @@ final class SelectionOverlayView: NSView {
                     actionBar.setBusy(false)
                     return
                 }
-                let image = try annotationCanvas.renderedImage()
+                let image: CGImage
+                if action == .pin, let croppedImage = croppedFrozenImage(for: selection) {
+                    image = try annotationCanvas.renderedImage(baseImage: croppedImage)
+                } else {
+                    image = try annotationCanvas.renderedImage()
+                }
                 onAnnotatedFinished?(image, action, selection.size, annotatedOutputOptions ?? .noWatermark)
             } catch {
                 isSubmitting = false
@@ -4649,7 +4802,10 @@ final class SelectionOverlayView: NSView {
 }
 
 enum ScreenshotWriter {
-    static func copyToPasteboard(_ image: CGImage) throws {
+    static func copyToPasteboard(_ image: CGImage, appliesScreenshotAppearance: Bool = true) throws {
+        let image = appliesScreenshotAppearance
+            ? try ScreenshotAppearanceRenderer.render(image: image)
+            : image
         let bitmap = NSBitmapImageRep(cgImage: image)
         guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
             throw makeError(code: 1, message: "无法生成剪贴板图片。")
@@ -4665,10 +4821,17 @@ enum ScreenshotWriter {
     static func writeImage(
         _ image: CGImage,
         to directory: URL? = nil,
-        format: AppPreferences.ImageFormat? = nil
+        format: AppPreferences.ImageFormat? = nil,
+        appliesScreenshotAppearance: Bool = true
     ) throws -> URL {
         let dir = directory ?? AppPreferences.saveLocation
         let fmt = format ?? AppPreferences.imageFormat
+        var image = appliesScreenshotAppearance
+            ? try ScreenshotAppearanceRenderer.render(image: image)
+            : image
+        if fmt == .jpg {
+            image = try flattenedOnWhite(image)
+        }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
@@ -4711,6 +4874,28 @@ enum ScreenshotWriter {
 
     private static func makeError(code: Int, message: String) -> NSError {
         NSError(domain: "SnapInk", code: code, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    private static func flattenedOnWhite(_ image: CGImage) throws -> CGImage {
+        guard let context = CGContext(
+            data: nil,
+            width: image.width,
+            height: image.height,
+            bitsPerComponent: 8,
+            bytesPerRow: image.width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            throw makeError(code: 6, message: "无法生成 JPG 背景。")
+        }
+        let rect = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        context.setFillColor(NSColor.white.cgColor)
+        context.fill(rect)
+        context.draw(image, in: rect)
+        guard let output = context.makeImage() else {
+            throw makeError(code: 7, message: "无法生成 JPG 背景。")
+        }
+        return output
     }
 }
 

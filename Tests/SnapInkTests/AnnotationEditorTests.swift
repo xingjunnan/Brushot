@@ -127,6 +127,18 @@ final class AnnotationEditorTests: XCTestCase {
         XCTAssertEqual(button.state, .off)
     }
 
+    func testAnnotationCanvasCanRenderWithReplacementBaseImage() throws {
+        let canvas = AnnotationCanvasView(
+            frame: CGRect(x: 0, y: 0, width: 80, height: 60),
+            baseImage: try makeImage(width: 80, height: 60)
+        )
+        let replacement = try makeImage(width: 80, height: 60, color: .black)
+
+        let rendered = try canvas.renderedImage(baseImage: replacement)
+
+        XCTAssertEqual(try bitmapBytes(rendered), try bitmapBytes(replacement))
+    }
+
     func testToolbarLongCaptureButtonInvokesActionAndCanBeDisabled() throws {
         let toolbar = AnnotationToolbarView(frame: CGRect(x: 0, y: 0, width: 650, height: 72))
         var invocationCount = 0
@@ -359,6 +371,42 @@ final class AnnotationEditorTests: XCTestCase {
 
         XCTAssertNil(submittedOptions?.watermarkConfiguration)
         XCTAssertEqual(submittedOptions?.capturedAt, capturedAt)
+    }
+
+    func testAnnotationPinUsesUnwatermarkedBaseImage() throws {
+        let overlay = SelectionOverlayView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        overlay.mouseDown(with: try mouseEvent(type: .leftMouseDown, at: CGPoint(x: 50, y: 50)))
+        overlay.mouseDragged(with: try mouseEvent(type: .leftMouseDragged, at: CGPoint(x: 200, y: 180)))
+        overlay.mouseUp(with: try mouseEvent(type: .leftMouseUp, at: CGPoint(x: 200, y: 180)))
+
+        var watermark = WatermarkConfiguration.default
+        watermark.isEnabled = true
+        watermark.text = "SnapInk"
+        watermark.opacity = 1
+        watermark.textColor = .black
+        overlay.enterAnnotationEditing(
+            baseImage: try makeImage(width: 400, height: 300),
+            initialTool: .rectangle,
+            outputOptions: CaptureOutputOptions(
+                watermarkConfiguration: watermark,
+                capturedAt: Date(timeIntervalSince1970: 0)
+            )
+        )
+
+        let canvas = try XCTUnwrap(overlay.subviews.compactMap { $0 as? AnnotationCanvasView }.first)
+        let plainSelection = try makeImage(width: 150, height: 130)
+        XCTAssertGreaterThan(try changedPixelCount(between: plainSelection, and: canvas.baseImage), 0)
+
+        var submittedImage: CGImage?
+        overlay.onAnnotatedFinished = { image, action, _, _ in
+            if case .pin = action { submittedImage = image }
+        }
+        let pinButton = try XCTUnwrap(descendants(of: overlay).compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "pinAction"
+        })
+        pinButton.performClick(nil)
+
+        XCTAssertEqual(try bitmapBytes(try XCTUnwrap(submittedImage)), try bitmapBytes(plainSelection))
     }
 
     func testFinalizedCaptureAreaCanResizeBeforeEnteringAnnotationMode() throws {
@@ -952,6 +1000,10 @@ final class AnnotationEditorTests: XCTestCase {
     }
 
     private func makeImage(width: Int, height: Int) throws -> CGImage {
+        try makeImage(width: width, height: height, color: .white)
+    }
+
+    private func makeImage(width: Int, height: Int, color: NSColor) throws -> CGImage {
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
         let context = try XCTUnwrap(CGContext(
             data: nil,
@@ -962,7 +1014,7 @@ final class AnnotationEditorTests: XCTestCase {
             space: colorSpace,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ))
-        context.setFillColor(NSColor.white.cgColor)
+        context.setFillColor(color.cgColor)
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         return try XCTUnwrap(context.makeImage())
     }

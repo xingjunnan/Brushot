@@ -255,10 +255,14 @@ final class AnnotationCanvasView: NSView {
     }
 
     func renderedImage() throws -> CGImage {
+        try renderedImage(baseImage: baseImage)
+    }
+
+    func renderedImage(baseImage renderBaseImage: CGImage) throws -> CGImage {
         cancelPendingSingleClick()
         finishInlineText(commit: true)
         return try AnnotationRenderer.render(
-            baseImage: baseImage,
+            baseImage: renderBaseImage,
             canvasSize: bounds.size,
             items: rendererItems(document.items)
         )

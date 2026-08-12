@@ -533,7 +533,9 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func annotateAction() { beginAnnotation() }
-    @objc private func copyAction() { try? ScreenshotWriter.copyToPasteboard(image) }
+    @objc private func copyAction() {
+        try? ScreenshotWriter.copyToPasteboard(image, appliesScreenshotAppearance: false)
+    }
     @objc private func closeAction() { closePin() }
     @objc private func opacityAction(_ sender: NSMenuItem) { setOpacity(CGFloat(sender.tag) / 100) }
     @objc private func cornerAction(_ sender: NSMenuItem) { setCornerRadius(CGFloat(sender.tag)) }
@@ -973,7 +975,7 @@ final class PinAnnotationEditorWindowController: NSWindowController {
         toolbar.onCancel = { [weak self] in self?.cancel() }
         toolbar.onCopy = { [weak self] in
             guard let image = try? self?.canvas.renderedImage() else { return }
-            try? ScreenshotWriter.copyToPasteboard(image)
+            try? ScreenshotWriter.copyToPasteboard(image, appliesScreenshotAppearance: false)
         }
         toolbar.onSave = { [weak self] in self?.finish() }
         toolbar.onPin = { [weak self] in self?.finish() }
