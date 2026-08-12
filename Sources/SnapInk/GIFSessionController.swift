@@ -787,7 +787,29 @@ final class RecordingStartBar: NSVisualEffectView {
         target: self,
         action: #selector(startAction)
     )
-    private let silentHint = NSTextField(labelWithString: "GIF 将以静音方式录制")
+    private let watermarkCheckbox = NSButton(
+        checkboxWithTitle: "水印",
+        target: nil,
+        action: nil
+    )
+    private lazy var audioLabel = makeSectionLabel("视频音频")
+    private lazy var watermarkInfoButton: NSButton = {
+        if #available(macOS 11.0, *) {
+            let button = NSButton(
+                image: NSImage(systemSymbolName: "info.circle", accessibilityDescription: "录制水印说明")
+                    ?? NSImage(size: CGSize(width: 14, height: 14)),
+                target: self,
+                action: #selector(showWatermarkInfo)
+            )
+            button.isBordered = false
+            button.imagePosition = .imageOnly
+            return button
+        }
+        let button = NSButton(title: "?", target: self, action: #selector(showWatermarkInfo))
+        button.bezelStyle = .circular
+        return button
+    }()
+    private let silentHint = NSTextField(labelWithString: "GIF 录制为静音")
     private var hasMicrophones = false
 
     override init(frame frameRect: NSRect) {
@@ -800,14 +822,15 @@ final class RecordingStartBar: NSVisualEffectView {
         layer?.masksToBounds = true
 
         let formatLabel = makeSectionLabel("录制格式")
-        let audioLabel = makeSectionLabel("视频音频")
         formatControl.selectedSegment = 0
         formatControl.identifier = NSUserInterfaceItemIdentifier("recordingFormatControl")
         audioCheckbox.state = RecordingPreferences.systemAudioEnabled() ? .on : .off
         audioCheckbox.target = self
         audioCheckbox.action = #selector(audioChanged)
         audioCheckbox.identifier = NSUserInterfaceItemIdentifier("recordingSystemAudio")
-
+        watermarkCheckbox.target = self
+        watermarkCheckbox.action = #selector(watermarkChanged)
+        watermarkCheckbox.identifier = NSUserInterfaceItemIdentifier("recordingWatermark")
         let devices = RecordingMicrophones.availableDevices()
         hasMicrophones = !devices.isEmpty
         for device in devices {
@@ -845,7 +868,19 @@ final class RecordingStartBar: NSVisualEffectView {
 
         silentHint.font = .systemFont(ofSize: 12)
         silentHint.textColor = .secondaryLabelColor
-        let audioRow = NSStackView(views: [audioLabel, audioCheckbox, microphoneCheckbox, microphonePopup, silentHint])
+        watermarkInfoButton.identifier = NSUserInterfaceItemIdentifier("recordingWatermarkInfo")
+        watermarkInfoButton.toolTip = "导出时添加水印，不会出现在录制过程中"
+        watermarkInfoButton.widthAnchor.constraint(equalToConstant: 18).isActive = true
+        watermarkInfoButton.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        let audioRow = NSStackView(views: [
+            audioLabel,
+            audioCheckbox,
+            microphoneCheckbox,
+            microphonePopup,
+            watermarkCheckbox,
+            watermarkInfoButton,
+            silentHint
+        ])
         audioRow.orientation = .horizontal
         audioRow.alignment = .centerY
         audioRow.spacing = 10
@@ -865,6 +900,7 @@ final class RecordingStartBar: NSVisualEffectView {
             formatLabel.widthAnchor.constraint(equalToConstant: 58),
             audioLabel.widthAnchor.constraint(equalToConstant: 58)
         ])
+        updateWatermarkState()
         updateFormatState()
     }
 
@@ -880,10 +916,33 @@ final class RecordingStartBar: NSVisualEffectView {
         let enabled = microphoneCheckbox.state == .on
         RecordingPreferences.setMicrophoneEnabled(enabled)
         microphonePopup.isEnabled = formatControl.selectedSegment == 0 && enabled && hasMicrophones
+        guard enabled else { return }
+
+        Task { [weak self] in
+            let granted = await RecordingMicrophones.requestPermission()
+            guard let self else { return }
+            guard self.microphoneCheckbox.state == .on else { return }
+            if !granted {
+                self.microphoneCheckbox.state = .off
+                RecordingPreferences.setMicrophoneEnabled(false)
+                self.microphonePopup.isEnabled = false
+                self.showMicrophonePermissionAlert()
+            }
+        }
     }
 
     @objc private func microphoneDeviceChanged() {
         RecordingPreferences.setMicrophoneDeviceID(selectedMicrophoneID)
+    }
+
+    @objc private func watermarkChanged() {
+        guard WatermarkPreferences.load().hasRenderableContent else {
+            watermarkCheckbox.state = .off
+            updateWatermarkState()
+            return
+        }
+        WatermarkPreferences.setRecordingEnabled(watermarkCheckbox.state == .on)
+        updateWatermarkState()
     }
 
     private var selectedMicrophoneID: String? {
@@ -907,6 +966,10 @@ final class RecordingStartBar: NSVisualEffectView {
 
     private func updateFormatState() {
         let isVideo = formatControl.selectedSegment == 0
+        audioLabel.isHidden = !isVideo
+        audioCheckbox.isHidden = !isVideo
+        microphoneCheckbox.isHidden = !isVideo
+        microphonePopup.isHidden = !isVideo
         audioCheckbox.isEnabled = isVideo
         microphoneCheckbox.isEnabled = isVideo && hasMicrophones
         microphonePopup.isEnabled = isVideo && hasMicrophones && microphoneCheckbox.state == .on
@@ -914,12 +977,127 @@ final class RecordingStartBar: NSVisualEffectView {
         startButton.title = isVideo ? "开始录制视频" : "开始录制 GIF"
     }
 
+    private func updateWatermarkState() {
+        let hasWatermarkContent = WatermarkPreferences.load().hasRenderableContent
+        if !hasWatermarkContent {
+            watermarkCheckbox.state = .off
+            WatermarkPreferences.setRecordingEnabled(false)
+        } else if WatermarkPreferences.recordingEnabled() {
+            watermarkCheckbox.state = .on
+        }
+        watermarkCheckbox.isEnabled = hasWatermarkContent
+        watermarkCheckbox.toolTip = hasWatermarkContent
+            ? "导出时添加水印，不会在录制画面中显示"
+            : "请先在水印设置中填写文字或选择 Logo"
+        watermarkInfoButton.toolTip = hasWatermarkContent
+            ? "导出时添加水印，不会出现在录制过程中"
+            : "请先在水印设置中填写文字或选择 Logo"
+    }
+
     @objc private func cancelAction() { onCancel?() }
+
+    @objc private func showWatermarkInfo() {
+        let popover = NSPopover()
+        popover.behavior = .transient
+        let hasContent = WatermarkPreferences.load().hasRenderableContent
+        popover.contentSize = WatermarkInfoViewController.preferredSize(
+            scope: .recording,
+            hasWatermarkContent: hasContent
+        )
+        popover.contentViewController = WatermarkInfoViewController(
+            scope: .recording,
+            hasWatermarkContent: hasContent
+        )
+        popover.show(relativeTo: watermarkInfoButton.bounds, of: watermarkInfoButton, preferredEdge: .maxY)
+    }
+
+    private func showMicrophonePermissionAlert() {
+        let alert = NSAlert()
+        alert.messageText = "需要麦克风权限"
+        alert.informativeText = "请在“系统设置 > 隐私与安全性 > 麦克风”中允许 SnapInk，然后重试。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "打开系统设置")
+        alert.addButton(withTitle: "取消")
+        if alert.runModal() == .alertFirstButtonReturn,
+           let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+            NSWorkspace.shared.open(url)
+        }
+    }
 
     private func makeSectionLabel(_ title: String) -> NSTextField {
         let label = NSTextField(labelWithString: title)
         label.font = .systemFont(ofSize: 12, weight: .medium)
         label.textColor = .secondaryLabelColor
         return label
+    }
+
+}
+
+@MainActor
+final class WatermarkInfoViewController: NSViewController {
+    enum Scope {
+        case screenshot
+        case recording
+        case combined
+    }
+
+    private let scope: Scope
+    private let hasWatermarkContent: Bool
+
+    static func preferredSize(scope: Scope, hasWatermarkContent: Bool) -> CGSize {
+        let height: CGFloat
+        if !hasWatermarkContent {
+            height = 88
+        } else {
+            height = switch scope {
+            case .screenshot: 88
+            case .recording: 102
+            case .combined: 96
+            }
+        }
+        return CGSize(width: 280, height: height)
+    }
+
+    init(scope: Scope, hasWatermarkContent: Bool) {
+        self.scope = scope
+        self.hasWatermarkContent = hasWatermarkContent
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func loadView() {
+        let size = Self.preferredSize(scope: scope, hasWatermarkContent: hasWatermarkContent)
+        let view = NSView(frame: CGRect(origin: .zero, size: size))
+        let label = NSTextField(labelWithString: infoText)
+        label.font = .systemFont(ofSize: 12)
+        label.textColor = .labelColor
+        label.lineBreakMode = .byWordWrapping
+        label.maximumNumberOfLines = 0
+        label.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
+            label.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
+            label.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
+            label.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor, constant: -12)
+        ])
+        self.view = view
+    }
+
+    private var infoText: String {
+        if !hasWatermarkContent {
+            return "请先在水印设置中填写文字或选择 Logo。\n\n没有可渲染的内容时，截图水印和录制水印都无法启用。"
+        }
+        switch scope {
+        case .screenshot:
+            return "截图水印会应用到截图、复制、保存、贴图等图片输出。\n\nOCR 仍读取原始图片，不受水印影响。"
+        case .recording:
+            return "水印在录制结束导出时添加，不会出现在录制过程中。\n\n开启后 MP4 需要重新编码，导出更久且画质可能轻微变化。"
+        case .combined:
+            return "截图水印和录制水印共享同一套文字、Logo、位置和样式。\n\n录制水印在导出时添加，MP4 可能需要更久导出。"
+        }
     }
 }

@@ -138,6 +138,35 @@ final class RecordingExporterTests: XCTestCase {
         XCTAssertEqual(properties[kCGImagePropertyPixelHeight] as? Int, 180)
     }
 
+    func testGIFExportCanApplyWatermark() async throws {
+        let source = try await makeSyntheticMOV(width: 320, height: 180, frameCount: 12, fps: 6)
+        let plain = temporaryURL(extension: "gif")
+        let watermarked = temporaryURL(extension: "gif")
+        defer {
+            try? FileManager.default.removeItem(at: source)
+            try? FileManager.default.removeItem(at: plain)
+            try? FileManager.default.removeItem(at: watermarked)
+        }
+        var watermark = WatermarkConfiguration.default
+        watermark.isEnabled = true
+        watermark.text = "SnapInk"
+        watermark.opacity = 1
+        watermark.textColor = .white
+
+        _ = try await RecordingExporter.export(source: source, format: .gif, destination: plain)
+        _ = try await RecordingExporter.export(
+            source: source,
+            format: .gif,
+            destination: watermarked,
+            watermarkConfiguration: watermark,
+            watermarkContext: WatermarkContext(capturedAt: Date(timeIntervalSince1970: 0))
+        )
+
+        let plainFrame = try firstGIFFrame(from: plain)
+        let watermarkedFrame = try firstGIFFrame(from: watermarked)
+        XCTAssertGreaterThan(try changedPixelCount(between: plainFrame, and: watermarkedFrame), 0)
+    }
+
     private func makeSyntheticMOV(
         width: Int,
         height: Int,
@@ -210,6 +239,41 @@ final class RecordingExporterTests: XCTestCase {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("SnapInk-RecordingTests-\(UUID().uuidString)")
             .appendingPathExtension(pathExtension)
+    }
+
+    private func firstGIFFrame(from url: URL) throws -> CGImage {
+        let source = try XCTUnwrap(CGImageSourceCreateWithURL(url as CFURL, nil))
+        return try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+    }
+
+    private func changedPixelCount(between first: CGImage, and second: CGImage) throws -> Int {
+        XCTAssertEqual(first.width, second.width)
+        XCTAssertEqual(first.height, second.height)
+        let firstData = try rgbaData(from: first)
+        let secondData = try rgbaData(from: second)
+        return stride(from: 0, to: firstData.count, by: 4).reduce(0) { count, offset in
+            firstData[offset..<(offset + 4)].elementsEqual(secondData[offset..<(offset + 4)])
+                ? count
+                : count + 1
+        }
+    }
+
+    private func rgbaData(from image: CGImage) throws -> [UInt8] {
+        var data = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: &data,
+            width: image.width,
+            height: image.height,
+            bitsPerComponent: 8,
+            bytesPerRow: image.width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            throw RecordingExportError.exportFailed("无法读取测试图片像素。")
+        }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return data
     }
 
     private func makeVideoSampleBuffer(
@@ -335,12 +399,20 @@ final class RecordingInteractionTests: XCTestCase {
     func testFormatChooserOffersVideoGIFAndPersistedAudioToggle() throws {
         let originalAudioPreference = RecordingPreferences.systemAudioEnabled()
         let originalMicrophonePreference = RecordingPreferences.microphoneEnabled()
+        let originalWatermarkPreference = WatermarkPreferences.recordingEnabled()
+        let originalWatermark = WatermarkPreferences.load()
         defer {
             RecordingPreferences.setSystemAudioEnabled(originalAudioPreference)
             RecordingPreferences.setMicrophoneEnabled(originalMicrophonePreference)
+            WatermarkPreferences.setRecordingEnabled(originalWatermarkPreference)
+            WatermarkPreferences.save(originalWatermark)
         }
         RecordingPreferences.setSystemAudioEnabled(false)
         RecordingPreferences.setMicrophoneEnabled(false)
+        var watermark = WatermarkConfiguration.default
+        watermark.text = "SnapInk"
+        WatermarkPreferences.save(watermark)
+        WatermarkPreferences.setRecordingEnabled(false)
         let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 104))
         let buttons = descendants(of: bar).compactMap { $0 as? NSButton }
         let start = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "startRecordingAction" })
@@ -348,17 +420,28 @@ final class RecordingInteractionTests: XCTestCase {
             $0.identifier?.rawValue == "recordingFormatControl"
         })
         let audio = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingSystemAudio" })
-        XCTAssertNotNil(buttons.first { $0.identifier?.rawValue == "recordingMicrophone" })
+        let microphone = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingMicrophone" })
+        let watermarkButton = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingWatermark" })
+        let watermarkInfo = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingWatermarkInfo" })
+        XCTAssertTrue(watermarkButton.isEnabled)
+        XCTAssertEqual(watermarkInfo.toolTip, "导出时添加水印，不会出现在录制过程中")
+        let labels = descendants(of: bar).compactMap { $0 as? NSTextField }
+        let audioLabel = try XCTUnwrap(labels.first { $0.stringValue == "视频音频" })
+        let silentHint = try XCTUnwrap(labels.first { $0.stringValue == "GIF 录制为静音" })
         var received: [(RecordingFormat, Bool, Bool)] = []
         bar.onStart = { (format: RecordingFormat, systemAudio: Bool, microphone: Bool, _: String?) in
             received.append((format, systemAudio, microphone))
         }
 
         audio.performClick(nil)
+        watermarkButton.performClick(nil)
         start.performClick(nil)
         format.selectedSegment = 1
         format.performClick(nil)
-        XCTAssertFalse(audio.isEnabled)
+        XCTAssertTrue(audioLabel.isHidden)
+        XCTAssertTrue(audio.isHidden)
+        XCTAssertTrue(microphone.isHidden)
+        XCTAssertFalse(silentHint.isHidden)
         XCTAssertEqual(start.title, "开始录制 GIF")
         start.performClick(nil)
 
@@ -366,6 +449,31 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertEqual(received.map(\.1), [true, false])
         XCTAssertEqual(received.map(\.2), [false, false])
         XCTAssertTrue(RecordingPreferences.systemAudioEnabled())
+        XCTAssertTrue(WatermarkPreferences.recordingEnabled())
+    }
+
+    func testRecordingWatermarkCheckboxExplainsMissingContent() throws {
+        let originalWatermarkPreference = WatermarkPreferences.recordingEnabled()
+        let originalWatermark = WatermarkPreferences.load()
+        defer {
+            WatermarkPreferences.setRecordingEnabled(originalWatermarkPreference)
+            WatermarkPreferences.save(originalWatermark)
+        }
+        WatermarkPreferences.save(.default)
+        WatermarkPreferences.setRecordingEnabled(true)
+
+        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 104))
+        let buttons = descendants(of: bar).compactMap { $0 as? NSButton }
+        let watermarkButton = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingWatermark" })
+        let watermarkInfo = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingWatermarkInfo" })
+        let labels = descendants(of: bar).compactMap { $0 as? NSTextField }
+
+        XCTAssertFalse(watermarkButton.isEnabled)
+        XCTAssertEqual(watermarkButton.state, .off)
+        XCTAssertEqual(watermarkButton.toolTip, "请先在水印设置中填写文字或选择 Logo")
+        XCTAssertEqual(watermarkInfo.toolTip, "请先在水印设置中填写文字或选择 Logo")
+        XCTAssertFalse(WatermarkPreferences.recordingEnabled())
+        XCTAssertFalse(labels.contains { $0.stringValue.contains("录制水印会增加导出时间") })
     }
 
     func testRecordingAnnotationToolbarMatchesScreenshotToolbarStyle() throws {

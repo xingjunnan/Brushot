@@ -1,10 +1,12 @@
 import AVFoundation
+import AppKit
 import CoreGraphics
 import CoreImage
 import CoreMedia
 import CoreVideo
 import Foundation
 import ImageIO
+import QuartzCore
 import UniformTypeIdentifiers
 
 enum RecordingExportStage: Sendable {
@@ -36,6 +38,8 @@ enum RecordingExporter {
         source: URL,
         format: RecordingFormat,
         destination: URL,
+        watermarkConfiguration: WatermarkConfiguration? = nil,
+        watermarkContext: WatermarkContext = WatermarkContext(capturedAt: Date()),
         progress: Progress? = nil
     ) async throws -> URL {
         guard FileManager.default.fileExists(atPath: source.path) else {
@@ -44,9 +48,21 @@ enum RecordingExporter {
         try? FileManager.default.removeItem(at: destination)
         switch format {
         case .video:
-            return try await exportMP4(source: source, destination: destination, progress: progress)
+            return try await exportMP4(
+                source: source,
+                destination: destination,
+                watermarkConfiguration: watermarkConfiguration,
+                watermarkContext: watermarkContext,
+                progress: progress
+            )
         case .gif:
-            return try await exportGIF(source: source, destination: destination, progress: progress)
+            return try await exportGIF(
+                source: source,
+                destination: destination,
+                watermarkConfiguration: watermarkConfiguration,
+                watermarkContext: watermarkContext,
+                progress: progress
+            )
         }
     }
 
@@ -60,19 +76,32 @@ enum RecordingExporter {
     private static func exportMP4(
         source: URL,
         destination: URL,
+        watermarkConfiguration: WatermarkConfiguration?,
+        watermarkContext: WatermarkContext,
         progress: Progress?
     ) async throws -> URL {
         progress?(.preparing, 0)
         let asset = AVURLAsset(url: source)
         let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+        let videoTracks = try await asset.loadTracks(withMediaType: .video)
+        guard !videoTracks.isEmpty else { throw RecordingExportError.missingVideoTrack }
         let exportAsset: AVAsset
         let preset: String
         var audioMix: AVAudioMix?
-        if needsAudioMix(trackCount: audioTracks.count) {
+        var videoComposition: AVVideoComposition?
+        if watermarkConfiguration != nil || needsAudioMix(trackCount: audioTracks.count) {
             let mixed = try await makeMixedComposition(asset: asset, audioTracks: audioTracks)
             exportAsset = mixed.composition
             audioMix = mixed.audioMix
             preset = AVAssetExportPresetHighestQuality
+            if let watermarkConfiguration {
+                videoComposition = try await makeWatermarkVideoComposition(
+                    videoTrack: mixed.videoTrack,
+                    duration: try await asset.load(.duration),
+                    configuration: watermarkConfiguration,
+                    context: watermarkContext
+                )
+            }
         } else {
             exportAsset = asset
             preset = AVAssetExportPresetPassthrough
@@ -84,6 +113,7 @@ enum RecordingExporter {
         session.outputFileType = .mp4
         session.shouldOptimizeForNetworkUse = true
         session.audioMix = audioMix
+        session.videoComposition = videoComposition
         progress?(.encoding, 0.1)
         let sessionBox = SendableExportSession(session)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -105,7 +135,11 @@ enum RecordingExporter {
     private static func makeMixedComposition(
         asset: AVAsset,
         audioTracks: [AVAssetTrack]
-    ) async throws -> (composition: AVMutableComposition, audioMix: AVAudioMix) {
+    ) async throws -> (
+        composition: AVMutableComposition,
+        videoTrack: AVCompositionTrack,
+        audioMix: AVAudioMix
+    ) {
         let duration = try await asset.load(.duration)
         let timeRange = CMTimeRange(start: .zero, duration: duration)
         let composition = AVMutableComposition()
@@ -132,12 +166,67 @@ enum RecordingExporter {
         }
         let mix = AVMutableAudioMix()
         mix.inputParameters = parameters
-        return (composition, mix)
+        return (composition, video, mix)
+    }
+
+    private static func makeWatermarkVideoComposition(
+        videoTrack: AVAssetTrack,
+        duration: CMTime,
+        configuration: WatermarkConfiguration,
+        context: WatermarkContext
+    ) async throws -> AVMutableVideoComposition {
+        let naturalSize = try await videoTrack.load(.naturalSize)
+        let preferredTransform = try await videoTrack.load(.preferredTransform)
+        let transformed = CGRect(origin: .zero, size: naturalSize).applying(preferredTransform)
+        let renderSize = CGSize(
+            width: abs(transformed.width),
+            height: abs(transformed.height)
+        )
+        let width = max(1, Int(renderSize.width.rounded()))
+        let height = max(1, Int(renderSize.height.rounded()))
+        guard let watermarkImage = makeTransparentWatermarkImage(
+            width: width,
+            height: height,
+            configuration: configuration,
+            context: context
+        ) else {
+            throw RecordingExportError.exportFailed("无法生成录制水印。")
+        }
+
+        let instruction = AVMutableVideoCompositionInstruction()
+        instruction.timeRange = CMTimeRange(start: .zero, duration: duration)
+        let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
+        layerInstruction.setTransform(preferredTransform, at: .zero)
+        instruction.layerInstructions = [layerInstruction]
+
+        let videoLayer = CALayer()
+        videoLayer.frame = CGRect(x: 0, y: 0, width: width, height: height)
+        let watermarkLayer = CALayer()
+        watermarkLayer.frame = videoLayer.frame
+        watermarkLayer.contents = watermarkImage
+        watermarkLayer.contentsGravity = .resize
+        watermarkLayer.isGeometryFlipped = true
+        let parentLayer = CALayer()
+        parentLayer.frame = videoLayer.frame
+        parentLayer.addSublayer(videoLayer)
+        parentLayer.addSublayer(watermarkLayer)
+
+        let composition = AVMutableVideoComposition()
+        composition.renderSize = CGSize(width: width, height: height)
+        composition.frameDuration = CMTime(value: 1, timescale: 30)
+        composition.instructions = [instruction]
+        composition.animationTool = AVVideoCompositionCoreAnimationTool(
+            postProcessingAsVideoLayer: videoLayer,
+            in: parentLayer
+        )
+        return composition
     }
 
     private static func exportGIF(
         source: URL,
         destination: URL,
+        watermarkConfiguration: WatermarkConfiguration?,
+        watermarkContext: WatermarkContext,
         progress: Progress?
     ) async throws -> URL {
         try await Task.detached(priority: .userInitiated) {
@@ -181,7 +270,12 @@ enum RecordingExporter {
                 let pts = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample))
                 guard pts.isFinite, pts + 0.0001 >= nextTime,
                       let pixelBuffer = CMSampleBufferGetImageBuffer(sample),
-                      let image = makeGIFImage(from: pixelBuffer, maxWidth: 720) else { continue }
+                      let image = makeGIFImage(
+                        from: pixelBuffer,
+                        maxWidth: 720,
+                        watermarkConfiguration: watermarkConfiguration,
+                        watermarkContext: watermarkContext
+                      ) else { continue }
                 if let previous = pending {
                     addGIFFrame(previous.image, to: destinationRef, delay: max(0.02, pts - previous.time))
                     emitted += 1
@@ -216,7 +310,12 @@ enum RecordingExporter {
         ] as CFDictionary)
     }
 
-    private static func makeGIFImage(from pixelBuffer: CVPixelBuffer, maxWidth: Int) -> CGImage? {
+    private static func makeGIFImage(
+        from pixelBuffer: CVPixelBuffer,
+        maxWidth: Int,
+        watermarkConfiguration: WatermarkConfiguration? = nil,
+        watermarkContext: WatermarkContext = WatermarkContext(capturedAt: Date())
+    ) -> CGImage? {
         let sourceWidth = CVPixelBufferGetWidth(pixelBuffer)
         let sourceHeight = CVPixelBufferGetHeight(pixelBuffer)
         guard sourceWidth > 0, sourceHeight > 0 else { return nil }
@@ -241,7 +340,37 @@ enum RecordingExporter {
         ) else { return nil }
         context.interpolationQuality = .high
         context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
-        return context.makeImage()
+        guard let image = context.makeImage() else { return nil }
+        guard let watermarkConfiguration else { return image }
+        return try? WatermarkRenderer.render(
+            image: image,
+            configuration: watermarkConfiguration,
+            context: watermarkContext
+        )
+    }
+
+    private static func makeTransparentWatermarkImage(
+        width: Int,
+        height: Int,
+        configuration: WatermarkConfiguration,
+        context watermarkContext: WatermarkContext
+    ) -> CGImage? {
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.clear(CGRect(x: 0, y: 0, width: width, height: height))
+        guard let base = context.makeImage() else { return nil }
+        return try? WatermarkRenderer.render(
+            image: base,
+            configuration: configuration,
+            context: watermarkContext
+        )
     }
 }
 

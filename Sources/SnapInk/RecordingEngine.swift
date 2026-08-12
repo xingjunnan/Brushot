@@ -198,6 +198,8 @@ struct RecordingConfiguration: Sendable {
     var capturesMicrophone = false
     var microphoneDeviceID: String?
     var showsCursor = true
+    var watermarkConfiguration: WatermarkConfiguration?
+    var capturedAt = Date()
 }
 
 struct RecordingResult: Sendable {
@@ -205,6 +207,8 @@ struct RecordingResult: Sendable {
     let duration: TimeInterval
     let format: RecordingFormat
     let pixelSize: CGSize
+    let capturedAt: Date
+    let watermarkConfiguration: WatermarkConfiguration?
 }
 
 enum RecordingTimeline {
@@ -425,7 +429,9 @@ final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate {
             sourceURL: sourceURL,
             duration: duration,
             format: configuration.format,
-            pixelSize: pixelSize
+            pixelSize: pixelSize,
+            capturedAt: configuration.capturedAt,
+            watermarkConfiguration: configuration.watermarkConfiguration
         )
         reset()
         return result

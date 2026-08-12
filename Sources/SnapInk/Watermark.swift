@@ -4,7 +4,7 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-struct WatermarkConfiguration: Equatable {
+struct WatermarkConfiguration: Equatable, @unchecked Sendable {
     enum RepeatMode: String, CaseIterable {
         case single
         case diagonalTiled
@@ -78,6 +78,7 @@ enum WatermarkPreferences {
     static let maxSourceLogoPixelLength = 4_096
 
     private static let enabledKey = "watermark.enabled"
+    private static let recordingEnabledKey = "watermark.recordingEnabled"
     private static let textKey = "watermark.text"
     private static let logoPathKey = "watermark.logoPath"
     private static let logoDisplayNameKey = "watermark.logoDisplayName"
@@ -154,6 +155,24 @@ enum WatermarkPreferences {
         var config = load(defaults: defaults)
         config.isEnabled = enabled
         save(config, defaults: defaults)
+    }
+
+    static func recordingEnabled(defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: recordingEnabledKey)
+    }
+
+    static func setRecordingEnabled(_ enabled: Bool, defaults: UserDefaults = .standard) {
+        defaults.set(enabled, forKey: recordingEnabledKey)
+    }
+
+    static func currentRecordingConfiguration(
+        defaults: UserDefaults = .standard
+    ) -> WatermarkConfiguration? {
+        guard recordingEnabled(defaults: defaults) else { return nil }
+        var config = load(defaults: defaults)
+        guard config.hasRenderableContent else { return nil }
+        config.isEnabled = true
+        return config
     }
 
     static func importLogo(from sourceURL: URL) throws -> URL {

@@ -34,6 +34,7 @@ for ARCH in "${ARCHS[@]}"; do
         -framework CoreMedia \
         -framework CoreVideo \
         -framework ImageIO \
+        -framework QuartzCore \
         -framework ScreenCaptureKit \
         -framework SwiftUI \
         -framework Translation \

@@ -15,7 +15,7 @@ It supports macOS 13 or later on both Apple Silicon and Intel Macs through a Uni
 - per-tool color, opacity, width, line, fill, arrow, text, mosaic, and highlight styles
 - per-tool style persistence across launches
 - PNG output to Downloads
-- optional text and Logo watermarks for static screenshots, configured from the menu bar with `{date}`, `{time}`, `{datetime}` placeholders
+- optional text and Logo watermarks for screenshots and recordings, configured from the menu bar with `{date}`, `{time}`, `{datetime}` placeholders
 - screenshot and clipboard image pinning in always-on-top desktop windows
 - persistent pin library with SHA-256 content deduplication and up to 100 recent images
 - pin opacity, corner radius, current/all-desktop behavior, pixel-level arrow-key movement, and hide/show all
@@ -41,7 +41,7 @@ Choose `全屏截图` or press `Control + Option + F` to freeze the display unde
 
 Choose `延时截图…` or press `Control + Option + D` to select an area first, then start the countdown. SnapInk restores the live desktop during the countdown and captures the current pixels when time expires; its border and countdown HUD are hidden before capture. The delay defaults to 5 seconds and can be set from 1 to 60 seconds in Preferences, together with the countdown sound option.
 
-Watermarks can be configured from the menu bar via `水印设置…`, below `偏好设置…`. SnapInk supports text, Logo images, or both together, plus position, opacity, size, margin, and text color. Watermarks apply only to static screenshot outputs: area, full-screen, delayed, scrolling capture, copy, save, and screenshot pinning. OCR reads the original image, and video/GIF recording is not watermarked.
+Watermarks can be configured from the menu bar via `水印设置…`, below `偏好设置…`. SnapInk supports text, Logo images, or both together, plus position, opacity, size, margin, and text color. Screenshot and recording watermarks can be enabled independently while sharing the same visual style. Recording watermarks are burned into video/GIF pixels using the recording start time for `{date}`, `{time}`, and `{datetime}`. OCR reads the original image.
 
 Annotation tool shortcuts are `V/R/O/L/A/P/T/N/M/H`. Use `Command + Z` and `Shift + Command + Z` for undo and redo, and Delete to remove the selected annotation. While editing text, `Command + Return` commits and Escape cancels the text edit.
 
@@ -52,7 +52,7 @@ Sequence annotations are numeric badges only and increment automatically. Add ex
 ## Recording Workflow
 
 1. Choose `录屏…` from the menu bar or press its configurable shortcut (default `Option + R`).
-2. Select an area, then choose `录制视频` or `录制 GIF`. Video can capture system audio, a selected built-in/USB/Bluetooth microphone, or both; GIF is always silent.
+2. Select an area, then choose `录制视频` or `录制 GIF`. Video can capture system audio, a selected built-in/USB/Bluetooth microphone, or both; GIF is always silent. The `水印` checkbox uses the shared watermark settings and is applied during export before the preview appears, not while recording.
 3. During recording, use the floating controls to pause, resume, stop, or cancel. The real-time annotation bar follows the screenshot toolbar style and provides select, rectangle, arrow, pen, color, stroke width, undo, and redo controls; annotations enter both video and GIF output while the red border and controls stay excluded.
 4. After export, preview the result and save it to the configured location, copy it to the clipboard, or discard it.
 

@@ -1541,7 +1541,9 @@ private final class FlippedPreferencesView: NSView {
 
 final class WatermarkSettingsWindowController: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     private var watermarkCheckbox: NSButton!
-    private var watermarkContentHintLabel: NSTextField!
+    private var recordingWatermarkCheckbox: NSButton!
+    private var screenshotWatermarkInfoButton: NSButton!
+    private var recordingWatermarkInfoButton: NSButton!
     private var watermarkTextField: NSTextField!
     private var watermarkLogoLabel: NSTextField!
     private var watermarkRepeatModePopUp: NSPopUpButton!
@@ -1584,7 +1586,19 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
             action: #selector(toggleWatermarkEnabled)
         )
         watermarkCheckbox.state = watermarkConfig.isEnabled ? .on : .off
-        watermarkContentHintLabel = makeHelperLabel("")
+        recordingWatermarkCheckbox = makeCheckbox(
+            title: "应用到录制视频/GIF",
+            action: #selector(toggleRecordingWatermarkEnabled)
+        )
+        recordingWatermarkCheckbox.state = WatermarkPreferences.recordingEnabled() ? .on : .off
+        screenshotWatermarkInfoButton = makeInfoButton(
+            identifier: "watermarkScreenshotInfo",
+            action: #selector(showScreenshotWatermarkInfo)
+        )
+        recordingWatermarkInfoButton = makeInfoButton(
+            identifier: "watermarkRecordingInfo",
+            action: #selector(showRecordingWatermarkInfo)
+        )
         updateWatermarkContentHint(for: watermarkConfig)
 
         watermarkTextField = NSTextField(string: watermarkConfig.text)
@@ -1682,8 +1696,8 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         let section = makeSection(
             title: "水印",
             views: [
-                watermarkCheckbox,
-                makeIndentedView(watermarkContentHintLabel, indentation: 18),
+                makeCheckboxInfoRow(watermarkCheckbox, infoButton: screenshotWatermarkInfoButton),
+                makeCheckboxInfoRow(recordingWatermarkCheckbox, infoButton: recordingWatermarkInfoButton),
                 textGroup,
                 logoGroup,
                 repeatModeRow,
@@ -1785,6 +1799,35 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         return button
     }
 
+    private func makeInfoButton(identifier: String, action: Selector) -> NSButton {
+        let button: NSButton
+        if #available(macOS 11.0, *) {
+            button = NSButton(
+                image: NSImage(systemSymbolName: "info.circle", accessibilityDescription: "水印说明")
+                    ?? NSImage(size: CGSize(width: 14, height: 14)),
+                target: self,
+                action: action
+            )
+            button.isBordered = false
+            button.imagePosition = .imageOnly
+        } else {
+            button = NSButton(title: "?", target: self, action: action)
+            button.bezelStyle = .circular
+        }
+        button.identifier = NSUserInterfaceItemIdentifier(identifier)
+        button.widthAnchor.constraint(equalToConstant: 18).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        return button
+    }
+
+    private func makeCheckboxInfoRow(_ checkbox: NSButton, infoButton: NSButton) -> NSStackView {
+        let row = NSStackView(views: [checkbox, infoButton])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 6
+        return row
+    }
+
     private func makeValueLabel(_ text: String, width: CGFloat) -> NSTextField {
         let label = NSTextField(labelWithString: text)
         label.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
@@ -1794,10 +1837,20 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
     }
 
     @objc private func toggleWatermarkEnabled() {
-        let wasEnabled = applyWatermarkEnabledState(watermarkCheckbox.state == .on)
-        if watermarkCheckbox.state == .on, !wasEnabled {
-            showError(title: "无法启用水印", message: "请先填写水印文字或选择 Logo。")
+        _ = applyWatermarkEnabledState(watermarkCheckbox.state == .on)
+    }
+
+    @objc private func toggleRecordingWatermarkEnabled() {
+        let enabled = recordingWatermarkCheckbox.state == .on
+        let config = currentWatermarkConfiguration()
+        if enabled, !config.hasRenderableContent {
+            recordingWatermarkCheckbox.state = .off
+            WatermarkPreferences.setRecordingEnabled(false)
+            updateWatermarkContentHint(for: config)
+            return
         }
+        WatermarkPreferences.setRecordingEnabled(enabled)
+        updateWatermarkContentHint(for: config)
     }
 
     @discardableResult
@@ -1806,7 +1859,9 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         if enabled, !config.hasRenderableContent {
             config.isEnabled = false
             watermarkCheckbox.state = .off
+            recordingWatermarkCheckbox.state = .off
             WatermarkPreferences.save(config)
+            WatermarkPreferences.setRecordingEnabled(false)
             updateWatermarkContentHint(for: config)
             return false
         }
@@ -1820,9 +1875,12 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
     @objc private func changeWatermarkText() {
         var config = currentWatermarkConfiguration()
         config.text = watermarkTextField.stringValue
-        if config.isEnabled, !config.hasRenderableContent {
+        if !config.hasRenderableContent,
+           config.isEnabled || recordingWatermarkCheckbox.state == .on {
             config.isEnabled = false
             watermarkCheckbox.state = .off
+            recordingWatermarkCheckbox.state = .off
+            WatermarkPreferences.setRecordingEnabled(false)
         }
         WatermarkPreferences.save(config)
         updateWatermarkContentHint(for: config)
@@ -1859,6 +1917,8 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         if !config.hasRenderableContent {
             config.isEnabled = false
             watermarkCheckbox.state = .off
+            recordingWatermarkCheckbox.state = .off
+            WatermarkPreferences.setRecordingEnabled(false)
         }
         WatermarkPreferences.save(config)
         watermarkLogoLabel.stringValue = "未选择"
@@ -1931,12 +1991,39 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
 
     private func updateWatermarkContentHint(for config: WatermarkConfiguration) {
         if config.hasRenderableContent {
-            watermarkContentHintLabel.stringValue = "已配置水印内容，截图工具栏会显示水印按钮。"
-            watermarkContentHintLabel.textColor = .secondaryLabelColor
+            watermarkCheckbox.toolTip = "使用当前文字和 Logo 样式应用截图水印"
+            recordingWatermarkCheckbox.toolTip = "导出时添加水印，不会在录制过程中显示"
+            screenshotWatermarkInfoButton.toolTip = "截图水印说明"
+            recordingWatermarkInfoButton.toolTip = "录制水印说明"
         } else {
-            watermarkContentHintLabel.stringValue = "请先填写文字或选择 Logo，否则无法启用水印，截图工具栏也不会显示水印按钮。"
-            watermarkContentHintLabel.textColor = .systemOrange
+            watermarkCheckbox.toolTip = "请先填写水印文字或选择 Logo"
+            recordingWatermarkCheckbox.toolTip = "请先填写水印文字或选择 Logo"
+            screenshotWatermarkInfoButton.toolTip = "请先填写水印文字或选择 Logo"
+            recordingWatermarkInfoButton.toolTip = "请先填写水印文字或选择 Logo"
         }
+    }
+
+    @objc private func showScreenshotWatermarkInfo() {
+        showWatermarkInfo(scope: .screenshot, relativeTo: screenshotWatermarkInfoButton)
+    }
+
+    @objc private func showRecordingWatermarkInfo() {
+        showWatermarkInfo(scope: .recording, relativeTo: recordingWatermarkInfoButton)
+    }
+
+    private func showWatermarkInfo(scope: WatermarkInfoViewController.Scope, relativeTo button: NSButton) {
+        let hasContent = currentWatermarkConfiguration().hasRenderableContent
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentSize = WatermarkInfoViewController.preferredSize(
+            scope: scope,
+            hasWatermarkContent: hasContent
+        )
+        popover.contentViewController = WatermarkInfoViewController(
+            scope: scope,
+            hasWatermarkContent: hasContent
+        )
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .maxY)
     }
 
     private func showError(title: String, message: String) {
@@ -2542,7 +2629,9 @@ final class CaptureController {
                         capturesSystemAudio: format == .video && systemAudio,
                         capturesMicrophone: format == .video && microphone,
                         microphoneDeviceID: microphoneDeviceID,
-                        showsCursor: true
+                        showsCursor: true,
+                        watermarkConfiguration: WatermarkPreferences.currentRecordingConfiguration(),
+                        capturedAt: Date()
                     ),
                     onFinish: { [weak self] result in
                         guard let self else { return }
@@ -2554,14 +2643,14 @@ final class CaptureController {
                     },
                     onError: { [weak self] error in
                         self?.recordingSession = nil
-                        self?.showFailureAlert(message: error.localizedDescription)
+                        self?.showRecordingError(error)
                     }
                 )
                 recordingSession = session
                 session.start()
                 await capturer.prepareForOverlayExclusion()
             } catch {
-                showFailureAlert(message: error.localizedDescription)
+                showRecordingError(error)
             }
         }
     }
@@ -2582,6 +2671,8 @@ final class CaptureController {
                     source: result.sourceURL,
                     format: result.format,
                     destination: exportedURL,
+                    watermarkConfiguration: result.watermarkConfiguration,
+                    watermarkContext: WatermarkContext(capturedAt: result.capturedAt),
                     progress: { [weak progressWindow] stage, fraction in
                         Task { @MainActor in progressWindow?.update(stage: stage, fraction: fraction) }
                     }
@@ -2611,6 +2702,14 @@ final class CaptureController {
                 self.showFailureAlert(message: error.localizedDescription)
             }
         }
+    }
+
+    private func showRecordingError(_ error: Error) {
+        if case RecordingError.microphonePermissionDenied = error {
+            showMicrophonePermissionAlert()
+            return
+        }
+        showFailureAlert(message: error.localizedDescription)
     }
 
     private func showLongCapturePreview(image: CGImage, logicalWidth: CGFloat) {
@@ -2854,6 +2953,18 @@ final class CaptureController {
             NSApp.terminate(nil)
         default:
             break
+        }
+    }
+
+    private func showMicrophonePermissionAlert() {
+        let alert = NSAlert()
+        alert.messageText = "需要麦克风权限"
+        alert.informativeText = "请在“系统设置 > 隐私与安全性 > 麦克风”中允许 SnapInk，然后重试。"
+        alert.addButton(withTitle: "打开系统设置")
+        alert.addButton(withTitle: "取消")
+        if alert.runModal() == .alertFirstButtonReturn,
+           let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+            NSWorkspace.shared.open(url)
         }
     }
 

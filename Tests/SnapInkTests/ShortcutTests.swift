@@ -220,23 +220,37 @@ final class ShortcutTests: XCTestCase {
 
     func testWatermarkSettingsExplainsMissingContentAndBlocksEmptyEnable() throws {
         let previousWatermark = WatermarkPreferences.load()
-        defer { WatermarkPreferences.save(previousWatermark) }
+        let previousRecordingWatermark = WatermarkPreferences.recordingEnabled()
+        defer {
+            WatermarkPreferences.save(previousWatermark)
+            WatermarkPreferences.setRecordingEnabled(previousRecordingWatermark)
+        }
 
         WatermarkPreferences.save(.default)
+        WatermarkPreferences.setRecordingEnabled(false)
         let controller = WatermarkSettingsWindowController()
         let content = try XCTUnwrap(controller.window?.contentView)
-        let labels = descendants(of: content).compactMap { $0 as? NSTextField }
-        XCTAssertTrue(labels.contains {
-            $0.stringValue.contains("无法启用水印") && $0.stringValue.contains("工具栏")
-        })
+        let buttons = descendants(of: content).compactMap { $0 as? NSButton }
+        let screenshotInfo = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "watermarkScreenshotInfo" })
+        let recordingInfo = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "watermarkRecordingInfo" })
+        XCTAssertEqual(screenshotInfo.toolTip, "请先填写水印文字或选择 Logo")
+        XCTAssertEqual(recordingInfo.toolTip, "请先填写水印文字或选择 Logo")
 
         XCTAssertFalse(controller.applyWatermarkEnabledState(true))
         XCTAssertFalse(WatermarkPreferences.load().isEnabled)
+
+        let recording = try XCTUnwrap(buttons.first { $0.title == "应用到录制视频/GIF" })
+        recording.performClick(nil)
+        XCTAssertFalse(WatermarkPreferences.recordingEnabled())
     }
 
     func testWatermarkSettingsAllowsEnableAfterTextIsConfigured() throws {
         let previousWatermark = WatermarkPreferences.load()
-        defer { WatermarkPreferences.save(previousWatermark) }
+        let previousRecordingWatermark = WatermarkPreferences.recordingEnabled()
+        defer {
+            WatermarkPreferences.save(previousWatermark)
+            WatermarkPreferences.setRecordingEnabled(previousRecordingWatermark)
+        }
 
         var config = WatermarkConfiguration.default
         config.text = "SnapInk"

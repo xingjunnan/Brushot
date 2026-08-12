@@ -16,6 +16,23 @@ final class WatermarkTests: XCTestCase {
         XCTAssertEqual(config.opacity, 1)
         XCTAssertEqual(config.scale, 0.5)
         XCTAssertEqual(config.margin, 80)
+        XCTAssertFalse(WatermarkPreferences.recordingEnabled(defaults: defaults))
+    }
+
+    func testRecordingWatermarkPreferenceRequiresRenderableContent() throws {
+        let defaults = UserDefaults(suiteName: "WatermarkTests.\(UUID().uuidString)")!
+        WatermarkPreferences.setRecordingEnabled(true, defaults: defaults)
+
+        XCTAssertNil(WatermarkPreferences.currentRecordingConfiguration(defaults: defaults))
+
+        var config = WatermarkConfiguration.default
+        config.text = "SnapInk"
+        config.isEnabled = false
+        WatermarkPreferences.save(config, defaults: defaults)
+
+        let recording = try XCTUnwrap(WatermarkPreferences.currentRecordingConfiguration(defaults: defaults))
+        XCTAssertTrue(recording.isEnabled)
+        XCTAssertEqual(recording.text, "SnapInk")
     }
 
     func testPreferencesPersistDiagonalTiledRepeatModeAndFallbackToSingle() {
