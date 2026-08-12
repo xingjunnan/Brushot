@@ -181,6 +181,11 @@ final class ShortcutTests: XCTestCase {
             $0.identifier?.rawValue == "selectionMagnifierEnabled"
         } as? NSButton)
         XCTAssertEqual(selectionMagnifier.state, AppPreferences.selectionMagnifierEnabled ? .on : .off)
+        let completionSound = try XCTUnwrap(descendants(of: content).first {
+            $0.identifier?.rawValue == "completionSoundEnabled"
+        } as? NSButton)
+        XCTAssertEqual(completionSound.title, "播放操作完成提示音")
+        XCTAssertEqual(completionSound.state, AppPreferences.completionSoundEnabled ? .on : .off)
         let shortcutGroups = try XCTUnwrap(descendants(of: content).first {
             $0.identifier?.rawValue == "shortcutGroups"
         } as? NSStackView)
@@ -264,6 +269,18 @@ final class ShortcutTests: XCTestCase {
         XCTAssertTrue(AppPreferences.selectionMagnifierEnabled(defaults: defaults))
         AppPreferences.setSelectionMagnifierEnabled(false, defaults: defaults)
         XCTAssertFalse(AppPreferences.selectionMagnifierEnabled(defaults: defaults))
+    }
+
+    func testCompletionSoundPreferenceDefaultsOnAndPersists() throws {
+        let suiteName = "SnapInk.CompletionSound.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertTrue(AppPreferences.completionSoundEnabled(defaults: defaults))
+        AppPreferences.setCompletionSoundEnabled(false, defaults: defaults)
+        XCTAssertFalse(AppPreferences.completionSoundEnabled(defaults: defaults))
+        AppPreferences.setCompletionSoundEnabled(true, defaults: defaults)
+        XCTAssertTrue(AppPreferences.completionSoundEnabled(defaults: defaults))
     }
 
     private func descendants(of view: NSView) -> [NSView] {

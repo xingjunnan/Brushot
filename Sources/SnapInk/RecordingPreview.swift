@@ -186,7 +186,7 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
             )
             try FileManager.default.moveItem(at: fileURL, to: destination)
             ownsFile = false
-            NSSound(named: "Glass")?.play()
+            FeedbackSound.playSaveCompleted()
             NSWorkspace.shared.activateFileViewerSelecting([destination])
             close()
         } catch {
@@ -213,7 +213,7 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
                     throw RecordingExportError.exportFailed("无法写入剪贴板。")
                 }
             }
-            NSSound(named: "Tink")?.play()
+            FeedbackSound.playCopyCompleted()
         } catch {
             showError(error.localizedDescription)
         }

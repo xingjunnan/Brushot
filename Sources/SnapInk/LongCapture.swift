@@ -1454,7 +1454,7 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
     @objc private func copyAction() {
         do {
             try ScreenshotWriter.copyToPasteboard(outputImage())
-            NSSound(named: "Tink")?.play()
+            FeedbackSound.playCopyCompleted()
         } catch {
             showError(error.localizedDescription)
         }
@@ -1463,7 +1463,7 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
     @objc private func saveAction() {
         do {
             let url = try ScreenshotWriter.writeImage(outputImage())
-            NSSound(named: "Glass")?.play()
+            FeedbackSound.playSaveCompleted()
             NSWorkspace.shared.activateFileViewerSelecting([url])
         } catch {
             showError(error.localizedDescription)

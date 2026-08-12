@@ -313,6 +313,7 @@ enum AppPreferences {
     private static let saveLocationKey = "saveLocation"
     private static let imageFormatKey = "imageFormat"
     private static let selectionMagnifierEnabledKey = "selectionMagnifierEnabled"
+    private static let completionSoundEnabledKey = "completionSoundEnabled"
 
     // MARK: - Launch at login
 
@@ -413,6 +414,41 @@ enum AppPreferences {
         defaults: UserDefaults = .standard
     ) {
         defaults.set(enabled, forKey: selectionMagnifierEnabledKey)
+    }
+
+    // MARK: - Feedback
+
+    static var completionSoundEnabled: Bool {
+        get { completionSoundEnabled(defaults: .standard) }
+        set { setCompletionSoundEnabled(newValue, defaults: .standard) }
+    }
+
+    static func completionSoundEnabled(defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: completionSoundEnabledKey) == nil
+            ? true
+            : defaults.bool(forKey: completionSoundEnabledKey)
+    }
+
+    static func setCompletionSoundEnabled(
+        _ enabled: Bool,
+        defaults: UserDefaults = .standard
+    ) {
+        defaults.set(enabled, forKey: completionSoundEnabledKey)
+    }
+}
+
+enum FeedbackSound {
+    static func playCopyCompleted() {
+        play(named: "Tink")
+    }
+
+    static func playSaveCompleted() {
+        play(named: "Glass")
+    }
+
+    private static func play(named name: String) {
+        guard AppPreferences.completionSoundEnabled else { return }
+        NSSound(named: name)?.play()
     }
 }
 
@@ -928,6 +964,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
     private var launchAtLoginCheckbox: NSButton!
     private var translationCheckbox: NSButton!
+    private var completionSoundCheckbox: NSButton!
     private var saveLocationLabel: NSTextField!
     private var formatPopUp: NSPopUpButton!
     private var selectionMagnifierCheckbox: NSButton!
@@ -1011,9 +1048,16 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         translationCheckbox.state = TranslationPreferences.isEnabled() ? .on : .off
         translationCheckbox.isEnabled = TranslationPreferences.isSystemAvailable
 
+        completionSoundCheckbox = makeCheckbox(
+            title: "播放操作完成提示音",
+            action: #selector(toggleCompletionSound)
+        )
+        completionSoundCheckbox.state = AppPreferences.completionSoundEnabled ? .on : .off
+        completionSoundCheckbox.identifier = NSUserInterfaceItemIdentifier("completionSoundEnabled")
+
         let generalSection = makeSection(
             title: "通用",
-            views: [launchAtLoginCheckbox, translationCheckbox]
+            views: [launchAtLoginCheckbox, translationCheckbox, completionSoundCheckbox]
         )
 
         // --- 图片 ---
@@ -1298,6 +1342,10 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         let enabled = translationCheckbox.state == .on
         TranslationPreferences.setEnabled(enabled)
         onTranslationToggle(enabled)
+    }
+
+    @objc private func toggleCompletionSound() {
+        AppPreferences.completionSoundEnabled = completionSoundCheckbox.state == .on
     }
 
     @objc private func chooseSaveLocation() {
@@ -2592,14 +2640,14 @@ final class CaptureController {
         switch action {
         case .copy:
             try ScreenshotWriter.copyToPasteboard(image)
-            NSSound(named: "Tink")?.play()
+            FeedbackSound.playCopyCompleted()
         case .saveToDownloads:
             let url = try ScreenshotWriter.writeImage(image)
-            NSSound(named: "Glass")?.play()
+            FeedbackSound.playSaveCompleted()
             NSWorkspace.shared.activateFileViewerSelecting([url])
         case .pin:
             _ = try PinManager.shared.pin(image, displaySize: pinDisplaySize)
-            NSSound(named: "Tink")?.play()
+            FeedbackSound.playCopyCompleted()
         }
     }
 

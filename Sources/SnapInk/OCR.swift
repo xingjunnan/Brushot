@@ -307,7 +307,7 @@ final class OCRResultWindowController: NSWindowController, NSWindowDelegate, NST
             NSSound.beep()
             return
         }
-        NSSound(named: "Tink")?.play()
+        FeedbackSound.playCopyCompleted()
     }
 
     @objc private func copyTranslationAction() {
@@ -315,7 +315,7 @@ final class OCRResultWindowController: NSWindowController, NSWindowDelegate, NST
             NSSound.beep()
             return
         }
-        NSSound(named: "Tink")?.play()
+        FeedbackSound.playCopyCompleted()
     }
 
     @objc private func translateAction() {
