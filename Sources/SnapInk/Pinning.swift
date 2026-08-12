@@ -546,15 +546,28 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
     @objc private func resetZoomAction() { resetZoom() }
 
     @objc private func saveAction() {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "SnapInk-贴图.png"
-        panel.allowedContentTypes = [.png]
+        let panel = configuredSavePanel()
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try PinImageCodec.pngData(from: image).write(to: url, options: .atomic)
         } catch {
             showError(error.localizedDescription)
         }
+    }
+
+    func configuredSavePanel(now: Date = Date()) -> NSSavePanel {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = Self.defaultSaveFileName(now: now)
+        panel.allowedContentTypes = [.png]
+        panel.directoryURL = AppPreferences.saveLocation
+        return panel
+    }
+
+    static func defaultSaveFileName(now: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return "SnapInk-贴图-\(formatter.string(from: now)).png"
     }
 
     private func applyCornerRadius() {
@@ -952,6 +965,7 @@ final class PinAnnotationEditorWindowController: NSWindowController {
         content.addSubview(scrollView)
         content.addSubview(toolbar)
         toolbar.setFrameOrigin(CGPoint(x: (content.bounds.width - toolbar.frame.width) / 2, y: 6))
+        toolbar.setPinEditingMode()
         toolbar.setLongCaptureEnabled(false)
         toolbar.setGIFEnabled(false)
         toolbar.onPreferredSizeChanged = { [weak self] in
@@ -973,13 +987,7 @@ final class PinAnnotationEditorWindowController: NSWindowController {
         toolbar.onUndo = { [weak self] in self?.canvas.undo() }
         toolbar.onRedo = { [weak self] in self?.canvas.redo() }
         toolbar.onCancel = { [weak self] in self?.cancel() }
-        toolbar.onCopy = { [weak self] in
-            guard let image = try? self?.canvas.renderedImage() else { return }
-            try? ScreenshotWriter.copyToPasteboard(image, appliesScreenshotAppearance: false)
-        }
         toolbar.onSave = { [weak self] in self?.finish() }
-        toolbar.onPin = { [weak self] in self?.finish() }
-        toolbar.onOCR = { NSSound.beep() }
         canvas.onDocumentChanged = { [weak self] in
             guard let self else { return }
             self.toolbar.setUndoEnabled(

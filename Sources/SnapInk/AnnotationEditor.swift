@@ -1541,6 +1541,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
     private var isWatermarkEnabled = false
     private var canUndo = false
     private var canRedo = false
+    private var isPinEditingMode = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1604,6 +1605,10 @@ final class AnnotationToolbarView: NSVisualEffectView {
     }
 
     func setWatermarkAvailable(_ available: Bool, enabled: Bool) {
+        guard !isPinEditingMode else {
+            watermarkButton.isHidden = true
+            return
+        }
         isWatermarkAvailable = available
         isWatermarkEnabled = enabled
         watermarkButton.isHidden = !available
@@ -1611,6 +1616,22 @@ final class AnnotationToolbarView: NSVisualEffectView {
         watermarkButton.contentTintColor = enabled ? .systemBlue : .labelColor
         watermarkButton.toolTip = enabled ? "关闭本次截图水印" : "开启本次截图水印"
         watermarkButton.isEnabled = !isBusy && available
+        updatePreferredSize()
+    }
+
+    func setPinEditingMode() {
+        isPinEditingMode = true
+        longCaptureButton.isHidden = true
+        gifButton.isHidden = true
+        ocrButton.isHidden = true
+        pinButton.isHidden = true
+        watermarkButton.isHidden = true
+        copyButton.isHidden = true
+        saveButton.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "完成")?
+            .withSymbolConfiguration(.init(pointSize: 16, weight: .medium))
+        saveButton.hoverTitle = "完成"
+        saveButton.setAccessibilityLabel("完成")
+        saveButton.contentTintColor = .systemBlue
         updatePreferredSize()
     }
 

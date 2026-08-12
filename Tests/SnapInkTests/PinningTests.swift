@@ -169,12 +169,21 @@ final class PinningTests: XCTestCase {
         let content = try XCTUnwrap(editor.window?.contentView)
         let canvas = try XCTUnwrap(descendants(of: content).compactMap { $0 as? AnnotationCanvasView }.first)
         let toolbarButtons = descendants(of: content).compactMap { $0 as? NSButton }
-        XCTAssertFalse(try XCTUnwrap(toolbarButtons.first {
+        XCTAssertTrue(try XCTUnwrap(toolbarButtons.first {
             $0.identifier?.rawValue == "longCaptureAction"
-        }).isEnabled)
-        XCTAssertFalse(try XCTUnwrap(toolbarButtons.first {
+        }).isHidden)
+        XCTAssertTrue(try XCTUnwrap(toolbarButtons.first {
             $0.identifier?.rawValue == "gifAction"
-        }).isEnabled)
+        }).isHidden)
+        XCTAssertTrue(try XCTUnwrap(toolbarButtons.first {
+            $0.identifier?.rawValue == "copyAction"
+        }).isHidden)
+        XCTAssertTrue(try XCTUnwrap(toolbarButtons.first {
+            $0.identifier?.rawValue == "pinAction"
+        }).isHidden)
+        XCTAssertTrue(try XCTUnwrap(toolbarButtons.first {
+            $0.identifier?.rawValue == "ocrAction"
+        }).isHidden)
         _ = canvas.document.add(
             tool: .rectangle,
             geometry: .rect(CGRect(x: 5, y: 5, width: 30, height: 20)),
@@ -183,11 +192,42 @@ final class PinningTests: XCTestCase {
         let save = try XCTUnwrap(descendants(of: content).compactMap { $0 as? NSButton }.first {
             $0.identifier?.rawValue == "saveAction"
         })
+        XCTAssertEqual((save as? AnnotationHoverButton)?.hoverTitle, "完成")
         save.performClick(nil)
         let result = try XCTUnwrap(annotated)
         XCTAssertEqual(result.width, base.width)
         XCTAssertEqual(result.height, base.height)
         XCTAssertNotEqual(try PinImageCodec.pngData(from: result), try PinImageCodec.pngData(from: base))
+    }
+
+    func testPinSavePanelDefaultsToConfiguredSaveLocation() throws {
+        let previousLocation = AppPreferences.saveLocation
+        let directory = temporaryDirectory()
+        defer {
+            AppPreferences.saveLocation = previousLocation
+            try? FileManager.default.removeItem(at: directory)
+        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        AppPreferences.saveLocation = directory
+
+        let historyDirectory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: historyDirectory) }
+        let manager = PinManager(historyStore: PinHistoryStore(directoryURL: historyDirectory))
+        let controller = try manager.pin(try makeImage(width: 80, height: 60, color: .white))
+        defer { manager.closePin(id: controller.id) }
+
+        let date = try XCTUnwrap(Calendar(identifier: .gregorian).date(from: DateComponents(
+            year: 2026,
+            month: 8,
+            day: 12,
+            hour: 14,
+            minute: 30,
+            second: 36
+        )))
+        let panel = controller.configuredSavePanel(now: date)
+
+        XCTAssertEqual(panel.directoryURL, directory)
+        XCTAssertEqual(panel.nameFieldStringValue, "SnapInk-贴图-20260812-143036.png")
     }
 
     func testTallAnnotationImageUsesScrollableCanvasWithoutShrinkingItsWidth() throws {
