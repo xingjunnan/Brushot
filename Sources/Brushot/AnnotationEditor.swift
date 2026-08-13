@@ -2043,21 +2043,15 @@ final class AnnotationToolbarView: NSVisualEffectView {
         image.lockFocus()
         NSColor.labelColor.set()
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
+            .font: NSFont.systemFont(ofSize: 19, weight: .regular),
             .foregroundColor: NSColor.labelColor
         ]
-        let text = "T" as NSString
+        let text = "A" as NSString
         let textSize = text.size(withAttributes: attributes)
         text.draw(
-            at: NSPoint(x: (18 - textSize.width) / 2, y: (18 - textSize.height) / 2),
+            at: NSPoint(x: (18 - textSize.width) / 2, y: (18 - textSize.height) / 2 - 1.6),
             withAttributes: attributes
         )
-        let underline = NSBezierPath(
-            roundedRect: NSRect(x: 4, y: 2.5, width: 10, height: 1.5),
-            xRadius: 0.75,
-            yRadius: 0.75
-        )
-        underline.fill()
         image.unlockFocus()
         image.isTemplate = true
         image.accessibilityDescription = title
