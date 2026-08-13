@@ -1666,7 +1666,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
         let toolDefinitions: [(AnnotationTool, String)] = [
             (.select, "cursorarrow"), (.rectangle, "rectangle"), (.ellipse, "circle"),
             (.line, "line.diagonal"), (.arrow, "arrow.up.right"), (.pen, "pencil.tip"),
-            (.text, "textformat"), (.sequence, "1.circle"),
+            (.text, "textformat.abc"), (.sequence, "1.circle"),
             (.mosaic, "checkerboard.rectangle"), (.highlight, "flashlight.on.fill")
         ]
         for (tool, symbol) in toolDefinitions {
@@ -2006,9 +2006,8 @@ final class AnnotationToolbarView: NSVisualEffectView {
 
     private func makeButton(symbol: String, title: String, action: Selector) -> AnnotationHoverButton {
         let button = AnnotationHoverButton(frame: NSRect(x: 0, y: 0, width: 28, height: 28))
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
-            .withSymbolConfiguration(.init(pointSize: 16, weight: .medium))
-        if button.image == nil { button.title = String(title.prefix(1)) }
+        button.image = toolbarSymbol(symbol, title: title)
+        button.title = ""
         button.imagePosition = .imageOnly
         button.isBordered = false
         button.hoverTitle = title
@@ -2024,6 +2023,37 @@ final class AnnotationToolbarView: NSVisualEffectView {
         button.widthAnchor.constraint(equalToConstant: 28).isActive = true
         button.heightAnchor.constraint(equalToConstant: 28).isActive = true
         return button
+    }
+
+    private func toolbarSymbol(_ symbol: String, title: String) -> NSImage {
+        if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
+            .withSymbolConfiguration(.init(pointSize: 16, weight: .medium)) {
+            return image
+        }
+
+        let image = NSImage(size: NSSize(width: 18, height: 18))
+        image.lockFocus()
+        NSColor.labelColor.set()
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
+            .foregroundColor: NSColor.labelColor
+        ]
+        let text = "T" as NSString
+        let textSize = text.size(withAttributes: attributes)
+        text.draw(
+            at: NSPoint(x: (18 - textSize.width) / 2, y: (18 - textSize.height) / 2),
+            withAttributes: attributes
+        )
+        let underline = NSBezierPath(
+            roundedRect: NSRect(x: 4, y: 2.5, width: 10, height: 1.5),
+            xRadius: 0.75,
+            yRadius: 0.75
+        )
+        underline.fill()
+        image.unlockFocus()
+        image.isTemplate = true
+        image.accessibilityDescription = title
+        return image
     }
 
     private func makeSeparator() -> NSBox {

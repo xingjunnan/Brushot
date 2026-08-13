@@ -15,6 +15,8 @@ final class AnnotationEditorTests: XCTestCase {
         }
         XCTAssertEqual(toolButtons.count, AnnotationTool.allCases.count)
         XCTAssertTrue(toolButtons.allSatisfy { $0.image != nil })
+        XCTAssertTrue(toolButtons.allSatisfy { $0.title.isEmpty })
+        XCTAssertTrue(toolButtons.allSatisfy { $0.imagePosition == .imageOnly })
         for button in toolButtons {
             let rawValue = try XCTUnwrap(button.identifier?.rawValue)
             let tool = try XCTUnwrap(AnnotationTool(rawValue: rawValue))
