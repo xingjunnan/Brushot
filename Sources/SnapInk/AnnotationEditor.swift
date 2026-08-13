@@ -471,15 +471,15 @@ final class AnnotationCanvasView: NSView {
             onSelectionChanged?(item)
             onDocumentChanged?()
         case .moving(_, _, let originalState):
-            document.commitLiveChange(from: originalState, actionName: "移动标注")
+            document.commitLiveChange(from: originalState, actionName: L.text("移动标注"))
             onDocumentChanged?()
         case .movingStepLabel(_, _, let originalState):
-            document.commitLiveChange(from: originalState, actionName: "移动步骤文字")
+            document.commitLiveChange(from: originalState, actionName: L.text("移动步骤文字"))
             onDocumentChanged?()
         case .resizing(let original, _, let originalState):
             document.commitLiveChange(
                 from: originalState,
-                actionName: "缩放标注",
+                actionName: L.text("缩放标注"),
                 includesFontSize: original.tool == .text,
                 includesLineWidth: original.tool == .sequence
             )
@@ -791,7 +791,7 @@ final class AnnotationCanvasView: NSView {
             guard !isEmpty, var item = document.items.first(where: { $0.id == itemID }) else { break }
             item.geometry = .text(frame: frame, value: value)
             document.updateStyle(style, for: itemID)
-            document.updateContent(item, actionName: "编辑文字")
+            document.updateContent(item, actionName: L.text("编辑文字"))
             document.select(item.id)
             onSelectionChanged?(document.selectedItem)
         case .initialStep(let itemID), .step(let itemID):
@@ -805,7 +805,7 @@ final class AnnotationCanvasView: NSView {
             if case .initialStep = target {
                 document.updateContentWithoutUndo(item)
             } else {
-                document.updateContent(item, actionName: "编辑步骤文字")
+                document.updateContent(item, actionName: L.text("编辑步骤文字"))
             }
             document.select(item.id)
             onSelectionChanged?(document.selectedItem)
@@ -1510,30 +1510,30 @@ final class AnnotationToolbarView: NSVisualEffectView {
         RGBAColor(red: 0.12, green: 0.12, blue: 0.12)
     ]
     private var presetColorButtons: [NSButton] = []
-    private let sizeLabel = NSTextField(labelWithString: "粗细")
+    private let sizeLabel = NSTextField(labelWithString: L.text("粗细"))
     private lazy var sizeSlider = NSSlider(value: 3, minValue: 1, maxValue: 48, target: self, action: #selector(styleControlChanged))
-    private let opacityLabel = NSTextField(labelWithString: "透明度")
+    private let opacityLabel = NSTextField(labelWithString: L.text("透明度"))
     private lazy var opacitySlider = NSSlider(value: 1, minValue: 0.1, maxValue: 1, target: self, action: #selector(styleControlChanged))
     private lazy var patternPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private lazy var variantPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    private lazy var undoButton = makeButton(symbol: "arrow.uturn.backward", title: "撤销", action: #selector(undoAction))
-    private lazy var redoButton = makeButton(symbol: "arrow.uturn.forward", title: "重做", action: #selector(redoAction))
-    private lazy var cancelButton = makeButton(symbol: "xmark", title: "取消 (Esc)", action: #selector(cancelAction))
+    private lazy var undoButton = makeButton(symbol: "arrow.uturn.backward", title: L.text("撤销"), action: #selector(undoAction))
+    private lazy var redoButton = makeButton(symbol: "arrow.uturn.forward", title: L.text("重做"), action: #selector(redoAction))
+    private lazy var cancelButton = makeButton(symbol: "xmark", title: L.text("取消 (Esc)"), action: #selector(cancelAction))
     private lazy var longCaptureButton = makeButton(
         symbol: "rectangle.expand.vertical",
-        title: "长截图",
+        title: L.text("长截图"),
         action: #selector(longCaptureAction)
     )
     private lazy var gifButton: AnnotationHoverButton = {
-        makeButton(symbol: "record.circle", title: "录屏", action: #selector(gifAction))
+        makeButton(symbol: "record.circle", title: L.text("录屏"), action: #selector(gifAction))
     }()
-    private lazy var ocrButton = makeButton(symbol: "text.viewfinder", title: "识别文字", action: #selector(ocrAction))
-    private lazy var pinButton = makeButton(symbol: "pin", title: "贴图", action: #selector(pinAction))
-    private lazy var watermarkButton = makeButton(symbol: "drop", title: "水印", action: #selector(watermarkAction))
-    private lazy var copyButton = makeButton(symbol: "doc.on.doc", title: "复制 (⌘C)", action: #selector(copyAction))
-    private lazy var saveButton = makeButton(symbol: "square.and.arrow.down", title: "保存 (⌘S)", action: #selector(saveAction))
+    private lazy var ocrButton = makeButton(symbol: "text.viewfinder", title: L.text("识别文字"), action: #selector(ocrAction))
+    private lazy var pinButton = makeButton(symbol: "pin", title: L.text("贴图"), action: #selector(pinAction))
+    private lazy var watermarkButton = makeButton(symbol: "drop", title: L.text("水印"), action: #selector(watermarkAction))
+    private lazy var copyButton = makeButton(symbol: "doc.on.doc", title: L.text("复制 (⌘C)"), action: #selector(copyAction))
+    private lazy var saveButton = makeButton(symbol: "square.and.arrow.down", title: L.text("保存 (⌘S)"), action: #selector(saveAction))
     private let busyIndicator = NSProgressIndicator()
-    private let busyLabel = NSTextField(labelWithString: "正在冻结截图…")
+    private let busyLabel = NSTextField(labelWithString: L.text("正在冻结截图…"))
     private var isBusy = false
     private var isLongCaptureAvailable = true
     private var isGIFAvailable = true
@@ -1614,7 +1614,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
         watermarkButton.isHidden = !available
         watermarkButton.state = enabled ? .on : .off
         watermarkButton.contentTintColor = enabled ? .systemBlue : .labelColor
-        watermarkButton.toolTip = enabled ? "关闭本次截图水印" : "开启本次截图水印"
+        watermarkButton.toolTip = enabled ? L.text("关闭本次截图水印") : L.text("开启本次截图水印")
         watermarkButton.isEnabled = !isBusy && available
         updatePreferredSize()
     }
@@ -1627,15 +1627,15 @@ final class AnnotationToolbarView: NSVisualEffectView {
         pinButton.isHidden = true
         watermarkButton.isHidden = true
         copyButton.isHidden = true
-        saveButton.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "完成")?
+        saveButton.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: L.text("完成"))?
             .withSymbolConfiguration(.init(pointSize: 16, weight: .medium))
-        saveButton.hoverTitle = "完成"
-        saveButton.setAccessibilityLabel("完成")
+        saveButton.hoverTitle = L.text("完成")
+        saveButton.setAccessibilityLabel(L.text("完成"))
         saveButton.contentTintColor = .systemBlue
         updatePreferredSize()
     }
 
-    func setBusy(_ busy: Bool, message: String = "正在冻结截图…") {
+    func setBusy(_ busy: Bool, message: String = L.text("正在冻结截图…")) {
         isBusy = busy
         busyLabel.stringValue = message
         for button in toolButtons.values { button.isEnabled = !busy }
@@ -1675,7 +1675,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
                 title: tool.title,
                 action: #selector(toolAction(_:))
             )
-            button.setAccessibilityLabel("\(tool.title)，快捷键 \(String(tool.shortcut).uppercased())")
+            button.setAccessibilityLabel(L.format("%@，快捷键 %@", tool.title, String(tool.shortcut).uppercased()))
             button.identifier = NSUserInterfaceItemIdentifier(tool.rawValue)
             button.setButtonType(.toggle)
             toolButtons[tool] = button
@@ -1718,7 +1718,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
             button.refusesFirstResponder = true
             button.tag = index
             button.identifier = NSUserInterfaceItemIdentifier("annotationColor.\(index)")
-            button.toolTip = "选择标注颜色"
+            button.toolTip = L.text("选择标注颜色")
             button.target = self
             button.action = #selector(presetColorAction(_:))
             button.translatesAutoresizingMaskIntoConstraints = false
@@ -1801,22 +1801,22 @@ final class AnnotationToolbarView: NSVisualEffectView {
 
         switch tool {
         case .text:
-            sizeLabel.stringValue = "字号"
+            sizeLabel.stringValue = L.text("字号")
             sizeSlider.minValue = 10
             sizeSlider.maxValue = 72
             sizeSlider.doubleValue = currentStyle.fontSize
         case .sequence:
-            sizeLabel.stringValue = "大小"
+            sizeLabel.stringValue = L.text("大小")
             sizeSlider.minValue = 20
             sizeSlider.maxValue = 80
             sizeSlider.doubleValue = currentStyle.lineWidth
         case .mosaic:
-            sizeLabel.stringValue = "笔宽"
+            sizeLabel.stringValue = L.text("笔宽")
             sizeSlider.minValue = 8
             sizeSlider.maxValue = 80
             sizeSlider.doubleValue = currentStyle.lineWidth
         default:
-            sizeLabel.stringValue = "粗细"
+            sizeLabel.stringValue = L.text("粗细")
             sizeSlider.minValue = 1
             sizeSlider.maxValue = 24
             sizeSlider.doubleValue = currentStyle.lineWidth
@@ -1832,13 +1832,13 @@ final class AnnotationToolbarView: NSVisualEffectView {
         patternPopup.isHidden = false
         switch tool {
         case .rectangle, .ellipse, .line, .arrow:
-            patternPopup.addItems(withTitles: ["实线", "虚线", "点线"])
+            patternPopup.addItems(withTitles: [L.text("实线"), L.text("虚线"), L.text("点线")])
             patternPopup.selectItem(at: AnnotationLinePattern.allCases.firstIndex(of: currentStyle.linePattern) ?? 0)
         case .mosaic:
-            patternPopup.addItems(withTitles: ["小颗粒", "中颗粒", "大颗粒"])
+            patternPopup.addItems(withTitles: [L.text("小颗粒"), L.text("中颗粒"), L.text("大颗粒")])
             patternPopup.selectItem(at: currentStyle.mosaicStrength < 10 ? 0 : (currentStyle.mosaicStrength < 20 ? 1 : 2))
         case .highlight:
-            patternPopup.addItems(withTitles: ["暗度 35%", "暗度 55%", "暗度 70%"])
+            patternPopup.addItems(withTitles: [L.text("暗度 35%"), L.text("暗度 55%"), L.text("暗度 70%")])
             patternPopup.selectItem(at: currentStyle.highlightDimOpacity < 0.45 ? 0 : (currentStyle.highlightDimOpacity < 0.65 ? 1 : 2))
         default:
             patternPopup.isHidden = true
@@ -1850,20 +1850,20 @@ final class AnnotationToolbarView: NSVisualEffectView {
         variantPopup.isHidden = false
         switch tool {
         case .rectangle, .ellipse:
-            variantPopup.addItems(withTitles: ["仅描边", "仅填充", "描边 + 填充"])
+            variantPopup.addItems(withTitles: [L.text("仅描边"), L.text("仅填充"), L.text("描边 + 填充")])
             variantPopup.selectItem(at: AnnotationFillMode.allCases.firstIndex(of: currentStyle.fillMode) ?? 0)
         case .arrow:
-            variantPopup.addItems(withTitles: ["单箭头", "双箭头"])
+            variantPopup.addItems(withTitles: [L.text("单箭头"), L.text("双箭头")])
             variantPopup.selectItem(at: currentStyle.arrowHeads == .end ? 0 : 1)
         case .text:
-            variantPopup.addItems(withTitles: ["普通", "粗体", "背景", "粗体 + 背景"])
+            variantPopup.addItems(withTitles: [L.text("普通"), L.text("粗体"), L.text("背景"), L.text("粗体 + 背景")])
             let index = (currentStyle.isBold ? 1 : 0) + (currentStyle.hasTextBackground ? 2 : 0)
             variantPopup.selectItem(at: index)
         case .mosaic:
-            variantPopup.addItems(withTitles: ["像素化", "模糊"])
+            variantPopup.addItems(withTitles: [L.text("像素化"), L.text("模糊")])
             variantPopup.selectItem(at: currentStyle.mosaicMode == .pixelate ? 0 : 1)
         case .highlight:
-            variantPopup.addItems(withTitles: ["矩形高亮", "椭圆高亮"])
+            variantPopup.addItems(withTitles: [L.text("矩形高亮"), L.text("椭圆高亮")])
             variantPopup.selectItem(at: currentStyle.highlightShape == .rectangle ? 0 : 1)
         default:
             variantPopup.isHidden = true

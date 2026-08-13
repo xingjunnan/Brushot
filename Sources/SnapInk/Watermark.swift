@@ -11,8 +11,8 @@ struct WatermarkConfiguration: Equatable, @unchecked Sendable {
 
         var title: String {
             switch self {
-            case .single: "单个"
-            case .diagonalTiled: "斜向平铺"
+            case .single: L.text("单个")
+            case .diagonalTiled: L.text("斜向平铺")
             }
         }
     }
@@ -30,15 +30,15 @@ struct WatermarkConfiguration: Equatable, @unchecked Sendable {
 
         var title: String {
             switch self {
-            case .topLeft: "左上"
-            case .topCenter: "上中"
-            case .topRight: "右上"
-            case .centerLeft: "左中"
-            case .center: "居中"
-            case .centerRight: "右中"
-            case .bottomLeft: "左下"
-            case .bottomCenter: "下中"
-            case .bottomRight: "右下"
+            case .topLeft: L.text("左上")
+            case .topCenter: L.text("上中")
+            case .topRight: L.text("右上")
+            case .centerLeft: L.text("左中")
+            case .center: L.text("居中")
+            case .centerRight: L.text("右中")
+            case .bottomLeft: L.text("左下")
+            case .bottomCenter: L.text("下中")
+            case .bottomRight: L.text("右下")
             }
         }
     }
@@ -180,14 +180,14 @@ enum WatermarkPreferences {
         guard fileSize <= maxLogoFileSize else {
             throw makeError(
                 code: 1,
-                message: "Logo 图片不能超过 3MB，请选择更小的 PNG/JPG/HEIC 图片。"
+                message: L.text("Logo 图片不能超过 3MB，请选择更小的 PNG/JPG/HEIC 图片。")
             )
         }
 
         guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, [
             kCGImageSourceShouldCache: false
         ] as CFDictionary) else {
-            throw makeError(code: 2, message: "无法读取所选水印图片。")
+            throw makeError(code: 2, message: L.text("无法读取所选水印图片。"))
         }
         try validateLogoType(source)
         guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
@@ -195,12 +195,12 @@ enum WatermarkPreferences {
               let height = properties[kCGImagePropertyPixelHeight] as? Int,
               width > 0,
               height > 0 else {
-            throw makeError(code: 3, message: "无法读取所选水印图片尺寸。")
+            throw makeError(code: 3, message: L.text("无法读取所选水印图片尺寸。"))
         }
         guard max(width, height) <= maxSourceLogoPixelLength else {
             throw makeError(
                 code: 4,
-                message: "Logo 图片最长边不能超过 4096px，请先压缩后再选择。"
+                message: L.text("Logo 图片最长边不能超过 4096px，请先压缩后再选择。")
             )
         }
         let ratio = CGFloat(max(width, height)) / CGFloat(max(1, min(width, height)))
@@ -208,7 +208,7 @@ enum WatermarkPreferences {
         guard isAcceptableShape else {
             throw makeError(
                 code: 5,
-                message: "Logo 图片比例过于细长，请选择独立图标、头像或横向短 Logo。"
+                message: L.text("Logo 图片比例过于细长，请选择独立图标、头像或横向短 Logo。")
             )
         }
 
@@ -221,13 +221,13 @@ enum WatermarkPreferences {
         guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
               let destinationData = NSMutableData() as CFMutableData?,
               let imageDestination = CGImageDestinationCreateWithData(destinationData, UTType.png.identifier as CFString, 1, nil) else {
-            throw makeError(code: 6, message: "无法生成水印 Logo 安全副本。")
+            throw makeError(code: 6, message: L.text("无法生成水印 Logo 安全副本。"))
         }
         CGImageDestinationAddImage(imageDestination, thumbnail, [
             kCGImageDestinationLossyCompressionQuality: 0.9
         ] as CFDictionary)
         guard CGImageDestinationFinalize(imageDestination) else {
-            throw makeError(code: 7, message: "无法保存水印 Logo 安全副本。")
+            throw makeError(code: 7, message: L.text("无法保存水印 Logo 安全副本。"))
         }
 
         let directory = try supportDirectory()
@@ -265,7 +265,7 @@ enum WatermarkPreferences {
               type.conforms(to: .png)
                 || type.conforms(to: .jpeg)
                 || type.conforms(to: .heic) else {
-            throw makeError(code: 8, message: "该图片格式不适合作为水印 Logo，请选择 PNG/JPG/HEIC。")
+            throw makeError(code: 8, message: L.text("该图片格式不适合作为水印 Logo，请选择 PNG/JPG/HEIC。"))
         }
     }
 
@@ -324,7 +324,7 @@ enum WatermarkRenderer {
             space: CGColorSpace(name: CGColorSpace.sRGB)!,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else {
-            throw makeError(code: 2, message: "无法生成水印图片。")
+            throw makeError(code: 2, message: L.text("无法生成水印图片。"))
         }
 
         cgContext.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
@@ -577,7 +577,7 @@ enum WatermarkRenderer {
 
     private static func requireImage(from context: CGContext) throws -> CGImage {
         guard let image = context.makeImage() else {
-            throw makeError(code: 4, message: "无法生成水印图片。")
+            throw makeError(code: 4, message: L.text("无法生成水印图片。"))
         }
         return image
     }

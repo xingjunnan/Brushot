@@ -20,16 +20,16 @@ enum AnnotationTool: String, CaseIterable, Codable {
 
     var title: String {
         switch self {
-        case .select: "选择"
-        case .rectangle: "矩形"
-        case .ellipse: "圆形"
-        case .line: "直线"
-        case .arrow: "箭头"
-        case .pen: "画笔"
-        case .text: "文字"
-        case .sequence: "步骤"
-        case .mosaic: "马赛克"
-        case .highlight: "高亮"
+        case .select: L.text("选择")
+        case .rectangle: L.text("矩形")
+        case .ellipse: L.text("圆形")
+        case .line: L.text("直线")
+        case .arrow: L.text("箭头")
+        case .pen: L.text("画笔")
+        case .text: L.text("文字")
+        case .sequence: L.text("步骤")
+        case .mosaic: L.text("马赛克")
+        case .highlight: L.text("高亮")
         }
     }
 
@@ -327,7 +327,7 @@ final class AnnotationDocument {
         registerRemovalUndo(
             itemID: item.id,
             restoringNextSequenceNumber: previousNextSequenceNumber,
-            actionName: "添加标注"
+            actionName: L.text("添加标注")
         )
         return item
     }
@@ -340,17 +340,18 @@ final class AnnotationDocument {
             item: item,
             index: index,
             restoringNextSequenceNumber: state.nextSequenceNumber,
-            actionName: "删除标注"
+            actionName: L.text("删除标注")
         )
         self.selectedID = nil
     }
 
     func updateContent(
         _ item: AnnotationItem,
-        actionName: String = "修改标注",
+        actionName: String? = nil,
         includesFontSize: Bool = false,
         includesLineWidth: Bool = false
     ) {
+        let actionName = actionName ?? L.text("修改标注")
         guard let index = state.items.firstIndex(where: { $0.id == item.id }) else { return }
         let previous = contentSnapshot(
             of: state.items[index],

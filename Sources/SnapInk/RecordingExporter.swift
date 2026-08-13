@@ -23,10 +23,10 @@ enum RecordingExportError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .missingSource: "录制临时文件已经丢失。"
-        case .missingVideoTrack: "录制文件中没有有效视频轨道。"
-        case .exportFailed(let reason): "导出失败：\(reason)"
-        case .gifCreationFailed: "GIF 编码失败。"
+        case .missingSource: L.text("录制临时文件已经丢失。")
+        case .missingVideoTrack: L.text("录制文件中没有有效视频轨道。")
+        case .exportFailed(let reason): L.format("导出失败：%@", reason)
+        case .gifCreationFailed: L.text("GIF 编码失败。")
         }
     }
 }
@@ -107,7 +107,7 @@ enum RecordingExporter {
             preset = AVAssetExportPresetPassthrough
         }
         guard let session = AVAssetExportSession(asset: exportAsset, presetName: preset) else {
-            throw RecordingExportError.exportFailed("无法创建 MP4 导出器。")
+            throw RecordingExportError.exportFailed(L.text("无法创建 MP4 导出器。"))
         }
         session.outputURL = destination
         session.outputFileType = .mp4
@@ -123,7 +123,7 @@ enum RecordingExporter {
                 case .cancelled: continuation.resume(throwing: CancellationError())
                 default:
                     continuation.resume(throwing: RecordingExportError.exportFailed(
-                        sessionBox.value.error?.localizedDescription ?? "未知错误"
+                        sessionBox.value.error?.localizedDescription ?? L.text("未知错误。")
                     ))
                 }
             }
@@ -190,7 +190,7 @@ enum RecordingExporter {
             configuration: configuration,
             context: context
         ) else {
-            throw RecordingExportError.exportFailed("无法生成录制水印。")
+            throw RecordingExportError.exportFailed(L.text("无法生成录制水印。"))
         }
 
         let instruction = AVMutableVideoCompositionInstruction()
@@ -259,7 +259,7 @@ enum RecordingExporter {
             guard reader.canAdd(output) else { throw RecordingExportError.missingVideoTrack }
             reader.add(output)
             guard reader.startReading() else {
-                throw RecordingExportError.exportFailed(reader.error?.localizedDescription ?? "无法读取视频。")
+                throw RecordingExportError.exportFailed(reader.error?.localizedDescription ?? L.text("无法读取视频。"))
             }
 
             var nextTime = 0.0
@@ -285,7 +285,7 @@ enum RecordingExporter {
                 nextTime = pts + targetInterval
             }
             if reader.status == .failed {
-                throw RecordingExportError.exportFailed(reader.error?.localizedDescription ?? "GIF 读取失败。")
+                throw RecordingExportError.exportFailed(reader.error?.localizedDescription ?? L.text("GIF 读取失败。"))
             }
             if let pending, emitted < 600 {
                 let finalDelay = max(0.02, max(seconds - pending.time, targetInterval))

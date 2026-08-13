@@ -29,7 +29,7 @@ final class ScreenRegionCapturer {
               let screenNumber = screen.deviceDescription[
                 NSDeviceDescriptionKey("NSScreenNumber")
               ] as? NSNumber else {
-            throw Self.captureError("无法确定截图所在的显示器。")
+            throw Self.captureError(L.text("无法确定截图所在的显示器。"))
         }
 
         let shareableContent = try await SCShareableContent.excludingDesktopWindows(
@@ -38,7 +38,7 @@ final class ScreenRegionCapturer {
         )
         let displayID = CGDirectDisplayID(screenNumber.uint32Value)
         guard let display = shareableContent.displays.first(where: { $0.displayID == displayID }) else {
-            throw Self.captureError("无法读取截图所在的显示器。")
+            throw Self.captureError(L.text("无法读取截图所在的显示器。"))
         }
 
         let currentApplication = shareableContent.applications.first {
@@ -52,7 +52,7 @@ final class ScreenRegionCapturer {
 
         let selection = globalRect.intersection(screen.frame).integral
         guard !selection.isNull, selection.width >= 1, selection.height >= 1 else {
-            throw Self.captureError("截图区域无效。")
+            throw Self.captureError(L.text("截图区域无效。"))
         }
         let sourceRect = CGRect(
             x: selection.minX - screen.frame.minX,

@@ -65,7 +65,7 @@ final class StreamScreenshotCapturer: NSObject, SCStreamOutput, SCStreamDelegate
                 self?.complete(with: .failure(NSError(
                     domain: "SnapInk.ScreenCapture",
                     code: 2,
-                    userInfo: [NSLocalizedDescriptionKey: "等待截图画面超时。"]
+                    userInfo: [NSLocalizedDescriptionKey: L.text("等待截图画面超时。")]
                 )))
             }
         }

@@ -218,12 +218,12 @@ final class RecordingAnnotationToolbarView: NSView {
     )
     private lazy var undoButton = makeToolButton(
         symbol: "arrow.uturn.backward",
-        title: "撤销",
+        title: L.text("撤销"),
         action: #selector(undoAction)
     )
     private lazy var redoButton = makeToolButton(
         symbol: "arrow.uturn.forward",
-        title: "重做",
+        title: L.text("重做"),
         action: #selector(redoAction)
     )
     private var selectedColorIndex = 0
@@ -278,7 +278,7 @@ final class RecordingAnnotationToolbarView: NSView {
             button.refusesFirstResponder = true
             button.tag = index
             button.identifier = NSUserInterfaceItemIdentifier("recordingAnnotation.color.\(index)")
-            button.toolTip = "选择标注颜色"
+            button.toolTip = L.text("选择标注颜色")
             button.target = self
             button.action = #selector(colorAction(_:))
             button.translatesAutoresizingMaskIntoConstraints = false
@@ -290,7 +290,7 @@ final class RecordingAnnotationToolbarView: NSView {
             colorButtons.append(button)
             styleRow.addArrangedSubview(button)
         }
-        let widthLabel = NSTextField(labelWithString: "粗细")
+        let widthLabel = NSTextField(labelWithString: L.text("粗细"))
         widthLabel.font = .systemFont(ofSize: 11)
         widthLabel.textColor = .secondaryLabelColor
         widthSlider.translatesAutoresizingMaskIntoConstraints = false
@@ -413,9 +413,9 @@ final class RecordingSessionController: NSObject {
     private let annotationWindow: GIFAnnotationPanel
     private let annotationView: GIFAnnotationView
     private let statusLabel = NSTextField(labelWithString: "")
-    private let pauseButton = NSButton(title: "暂停", target: nil, action: nil)
-    private let finishButton = NSButton(title: "停止", target: nil, action: nil)
-    private let cancelButton = NSButton(title: "取消", target: nil, action: nil)
+    private let pauseButton = NSButton(title: L.text("暂停"), target: nil, action: nil)
+    private let finishButton = NSButton(title: L.text("停止"), target: nil, action: nil)
+    private let cancelButton = NSButton(title: L.text("取消"), target: nil, action: nil)
     private let annotationToolbar = RecordingAnnotationToolbarView(
         frame: CGRect(x: 0, y: 0, width: 340, height: 72)
     )
@@ -531,11 +531,11 @@ final class RecordingSessionController: NSObject {
     @objc private func pauseAction() {
         if engine.state == .recording {
             engine.pause()
-            pauseButton.title = "继续"
+            pauseButton.title = L.text("继续")
             updateStatus(elapsed: engine.elapsedTime)
         } else if engine.state == .paused {
             engine.resume()
-            pauseButton.title = "暂停"
+            pauseButton.title = L.text("暂停")
         }
     }
 
@@ -592,7 +592,7 @@ final class RecordingSessionController: NSObject {
         if now.timeIntervalSince(lastDiskCheckAt) >= 5 {
             lastDiskCheckAt = now
             if !RecordingDiskSpace.hasEnoughSpace() {
-                statusLabel.stringValue = "磁盘空间不足，正在安全停止…"
+                statusLabel.stringValue = L.text("磁盘空间不足，正在安全停止…")
                 finish()
             }
         }
@@ -600,11 +600,11 @@ final class RecordingSessionController: NSObject {
 
     private func updateStatus(elapsed: TimeInterval) {
         let e = elapsed
-        let paused = engine.state == .paused ? " · 已暂停" : ""
-        let microphone = configuration.capturesMicrophone ? " · 麦克风" : ""
+        let paused = engine.state == .paused ? L.text(" · 已暂停") : ""
+        let microphone = configuration.capturesMicrophone ? L.text(" · 麦克风") : ""
         var timeText = Self.clockText(e)
         if let remaining = RecordingLimits.remainingTime(for: configuration.format, elapsed: e) {
-            timeText += " · 剩余 \(Self.clockText(remaining))"
+            timeText += L.format(" · 剩余 %@", Self.clockText(remaining))
         }
         statusLabel.stringValue = "\(configuration.format.displayName)\(microphone) · \(timeText)\(paused)"
     }
@@ -768,37 +768,37 @@ final class RecordingStartBar: NSVisualEffectView {
     var onStart: ((RecordingFormat, Bool, Bool, String?) -> Void)?
     var onCancel: (() -> Void)?
     private let audioCheckbox = NSButton(
-        checkboxWithTitle: "系统音频",
+        checkboxWithTitle: L.text("系统音频"),
         target: nil,
         action: nil
     )
     private let microphoneCheckbox = NSButton(
-        checkboxWithTitle: "麦克风",
+        checkboxWithTitle: L.text("麦克风"),
         target: nil,
         action: nil
     )
     private let microphonePopup = NSPopUpButton()
     private lazy var formatControl = NSSegmentedControl(
-        labels: ["视频", "GIF"],
+        labels: [L.text("视频"), "GIF"],
         trackingMode: .selectOne,
         target: self,
         action: #selector(formatChanged)
     )
     private lazy var startButton = NSButton(
-        title: "开始录制视频",
+        title: L.text("开始录制视频"),
         target: self,
         action: #selector(startAction)
     )
     private let watermarkCheckbox = NSButton(
-        checkboxWithTitle: "水印",
+        checkboxWithTitle: L.text("水印"),
         target: nil,
         action: nil
     )
-    private lazy var audioLabel = makeSectionLabel("视频音频")
+    private lazy var audioLabel = makeSectionLabel(L.text("视频音频"))
     private lazy var watermarkInfoButton: NSButton = {
         if #available(macOS 11.0, *) {
             let button = NSButton(
-                image: NSImage(systemSymbolName: "info.circle", accessibilityDescription: "录制水印说明")
+                image: NSImage(systemSymbolName: "info.circle", accessibilityDescription: L.text("录制水印说明"))
                     ?? NSImage(size: CGSize(width: 14, height: 14)),
                 target: self,
                 action: #selector(showWatermarkInfo)
@@ -811,7 +811,7 @@ final class RecordingStartBar: NSVisualEffectView {
         button.bezelStyle = .circular
         return button
     }()
-    private let silentHint = NSTextField(labelWithString: "GIF 录制为静音")
+    private let silentHint = NSTextField(labelWithString: L.text("GIF 录制为静音"))
     private var hasMicrophones = false
     private var canUseMicrophonePermission = true
 
@@ -824,7 +824,7 @@ final class RecordingStartBar: NSVisualEffectView {
         layer?.cornerRadius = 9
         layer?.masksToBounds = true
 
-        let formatLabel = makeSectionLabel("录制格式")
+        let formatLabel = makeSectionLabel(L.text("录制格式"))
         formatControl.selectedSegment = 0
         formatControl.identifier = NSUserInterfaceItemIdentifier("recordingFormatControl")
         audioCheckbox.state = RecordingPreferences.systemAudioEnabled() ? .on : .off
@@ -851,7 +851,7 @@ final class RecordingStartBar: NSVisualEffectView {
                 RecordingPreferences.setMicrophoneDeviceID(nil)
             }
         } else {
-            microphonePopup.addItem(withTitle: "未检测到麦克风")
+            microphonePopup.addItem(withTitle: L.text("未检测到麦克风"))
             microphonePopup.lastItem?.representedObject = nil
             RecordingPreferences.setMicrophoneDeviceID(nil)
         }
@@ -864,12 +864,12 @@ final class RecordingStartBar: NSVisualEffectView {
         microphonePopup.target = self
         microphonePopup.action = #selector(microphoneDeviceChanged)
         microphonePopup.identifier = NSUserInterfaceItemIdentifier("recordingMicrophoneDevice")
-        microphonePopup.toolTip = devices.isEmpty ? "未检测到麦克风" : "选择内置或外置麦克风"
+        microphonePopup.toolTip = devices.isEmpty ? L.text("未检测到麦克风") : L.text("选择内置或外置麦克风")
         microphonePopup.setContentCompressionResistancePriority(.required, for: .horizontal)
         microphonePopup.setContentHuggingPriority(.defaultHigh, for: .horizontal)
         microphonePopup.widthAnchor.constraint(equalToConstant: 180).isActive = true
 
-        let cancel = NSButton(title: "取消", target: self, action: #selector(cancelAction))
+        let cancel = NSButton(title: L.text("取消"), target: self, action: #selector(cancelAction))
         startButton.identifier = NSUserInterfaceItemIdentifier("startRecordingAction")
         startButton.keyEquivalent = "\r"
         startButton.contentTintColor = .controlAccentColor
@@ -883,7 +883,7 @@ final class RecordingStartBar: NSVisualEffectView {
         silentHint.font = .systemFont(ofSize: 12)
         silentHint.textColor = .secondaryLabelColor
         watermarkInfoButton.identifier = NSUserInterfaceItemIdentifier("recordingWatermarkInfo")
-        watermarkInfoButton.toolTip = "导出时添加水印，不会出现在录制过程中"
+        watermarkInfoButton.toolTip = L.text("导出时添加水印，不会出现在录制过程中")
         watermarkInfoButton.widthAnchor.constraint(equalToConstant: 18).isActive = true
         watermarkInfoButton.heightAnchor.constraint(equalToConstant: 18).isActive = true
         let audioRow = NSStackView(views: [
@@ -975,7 +975,7 @@ final class RecordingStartBar: NSVisualEffectView {
         microphoneCheckbox.isEnabled = isVideo && canUseMicrophonePermission
         microphonePopup.isEnabled = isVideo && hasMicrophones && microphoneCheckbox.state == .on
         silentHint.isHidden = isVideo
-        startButton.title = isVideo ? "开始录制视频" : "开始录制 GIF"
+        startButton.title = isVideo ? L.text("开始录制视频") : L.text("开始录制 GIF")
     }
 
     private func updateWatermarkState() {
@@ -988,11 +988,11 @@ final class RecordingStartBar: NSVisualEffectView {
         }
         watermarkCheckbox.isEnabled = hasWatermarkContent
         watermarkCheckbox.toolTip = hasWatermarkContent
-            ? "导出时添加水印，不会在录制画面中显示"
-            : "请先在水印设置中填写文字或选择 Logo"
+            ? L.text("导出时添加水印，不会在录制画面中显示")
+            : L.text("请先在水印设置中填写文字或选择 Logo")
         watermarkInfoButton.toolTip = hasWatermarkContent
-            ? "导出时添加水印，不会出现在录制过程中"
-            : "请先在水印设置中填写文字或选择 Logo"
+            ? L.text("导出时添加水印，不会出现在录制过程中")
+            : L.text("请先在水印设置中填写文字或选择 Logo")
     }
 
     @objc private func cancelAction() { onCancel?() }
@@ -1077,15 +1077,15 @@ final class WatermarkInfoViewController: NSViewController {
 
     private var infoText: String {
         if !hasWatermarkContent {
-            return "请先在水印设置中填写文字或选择 Logo。\n\n没有可渲染的内容时，截图水印和录制水印都无法启用。"
+            return L.text("请先在水印设置中填写文字或选择 Logo。\n\n没有可渲染的内容时，截图水印和录制水印都无法启用。")
         }
         switch scope {
         case .screenshot:
-            return "截图水印会应用到截图、复制、保存、贴图等图片输出。\n\nOCR 仍读取原始图片，不受水印影响。"
+            return L.text("截图水印会应用到截图、复制、保存、贴图等图片输出。\n\nOCR 仍读取原始图片，不受水印影响。")
         case .recording:
-            return "水印在录制结束导出时添加，不会出现在录制过程中。\n\n开启后 MP4 需要重新编码，导出更久且画质可能轻微变化。"
+            return L.text("水印在录制结束导出时添加，不会出现在录制过程中。\n\n开启后 MP4 需要重新编码，导出更久且画质可能轻微变化。")
         case .combined:
-            return "截图水印和录制水印共享同一套文字、Logo、位置和样式。\n\n录制水印在导出时添加，MP4 可能需要更久导出。"
+            return L.text("截图水印和录制水印共享同一套文字、Logo、位置和样式。\n\n录制水印在导出时添加，MP4 可能需要更久导出。")
         }
     }
 }

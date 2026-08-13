@@ -1,0 +1,2 @@
+"NSMicrophoneUsageDescription" = "SnapInk uses the selected built-in or external microphone when you enable microphone recording.";
+"NSScreenCaptureUsageDescription" = "SnapInk needs screen and system audio access for screenshots, scrolling capture, and screen recording.";

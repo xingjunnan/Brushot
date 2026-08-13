@@ -135,7 +135,7 @@ enum PinImageCodec {
     static func pngData(from image: CGImage) throws -> Data {
         let bitmap = NSBitmapImageRep(cgImage: image)
         guard let data = bitmap.representation(using: .png, properties: [:]) else {
-            throw makeError("无法编码贴图图片。")
+            throw makeError(L.text("无法编码贴图图片。"))
         }
         return data
     }
@@ -451,12 +451,12 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
 
     func makeContextMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "再次标注…", action: #selector(annotateAction), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "复制图片", action: #selector(copyAction), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "保存图片…", action: #selector(saveAction), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: L.text("再次标注…"), action: #selector(annotateAction), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: L.text("复制图片"), action: #selector(copyAction), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: L.text("保存图片…"), action: #selector(saveAction), keyEquivalent: ""))
         menu.addItem(.separator())
 
-        let opacityItem = NSMenuItem(title: "透明度", action: nil, keyEquivalent: "")
+        let opacityItem = NSMenuItem(title: L.text("透明度"), action: nil, keyEquivalent: "")
         let opacityMenu = NSMenu()
         for value in [25, 50, 75, 100] {
             let item = NSMenuItem(title: "\(value)%", action: #selector(opacityAction(_:)), keyEquivalent: "")
@@ -467,10 +467,10 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
         opacityItem.submenu = opacityMenu
         menu.addItem(opacityItem)
 
-        let cornerItem = NSMenuItem(title: "圆角", action: nil, keyEquivalent: "")
+        let cornerItem = NSMenuItem(title: L.text("圆角"), action: nil, keyEquivalent: "")
         let cornerMenu = NSMenu()
         for value in [0, 8, 16, 24] {
-            let item = NSMenuItem(title: value == 0 ? "直角" : "\(value) px", action: #selector(cornerAction(_:)), keyEquivalent: "")
+            let item = NSMenuItem(title: value == 0 ? L.text("直角") : "\(value) px", action: #selector(cornerAction(_:)), keyEquivalent: "")
             item.tag = value
             item.state = abs(cornerRadius - CGFloat(value)) < 0.01 ? .on : .off
             cornerMenu.addItem(item)
@@ -478,29 +478,29 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
         cornerItem.submenu = cornerMenu
         menu.addItem(cornerItem)
 
-        let desktopItem = NSMenuItem(title: "桌面行为", action: nil, keyEquivalent: "")
+        let desktopItem = NSMenuItem(title: L.text("桌面行为"), action: nil, keyEquivalent: "")
         let desktopMenu = NSMenu()
-        let current = NSMenuItem(title: "固定在当前桌面", action: #selector(currentDesktopAction), keyEquivalent: "")
+        let current = NSMenuItem(title: L.text("固定在当前桌面"), action: #selector(currentDesktopAction), keyEquivalent: "")
         current.state = desktopBehavior == .currentDesktop ? .on : .off
         desktopMenu.addItem(current)
-        let all = NSMenuItem(title: "跟随所有桌面", action: #selector(allDesktopsAction), keyEquivalent: "")
+        let all = NSMenuItem(title: L.text("跟随所有桌面"), action: #selector(allDesktopsAction), keyEquivalent: "")
         all.state = desktopBehavior == .allDesktops ? .on : .off
         desktopMenu.addItem(all)
         desktopItem.submenu = desktopMenu
         menu.addItem(desktopItem)
 
         menu.addItem(.separator())
-        let zoomItem = NSMenuItem(title: "缩放", action: nil, keyEquivalent: "")
+        let zoomItem = NSMenuItem(title: L.text("缩放"), action: nil, keyEquivalent: "")
         let zoomMenu = NSMenu()
-        zoomMenu.addItem(NSMenuItem(title: "放大", action: #selector(zoomInAction), keyEquivalent: ""))
-        zoomMenu.addItem(NSMenuItem(title: "缩小", action: #selector(zoomOutAction), keyEquivalent: ""))
+        zoomMenu.addItem(NSMenuItem(title: L.text("放大"), action: #selector(zoomInAction), keyEquivalent: ""))
+        zoomMenu.addItem(NSMenuItem(title: L.text("缩小"), action: #selector(zoomOutAction), keyEquivalent: ""))
         zoomMenu.addItem(.separator())
-        zoomMenu.addItem(NSMenuItem(title: "重置大小", action: #selector(resetZoomAction), keyEquivalent: ""))
+        zoomMenu.addItem(NSMenuItem(title: L.text("重置大小"), action: #selector(resetZoomAction), keyEquivalent: ""))
         zoomItem.submenu = zoomMenu
         menu.addItem(zoomItem)
 
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "关闭贴图", action: #selector(closeAction), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: L.text("关闭贴图"), action: #selector(closeAction), keyEquivalent: ""))
         for item in menu.items { item.target = self }
         for submenu in menu.items.compactMap(\.submenu) {
             for item in submenu.items { item.target = self }
@@ -626,7 +626,7 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
 
     private func showError(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = "贴图操作失败"
+        alert.messageText = L.text("贴图操作失败")
         alert.informativeText = message
         alert.runModal()
     }
@@ -678,7 +678,7 @@ final class PinManager {
             throw NSError(
                 domain: "SnapInk.PinClipboard",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "剪贴板中没有可贴出的图片。"]
+                userInfo: [NSLocalizedDescriptionKey: L.text("剪贴板中没有可贴出的图片。")]
             )
         }
         return try pin(image)
@@ -686,7 +686,7 @@ final class PinManager {
 
     func pinHistoryEntry(_ entry: PinHistoryEntry) throws {
         guard let image = historyStore.image(for: entry) else {
-            throw NSError(domain: "SnapInk.PinHistory", code: 1, userInfo: [NSLocalizedDescriptionKey: "历史图片已经丢失。"])
+            throw NSError(domain: "SnapInk.PinHistory", code: 1, userInfo: [NSLocalizedDescriptionKey: L.text("历史图片已经丢失。")])
         }
         try historyStore.touch(entry)
         _ = try pin(image, recordHistory: false)
@@ -724,7 +724,7 @@ final class PinManager {
     }
 
     var visibilityMenuTitle: String {
-        arePinsHidden ? "显示全部贴图" : "隐藏全部贴图"
+        arePinsHidden ? L.text("显示全部贴图") : L.text("隐藏全部贴图")
     }
 
     func showLibrary() {
@@ -751,7 +751,7 @@ final class PinLibraryWindowController: NSWindowController, NSTableViewDataSourc
             backing: .buffered,
             defer: false
         )
-        window.title = "SnapInk 贴图库"
+        window.title = L.text("SnapInk 贴图库")
         window.isReleasedWhenClosed = false
         super.init(window: window)
         configureContent()
@@ -810,17 +810,17 @@ final class PinLibraryWindowController: NSWindowController, NSTableViewDataSourc
         let toolbar = NSStackView()
         toolbar.orientation = .horizontal
         toolbar.spacing = 8
-        let clipboard = NSButton(title: "从剪贴板贴图", target: self, action: #selector(pinClipboardAction))
-        let pin = NSButton(title: "贴出选中项", target: self, action: #selector(pinSelectedAction))
-        let remove = NSButton(title: "删除记录", target: self, action: #selector(deleteSelectedAction))
-        let clear = NSButton(title: "清空历史", target: self, action: #selector(clearAction))
+        let clipboard = NSButton(title: L.text("从剪贴板贴图"), target: self, action: #selector(pinClipboardAction))
+        let pin = NSButton(title: L.text("贴出选中项"), target: self, action: #selector(pinSelectedAction))
+        let remove = NSButton(title: L.text("删除记录"), target: self, action: #selector(deleteSelectedAction))
+        let clear = NSButton(title: L.text("清空历史"), target: self, action: #selector(clearAction))
         toolbar.addArrangedSubview(clipboard)
         toolbar.addArrangedSubview(pin)
         toolbar.addArrangedSubview(remove)
         toolbar.addArrangedSubview(clear)
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("PinHistory"))
-        column.title = "历史贴图"
+        column.title = L.text("历史贴图")
         column.width = 600
         tableView.addTableColumn(column)
         tableView.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
@@ -873,10 +873,10 @@ final class PinLibraryWindowController: NSWindowController, NSTableViewDataSourc
 
     @objc private func clearAction() {
         let alert = NSAlert()
-        alert.messageText = "清空贴图历史？"
-        alert.informativeText = "已打开的贴图不会关闭，历史图片将从磁盘删除。"
-        alert.addButton(withTitle: "清空")
-        alert.addButton(withTitle: "取消")
+        alert.messageText = L.text("清空贴图历史？")
+        alert.informativeText = L.text("已打开的贴图不会关闭，历史图片将从磁盘删除。")
+        alert.addButton(withTitle: L.text("清空"))
+        alert.addButton(withTitle: L.text("取消"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do { try manager.historyStore.clear(); reload() }
         catch { showError(error.localizedDescription) }
@@ -884,7 +884,7 @@ final class PinLibraryWindowController: NSWindowController, NSTableViewDataSourc
 
     private func showError(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = "贴图库操作失败"
+        alert.messageText = L.text("贴图库操作失败")
         alert.informativeText = message
         alert.runModal()
     }
@@ -904,7 +904,7 @@ final class PinAnnotationEditorWindowController: NSWindowController {
 
     init(
         image: CGImage,
-        title: String = "贴图二次标注",
+        title: String = L.text("贴图二次标注"),
         onFinish: @escaping (CGImage) -> Void,
         onCancel: @escaping () -> Void
     ) {

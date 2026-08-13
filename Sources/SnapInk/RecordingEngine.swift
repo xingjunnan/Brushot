@@ -8,7 +8,7 @@ enum RecordingFormat: String, Sendable {
     case video
     case gif
 
-    var displayName: String { self == .video ? "视频" : "GIF" }
+    var displayName: String { self == .video ? L.text("视频") : "GIF" }
     var fileExtension: String { self == .video ? "mp4" : "gif" }
 }
 
@@ -247,21 +247,21 @@ enum RecordingError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .alreadyRecording: "已有录制正在进行。"
-        case .notRecording: "当前没有正在进行的录制。"
-        case .writerSetupFailed(let reason): "无法准备录制：\(reason)"
-        case .writerFailed(let reason): "录制写入失败：\(reason)"
-        case .noFrames: "没有录制到有效画面。"
-        case .microphonePermissionDenied: "没有麦克风权限。请在“系统设置 → 隐私与安全性 → 麦克风”中允许 SnapInk，然后重试。"
-        case .microphoneUnavailable: "所选麦克风不可用，请重新连接设备或选择其他麦克风。"
-        case .insufficientDiskSpace: "磁盘剩余空间不足 1 GB，无法安全录制。请清理空间后重试。"
+        case .alreadyRecording: L.text("已有录制正在进行。")
+        case .notRecording: L.text("当前没有正在进行的录制。")
+        case .writerSetupFailed(let reason): L.format("无法准备录制：%@", reason)
+        case .writerFailed(let reason): L.format("录制写入失败：%@", reason)
+        case .noFrames: L.text("没有录制到有效画面。")
+        case .microphonePermissionDenied: L.text("没有麦克风权限。请在“系统设置 → 隐私与安全性 → 麦克风”中允许 SnapInk，然后重试。")
+        case .microphoneUnavailable: L.text("所选麦克风不可用，请重新连接设备或选择其他麦克风。")
+        case .insufficientDiskSpace: L.text("磁盘剩余空间不足 1 GB，无法安全录制。请清理空间后重试。")
         }
     }
 }
 
 enum RecordingDiagnostics {
     static func describe(_ error: Error?) -> String {
-        guard let error else { return "未知错误。" }
+        guard let error else { return L.text("未知错误。") }
         var parts: [String] = []
         var current: NSError? = error as NSError
         var visited: Set<ObjectIdentifier> = []
@@ -275,7 +275,7 @@ enum RecordingDiagnostics {
             }
             current = item.userInfo[NSUnderlyingErrorKey] as? NSError
         }
-        return parts.joined(separator: "；底层错误：")
+        return parts.joined(separator: L.text("；底层错误："))
     }
 }
 
@@ -599,7 +599,7 @@ final class RecordingWriter: @unchecked Sendable {
             ]
         )
         guard assetWriter.canAdd(videoInput) else {
-            throw RecordingError.writerSetupFailed("视频编码器不可用。")
+            throw RecordingError.writerSetupFailed(L.text("视频编码器不可用。"))
         }
         assetWriter.add(videoInput)
 
@@ -614,13 +614,13 @@ final class RecordingWriter: @unchecked Sendable {
             let input = AVAssetWriterInput(mediaType: .audio, outputSettings: settings)
             input.expectsMediaDataInRealTime = true
             guard writer.canAdd(input) else {
-                throw RecordingError.writerSetupFailed("\(name)编码器不可用。")
+                throw RecordingError.writerSetupFailed(L.format("%@编码器不可用。", name))
             }
             writer.add(input)
             return input
         }
-        systemAudioInput = try includesSystemAudio ? makeAudioInput(name: "系统音频") : nil
-        microphoneInput = try includesMicrophone ? makeAudioInput(name: "麦克风") : nil
+        systemAudioInput = try includesSystemAudio ? makeAudioInput(name: L.text("系统音频")) : nil
+        microphoneInput = try includesMicrophone ? makeAudioInput(name: L.text("麦克风")) : nil
     }
 
     func appendVideo(_ sampleBuffer: CMSampleBuffer) {
@@ -629,14 +629,14 @@ final class RecordingWriter: @unchecked Sendable {
         let sourceTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         if firstSourceTime == nil {
             guard assetWriter.startWriting() else {
-                recordFailure(assetWriter.error, fallback: "无法启动视频编码器。")
+                recordFailure(assetWriter.error, fallback: L.text("无法启动视频编码器。"))
                 return
             }
             firstSourceTime = sourceTime
             assetWriter.startSession(atSourceTime: .zero)
         }
         guard assetWriter.status == .writing else {
-            recordFailure(assetWriter.error, fallback: "视频编码器已停止工作。")
+            recordFailure(assetWriter.error, fallback: L.text("视频编码器已停止工作。"))
             return
         }
         guard videoInput.isReadyForMoreMediaData, let firstSourceTime else { return }
@@ -650,7 +650,7 @@ final class RecordingWriter: @unchecked Sendable {
             latestVideoTime = CMTimeAdd(presentationTime, frameDuration)
             updateLatestTime(latestVideoTime)
         } else {
-            recordFailure(assetWriter.error, fallback: "视频帧写入失败。")
+            recordFailure(assetWriter.error, fallback: L.text("视频帧写入失败。"))
         }
     }
 
@@ -659,7 +659,7 @@ final class RecordingWriter: @unchecked Sendable {
             sampleBuffer,
             input: systemAudioInput,
             timeline: &systemAudioTimeline,
-            name: "系统音频"
+            name: L.text("系统音频")
         )
     }
 
@@ -668,7 +668,7 @@ final class RecordingWriter: @unchecked Sendable {
             sampleBuffer,
             input: microphoneInput,
             timeline: &microphoneTimeline,
-            name: "麦克风"
+            name: L.text("麦克风")
         )
     }
 
@@ -734,7 +734,7 @@ final class RecordingWriter: @unchecked Sendable {
         if input.append(adjusted) {
             updateLatestTime(from: adjusted)
         } else {
-            recordFailure(assetWriter.error, fallback: "\(name)写入失败。")
+            recordFailure(assetWriter.error, fallback: L.format("%@写入失败。", name))
         }
     }
 

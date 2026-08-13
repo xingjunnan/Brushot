@@ -1,0 +1,2 @@
+"NSMicrophoneUsageDescription" = "마이크 녹화를 사용하면 SnapInk가 선택한 내장 또는 외장 마이크를 사용합니다.";
+"NSScreenCaptureUsageDescription" = "SnapInk는 스크린샷, 스크롤 캡처, 화면 녹화를 위해 화면 및 시스템 오디오 접근 권한이 필요합니다.";

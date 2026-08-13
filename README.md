@@ -1,6 +1,6 @@
 # SnapInk
 
-SnapInk is a lightweight native macOS screenshot app inspired by iShot. The current build includes the complete capture and inline annotation loop:
+SnapInk is a lightweight native macOS screenshot app for fast capture, annotation, OCR, pinning, and screen recording. The current build includes the complete capture and inline annotation loop:
 
 It supports macOS 13 or later on both Apple Silicon and Intel Macs through a Universal 2 executable.
 

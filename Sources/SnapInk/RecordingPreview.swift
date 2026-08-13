@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class RecordingExportProgressWindowController: NSWindowController {
-    private let label = NSTextField(labelWithString: "正在准备录制文件…")
+    private let label = NSTextField(labelWithString: L.text("正在准备录制文件…"))
     private let indicator = NSProgressIndicator()
 
     init(format: RecordingFormat) {
@@ -14,7 +14,7 @@ final class RecordingExportProgressWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "正在生成\(format.displayName)"
+        window.title = L.format("正在生成%@", format.displayName)
         window.isReleasedWhenClosed = false
         super.init(window: window)
         guard let content = window.contentView else { return }
@@ -43,9 +43,9 @@ final class RecordingExportProgressWindowController: NSWindowController {
 
     func update(stage: RecordingExportStage, fraction: Double) {
         label.stringValue = switch stage {
-        case .preparing: "正在准备…"
-        case .encoding: "正在编码…"
-        case .finalizing: "正在完成…"
+        case .preparing: L.text("正在准备…")
+        case .encoding: L.text("正在编码…")
+        case .finalizing: L.text("正在完成…")
         }
         indicator.doubleValue = min(1, max(0, fraction))
     }
@@ -76,7 +76,7 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
             backing: .buffered,
             defer: false
         )
-        window.title = "录制完成"
+        window.title = L.text("录制完成")
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
@@ -128,11 +128,11 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         metadata.alignment = .center
         metadata.textColor = .secondaryLabelColor
 
-        let discard = NSButton(title: "丢弃", target: self, action: #selector(discardAction))
+        let discard = NSButton(title: L.text("丢弃"), target: self, action: #selector(discardAction))
         discard.identifier = NSUserInterfaceItemIdentifier("discardRecordingAction")
-        let copy = NSButton(title: "复制", target: self, action: #selector(copyAction))
+        let copy = NSButton(title: L.text("复制"), target: self, action: #selector(copyAction))
         copy.identifier = NSUserInterfaceItemIdentifier("copyRecordingAction")
-        let save = NSButton(title: "保存", target: self, action: #selector(saveAction))
+        let save = NSButton(title: L.text("保存"), target: self, action: #selector(saveAction))
         save.identifier = NSUserInterfaceItemIdentifier("saveRecordingAction")
         save.keyEquivalent = "\r"
         save.contentTintColor = .controlAccentColor
@@ -201,7 +201,7 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
             if format == .gif {
                 let data = try Data(contentsOf: fileURL)
                 guard pasteboard.setData(data, forType: NSPasteboard.PasteboardType("com.compuserve.gif")) else {
-                    throw RecordingExportError.exportFailed("无法写入剪贴板。")
+                    throw RecordingExportError.exportFailed(L.text("无法写入剪贴板。"))
                 }
             } else {
                 let directory = Self.clipboardDirectory
@@ -210,7 +210,7 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
                 try FileManager.default.copyItem(at: fileURL, to: cached)
                 guard pasteboard.writeObjects([cached as NSURL]) else {
                     try? FileManager.default.removeItem(at: cached)
-                    throw RecordingExportError.exportFailed("无法写入剪贴板。")
+                    throw RecordingExportError.exportFailed(L.text("无法写入剪贴板。"))
                 }
             }
             FeedbackSound.playCopyCompleted()
@@ -230,7 +230,7 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
 
     private func showError(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = "录制文件操作失败"
+        alert.messageText = L.text("录制文件操作失败")
         alert.informativeText = message
         if let window { alert.beginSheetModal(for: window) }
     }

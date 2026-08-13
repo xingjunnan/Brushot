@@ -27,7 +27,7 @@ enum OCRRecognitionError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .noText:
-            return "当前区域未识别到文字。"
+            return L.text("当前区域未识别到文字。")
         }
     }
 }
@@ -83,10 +83,10 @@ final class VisionTextRecognizer: TextRecognizing, @unchecked Sendable {
 @MainActor
 final class OCRResultWindowController: NSWindowController, NSWindowDelegate, NSTextViewDelegate {
     private let textView = NSTextView()
-    private let copyButton = NSButton(title: "复制", target: nil, action: nil)
+    private let copyButton = NSButton(title: L.text("复制"), target: nil, action: nil)
     private let translatedTextView = NSTextView()
-    private let translateButton = NSButton(title: "翻译成中文", target: nil, action: nil)
-    private let copyTranslationButton = NSButton(title: "复制译文", target: nil, action: nil)
+    private let translateButton = NSButton(title: L.text("翻译成中文"), target: nil, action: nil)
+    private let copyTranslationButton = NSButton(title: L.text("复制译文"), target: nil, action: nil)
     private let translationHandler: OCRTranslationHandler?
     private let translationHostView: NSView?
     private var translationTask: Task<Void, Never>?
@@ -126,7 +126,7 @@ final class OCRResultWindowController: NSWindowController, NSWindowDelegate, NST
             backing: .buffered,
             defer: false
         )
-        window.title = "OCR 文字识别"
+        window.title = L.text("OCR 文字识别")
         window.minSize = translationEnabled
             ? NSSize(width: 560, height: 320)
             : NSSize(width: 420, height: 260)
@@ -174,7 +174,7 @@ final class OCRResultWindowController: NSWindowController, NSWindowDelegate, NST
         let sourceScrollView = makeTextScrollView(for: textView)
         textView.delegate = self
 
-        let closeButton = NSButton(title: "关闭", target: self, action: #selector(closeAction))
+        let closeButton = NSButton(title: L.text("关闭"), target: self, action: #selector(closeAction))
         closeButton.bezelStyle = .rounded
         copyButton.target = self
         copyButton.action = #selector(copyAction)
@@ -184,7 +184,7 @@ final class OCRResultWindowController: NSWindowController, NSWindowDelegate, NST
 
         var buttons = [closeButton]
         if translationHandler != nil {
-            copyButton.title = "复制原文"
+            copyButton.title = L.text("复制原文")
             copyButton.keyEquivalent = ""
             translateButton.target = self
             translateButton.action = #selector(translateAction)
@@ -211,8 +211,8 @@ final class OCRResultWindowController: NSWindowController, NSWindowDelegate, NST
         if translationHandler != nil {
             translatedTextView.identifier = NSUserInterfaceItemIdentifier("translatedText")
             let translationScrollView = makeTextScrollView(for: translatedTextView)
-            let sourceGroup = makeLabeledEditor(title: "OCR 原文", scrollView: sourceScrollView)
-            let translationGroup = makeLabeledEditor(title: "中文译文", scrollView: translationScrollView)
+            let sourceGroup = makeLabeledEditor(title: L.text("OCR 原文"), scrollView: sourceScrollView)
+            let translationGroup = makeLabeledEditor(title: L.text("中文译文"), scrollView: translationScrollView)
             let editorStack = NSStackView(views: [sourceGroup, translationGroup])
             editorStack.orientation = .horizontal
             editorStack.alignment = .top
@@ -292,12 +292,12 @@ final class OCRResultWindowController: NSWindowController, NSWindowDelegate, NST
 
     private func setTranslationBusy(_ busy: Bool) {
         translateButton.isEnabled = !busy
-        translateButton.title = busy ? "正在翻译…" : "翻译成中文"
+        translateButton.title = busy ? L.text("正在翻译…") : L.text("翻译成中文")
     }
 
     private func showTranslationFailure(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = "翻译失败"
+        alert.messageText = L.text("翻译失败")
         alert.informativeText = message
         alert.beginSheetModal(for: window!)
     }

@@ -18,17 +18,17 @@ enum LongCaptureStitchError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidFrame:
-            "无法读取长截图画面。"
+            L.text("无法读取长截图画面。")
         case .inconsistentFrameSize:
-            "截图区域尺寸发生变化，请重新开始长截图。"
+            L.text("截图区域尺寸发生变化，请重新开始长截图。")
         case .noReliableOverlap:
-            "没有识别到连续内容，请减小滚动距离，并确保框选区域内没有固定栏或动画。"
+            L.text("没有识别到连续内容，请减小滚动距离，并确保框选区域内没有固定栏或动画。")
         case .reverseScrollDetected:
-            "检测到向上回滚，已自动完成长截图。"
+            L.text("检测到向上回滚，已自动完成长截图。")
         case .imageTooLarge:
-            "长截图已达到尺寸上限，请先完成并保存当前内容。"
+            L.text("长截图已达到尺寸上限，请先完成并保存当前内容。")
         case .renderingFailed:
-            "无法生成拼接后的长截图。"
+            L.text("无法生成拼接后的长截图。")
         }
     }
 }
@@ -621,7 +621,7 @@ final class LongCaptureStartBar: NSVisualEffectView {
     var onStart: (() -> Void)?
     var onCancel: (() -> Void)?
 
-    init(frame frameRect: NSRect, hint: String = "框内内容需全部能够上下滚动", startTitle: String = "开始长截图") {
+    init(frame frameRect: NSRect, hint: String = L.text("框内内容需全部能够上下滚动"), startTitle: String = L.text("开始长截图")) {
         super.init(frame: frameRect)
         material = .hudWindow
         blendingMode = .withinWindow
@@ -633,7 +633,7 @@ final class LongCaptureStartBar: NSVisualEffectView {
         let hintLabel = NSTextField(labelWithString: hint)
         hintLabel.font = .systemFont(ofSize: 12)
         hintLabel.textColor = .secondaryLabelColor
-        let cancel = NSButton(title: "取消", target: self, action: #selector(cancelAction))
+        let cancel = NSButton(title: L.text("取消"), target: self, action: #selector(cancelAction))
         let start = NSButton(title: startTitle, target: self, action: #selector(startAction))
         start.keyEquivalent = "\r"
         start.bezelStyle = .rounded
@@ -740,8 +740,8 @@ final class LongCaptureSessionController: NSObject {
     private let previewStatusLabel = NSTextField(labelWithString: "")
     private let previewScrollView = NSScrollView()
     private let livePreviewView = LongCaptureLivePreviewView()
-    private let finishButton = NSButton(title: "完成", target: nil, action: nil)
-    private let cancelButton = NSButton(title: "取消", target: nil, action: nil)
+    private let finishButton = NSButton(title: L.text("完成"), target: nil, action: nil)
+    private let cancelButton = NSButton(title: L.text("取消"), target: nil, action: nil)
     private var globalScrollMonitor: Any?
     private var captureTimer: Timer?
     private var isCapturing = false
@@ -768,12 +768,12 @@ final class LongCaptureSessionController: NSObject {
     var livePreviewWindowFrame: CGRect { previewWindow.frame }
     var instructionText: String { statusLabel.stringValue }
 
-    nonisolated static let instruction = "向下滚动采集；向上滚动立即完成，或点“完成”"
+    static var instruction: String { L.text("向下滚动采集；向上滚动立即完成，或点“完成”") }
 
     /// The instruction rendered with the "向上滚动立即完成" segment emphasized
     /// (semibold + accent color) so the auto-finish-on-reverse behavior is
     /// noticeable at a glance while the rest stays in the subdued base style.
-    nonisolated static var instructionAttributed: NSAttributedString {
+    static var instructionAttributed: NSAttributedString {
         let text = instruction
         let result = NSMutableAttributedString(string: text)
         let baseRange = NSRange(location: 0, length: text.utf16.count)
@@ -781,7 +781,7 @@ final class LongCaptureSessionController: NSObject {
             .font: NSFont.systemFont(ofSize: 13, weight: .medium),
             .foregroundColor: NSColor.secondaryLabelColor
         ], range: baseRange)
-        let highlight = "向上滚动立即完成"
+        let highlight = L.text("向上滚动立即完成")
         if let range = text.range(of: highlight) {
             result.addAttributes([
                 .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
@@ -918,7 +918,7 @@ final class LongCaptureSessionController: NSObject {
         background.layer?.masksToBounds = true
         previewWindow.contentView = background
 
-        let title = NSTextField(labelWithString: "实时预览")
+        let title = NSTextField(labelWithString: L.text("实时预览"))
         title.font = .systemFont(ofSize: 13, weight: .semibold)
         previewStatusLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         previewStatusLabel.textColor = .secondaryLabelColor
@@ -1188,8 +1188,8 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
     private var annotationToolbarHeightConstraint: NSLayoutConstraint?
     private let annotationToolbarExpandedHeight: CGFloat = 72
     private let dimensionLabel = NSTextField(labelWithString: "")
-    private let annotateButton = NSButton(title: "标注", target: nil, action: nil)
-    private let ocrButton = NSButton(title: "OCR 文字识别", target: nil, action: nil)
+    private let annotateButton = NSButton(title: L.text("标注"), target: nil, action: nil)
+    private let ocrButton = NSButton(title: L.text("OCR 文字识别"), target: nil, action: nil)
     private let onOCR: (CGImage, @escaping () -> Void) -> Void
     private let onDismiss: () -> Void
     private var isAnnotating = false
@@ -1245,7 +1245,7 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
             backing: .buffered,
             defer: false
         )
-        window.title = "长截图预览"
+        window.title = L.text("长截图预览")
         window.minSize = CGSize(width: 520, height: 420)
         window.isReleasedWhenClosed = false
         super.init(window: window)
@@ -1304,10 +1304,10 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
         annotateButton.action = #selector(annotateAction)
         ocrButton.target = self
         ocrButton.action = #selector(ocrAction)
-        let copy = NSButton(title: "复制", target: self, action: #selector(copyAction))
-        let save = NSButton(title: "保存", target: self, action: #selector(saveAction))
+        let copy = NSButton(title: L.text("复制"), target: self, action: #selector(copyAction))
+        let save = NSButton(title: L.text("保存"), target: self, action: #selector(saveAction))
         save.keyEquivalent = "\r"
-        let close = NSButton(title: "关闭", target: self, action: #selector(closeAction))
+        let close = NSButton(title: L.text("关闭"), target: self, action: #selector(closeAction))
         let actions = NSStackView(views: [dimensionLabel, annotateButton, ocrButton, copy, save, close])
         actions.orientation = .horizontal
         actions.alignment = .centerY
@@ -1421,7 +1421,7 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
 
     private func beginAnnotationMode() {
         isAnnotating = true
-        annotateButton.title = "完成标注"
+        annotateButton.title = L.text("完成标注")
         annotationToolbar.isHidden = false
         annotationToolbarHeightConstraint?.constant = annotationToolbarExpandedHeight
         setAnnotationTool(activeTool)
@@ -1432,7 +1432,7 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
 
     private func endAnnotationMode() {
         isAnnotating = false
-        annotateButton.title = "标注"
+        annotateButton.title = L.text("标注")
         annotationCanvas.cancelPendingInteraction()
         setAnnotationTool(.select)
         annotationToolbar.isHidden = true
@@ -1444,10 +1444,10 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
     @objc private func ocrAction() {
         guard ocrButton.isEnabled else { return }
         ocrButton.isEnabled = false
-        ocrButton.title = "正在识别…"
+        ocrButton.title = L.text("正在识别…")
         onOCR(originalImage) { [weak self] in
             self?.ocrButton.isEnabled = true
-            self?.ocrButton.title = "OCR 文字识别"
+            self?.ocrButton.title = L.text("OCR 文字识别")
         }
     }
 
@@ -1487,7 +1487,7 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
 
     private func showError(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = "长截图操作失败"
+        alert.messageText = L.text("长截图操作失败")
         alert.informativeText = message
         alert.runModal()
     }

@@ -1,0 +1,2 @@
+"NSMicrophoneUsageDescription" = "启用麦克风录制时，SnapInk 会使用你选择的内置或外接麦克风。";
+"NSScreenCaptureUsageDescription" = "SnapInk 需要屏幕和系统音频访问权限，用于截图、长截图和屏幕录制。";

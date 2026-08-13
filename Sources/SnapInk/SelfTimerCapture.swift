@@ -77,8 +77,8 @@ final class DelayedCaptureStartBar: NSVisualEffectView {
         hint.font = .systemFont(ofSize: 12)
         hint.textColor = .secondaryLabelColor
         setDuration(duration)
-        let cancel = NSButton(title: "取消", target: self, action: #selector(cancelAction))
-        let start = NSButton(title: "开始倒计时", target: self, action: #selector(startAction))
+        let cancel = NSButton(title: L.text("取消"), target: self, action: #selector(cancelAction))
+        let start = NSButton(title: L.text("开始倒计时"), target: self, action: #selector(startAction))
         start.keyEquivalent = "\r"
         start.contentTintColor = .controlAccentColor
         start.identifier = NSUserInterfaceItemIdentifier("startDelayedCaptureAction")
@@ -97,7 +97,7 @@ final class DelayedCaptureStartBar: NSVisualEffectView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func setDuration(_ seconds: Int) { hint.stringValue = "\(seconds) 秒后截图" }
+    func setDuration(_ seconds: Int) { hint.stringValue = L.format("%d 秒后截图", seconds) }
 
     @objc private func startAction() { onStart?() }
     @objc private func cancelAction() { onCancel?() }

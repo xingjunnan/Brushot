@@ -144,7 +144,7 @@ enum ScreenshotAppearanceRenderer {
             space: CGColorSpace(name: CGColorSpace.sRGB)!,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else {
-            throw makeError(code: 1, message: "无法生成截图外观。")
+            throw makeError(code: 1, message: L.text("无法生成截图外观。"))
         }
 
         let imageRect = CGRect(
@@ -176,7 +176,7 @@ enum ScreenshotAppearanceRenderer {
         context.restoreGState()
 
         guard let output = context.makeImage() else {
-            throw makeError(code: 2, message: "无法生成截图外观。")
+            throw makeError(code: 2, message: L.text("无法生成截图外观。"))
         }
         return output
     }

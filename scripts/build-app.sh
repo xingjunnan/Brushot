@@ -48,6 +48,7 @@ lipo -create "${ARCH_BINARIES[@]}" -output "$MACOS_DIR/SnapInk"
 
 cp "$RESOURCES_DIR/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$RESOURCES_DIR/AppIcon.icns" "$APP_RESOURCES_DIR/AppIcon.icns"
+find "$RESOURCES_DIR" -name '*.lproj' -type d -maxdepth 1 -exec cp -R {} "$APP_RESOURCES_DIR/" \;
 
 # Sign after every bundle resource has been copied so Info.plist and resources
 # are sealed as part of the app. Prefer an explicitly configured identity, then

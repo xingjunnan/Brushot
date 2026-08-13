@@ -150,14 +150,14 @@ enum ShortcutAction: UInt32, CaseIterable, Hashable {
 
     var title: String {
         switch self {
-        case .capture: "区域截图"
-        case .longCapture: "长截图"
-        case .recording: "录屏…"
-        case .fullscreenCapture: "全屏截图"
-        case .delayedCapture: "延时截图…"
-        case .pinClipboard: "从剪贴板贴图"
-        case .pinLibrary: "贴图库…"
-        case .togglePins: "隐藏全部贴图"
+        case .capture: L.text("区域截图")
+        case .longCapture: L.text("长截图")
+        case .recording: L.text("录屏…")
+        case .fullscreenCapture: L.text("全屏截图")
+        case .delayedCapture: L.text("延时截图…")
+        case .pinClipboard: L.text("从剪贴板贴图")
+        case .pinLibrary: L.text("贴图库…")
+        case .togglePins: L.text("隐藏全部贴图")
         }
     }
 
@@ -533,7 +533,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let applicationItem = NSMenuItem()
         let applicationMenu = NSMenu(title: "SnapInk")
         let quitItem = NSMenuItem(
-            title: "退出 SnapInk",
+            title: L.text("退出 SnapInk"),
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: ""
         )
@@ -543,20 +543,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(applicationItem)
 
         let editItem = NSMenuItem()
-        let editMenu = NSMenu(title: "编辑")
-        editMenu.addItem(makeResponderMenuItem(title: "撤销", action: Selector(("undo:")), key: "z"))
+        let editMenu = NSMenu(title: L.text("编辑"))
+        editMenu.addItem(makeResponderMenuItem(title: L.text("撤销"), action: Selector(("undo:")), key: "z"))
         editMenu.addItem(makeResponderMenuItem(
-            title: "重做",
+            title: L.text("重做"),
             action: Selector(("redo:")),
             key: "z",
             modifiers: [.command, .shift]
         ))
         editMenu.addItem(.separator())
-        editMenu.addItem(makeResponderMenuItem(title: "剪切", action: #selector(NSText.cut(_:)), key: "x"))
-        editMenu.addItem(makeResponderMenuItem(title: "复制", action: #selector(NSText.copy(_:)), key: "c"))
-        editMenu.addItem(makeResponderMenuItem(title: "粘贴", action: #selector(NSText.paste(_:)), key: "v"))
+        editMenu.addItem(makeResponderMenuItem(title: L.text("剪切"), action: #selector(NSText.cut(_:)), key: "x"))
+        editMenu.addItem(makeResponderMenuItem(title: L.text("复制"), action: #selector(NSText.copy(_:)), key: "c"))
+        editMenu.addItem(makeResponderMenuItem(title: L.text("粘贴"), action: #selector(NSText.paste(_:)), key: "v"))
         editMenu.addItem(.separator())
-        editMenu.addItem(makeResponderMenuItem(title: "全选", action: #selector(NSText.selectAll(_:)), key: "a"))
+        editMenu.addItem(makeResponderMenuItem(title: L.text("全选"), action: #selector(NSText.selectAll(_:)), key: "a"))
         editItem.submenu = editMenu
         mainMenu.addItem(editItem)
 
@@ -592,7 +592,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.title = ""
             button.image = makeStatusBarIcon()
             button.imagePosition = .imageOnly
-            button.toolTip = "SnapInk 截图"
+            button.toolTip = L.text("SnapInk 截图")
             button.setAccessibilityLabel("SnapInk")
         }
 
@@ -609,49 +609,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let capture = makeShortcutMenuItem(
             action: .capture,
-            title: "区域截图",
+            title: L.text("区域截图"),
             selector: #selector(captureSelection)
         )
         menu.addItem(capture)
 
         let fullscreen = makeShortcutMenuItem(
             action: .fullscreenCapture,
-            title: "全屏截图",
+            title: L.text("全屏截图"),
             selector: #selector(captureFullscreen)
         )
         menu.addItem(fullscreen)
 
         let delayed = makeShortcutMenuItem(
             action: .delayedCapture,
-            title: "延时截图…",
+            title: L.text("延时截图…"),
             selector: #selector(captureDelayed)
         )
         menu.addItem(delayed)
 
         let longCapture = makeShortcutMenuItem(
             action: .longCapture,
-            title: "长截图",
+            title: L.text("长截图"),
             selector: #selector(captureLongScreenshot)
         )
         menu.addItem(longCapture)
 
         let recording = makeShortcutMenuItem(
             action: .recording,
-            title: "录屏…",
+            title: L.text("录屏…"),
             selector: #selector(captureRecording)
         )
         menu.addItem(recording)
 
-        let pinItem = NSMenuItem(title: "贴图", action: nil, keyEquivalent: "")
-        let pinMenu = NSMenu(title: "贴图")
+        let pinItem = NSMenuItem(title: L.text("贴图"), action: nil, keyEquivalent: "")
+        let pinMenu = NSMenu(title: L.text("贴图"))
         pinMenu.addItem(makeShortcutMenuItem(
             action: .pinClipboard,
-            title: "从剪贴板贴图",
+            title: L.text("从剪贴板贴图"),
             selector: #selector(pinClipboard)
         ))
         pinMenu.addItem(makeShortcutMenuItem(
             action: .pinLibrary,
-            title: "贴图库…",
+            title: L.text("贴图库…"),
             selector: #selector(showPinLibrary)
         ))
         pinVisibilityMenuItem = NSMenuItem(
@@ -668,7 +668,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
         let settings = NSMenuItem(
-            title: "偏好设置…",
+            title: L.text("偏好设置…"),
             action: #selector(showSettings),
             keyEquivalent: ""
         )
@@ -676,7 +676,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.keyEquivalentModifierMask = []
         menu.addItem(settings)
         let watermarkSettings = NSMenuItem(
-            title: "水印设置…",
+            title: L.text("水印设置…"),
             action: #selector(showWatermarkSettings),
             keyEquivalent: ""
         )
@@ -684,7 +684,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         watermarkSettings.keyEquivalentModifierMask = []
         menu.addItem(watermarkSettings)
         menu.addItem(NSMenuItem.separator())
-        let quitItem = NSMenuItem(title: "退出 SnapInk", action: #selector(quit), keyEquivalent: "")
+        let quitItem = NSMenuItem(title: L.text("退出 SnapInk"), action: #selector(quit), keyEquivalent: "")
         quitItem.target = self
         quitItem.keyEquivalentModifierMask = []
         menu.addItem(quitItem)
@@ -723,7 +723,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showPinFailure(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = "贴图失败"
+        alert.messageText = L.text("贴图失败")
         alert.informativeText = message
         alert.runModal()
     }
@@ -873,8 +873,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showHotKeyConflictAlert() {
         let alert = NSAlert()
-        alert.messageText = "快捷键不可用"
-        alert.informativeText = "该快捷键可能已被其他应用占用，请换一个组合。"
+        alert.messageText = L.text("快捷键不可用")
+        alert.informativeText = L.text("该快捷键可能已被其他应用占用，请换一个组合。")
         alert.runModal()
     }
 
@@ -884,8 +884,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .action(let action): name = action.title
         }
         let alert = NSAlert()
-        alert.messageText = "快捷键冲突"
-        alert.informativeText = "该快捷键已用于“\(name)”，请换一个组合。"
+        alert.messageText = L.text("快捷键冲突")
+        alert.informativeText = L.format("该快捷键已用于“%@”，请换一个组合。", name)
         alert.runModal()
     }
 
@@ -998,7 +998,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "偏好设置"
+        window.title = L.text("偏好设置")
         window.isReleasedWhenClosed = false
 
         super.init(window: window)
@@ -1041,29 +1041,29 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
         // --- 通用 ---
         launchAtLoginCheckbox = makeCheckbox(
-            title: "开机自动启动",
+            title: L.text("开机自动启动"),
             action: #selector(toggleLaunchAtLogin)
         )
         launchAtLoginCheckbox.state = AppPreferences.launchAtLogin ? .on : .off
 
         translationCheckbox = makeCheckbox(
             title: TranslationPreferences.isSystemAvailable
-                ? "启用 OCR 英译中"
-                : "启用 OCR 英译中（需要 macOS 15 或更高版本）",
+                ? L.text("启用 OCR 英译中")
+                : L.text("启用 OCR 英译中（需要 macOS 15 或更高版本）"),
             action: #selector(toggleTranslation)
         )
         translationCheckbox.state = TranslationPreferences.isEnabled() ? .on : .off
         translationCheckbox.isEnabled = TranslationPreferences.isSystemAvailable
 
         completionSoundCheckbox = makeCheckbox(
-            title: "播放操作完成提示音",
+            title: L.text("播放操作完成提示音"),
             action: #selector(toggleCompletionSound)
         )
         completionSoundCheckbox.state = AppPreferences.completionSoundEnabled ? .on : .off
         completionSoundCheckbox.identifier = NSUserInterfaceItemIdentifier("completionSoundEnabled")
 
         let generalSection = makeSection(
-            title: "通用",
+            title: L.text("通用"),
             views: [launchAtLoginCheckbox, translationCheckbox, completionSoundCheckbox]
         )
 
@@ -1076,11 +1076,11 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         saveLocationLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         saveLocationLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
 
-        let chooseButton = NSButton(title: "选择…", target: self, action: #selector(chooseSaveLocation))
+        let chooseButton = NSButton(title: L.text("选择…"), target: self, action: #selector(chooseSaveLocation))
         chooseButton.bezelStyle = .rounded
 
         let locationRow = makeRow(
-            label: "保存位置",
+            label: L.text("保存位置"),
             trailingViews: [saveLocationLabel, chooseButton]
         )
 
@@ -1091,13 +1091,13 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         formatPopUp.action = #selector(changeImageFormat)
 
         let formatRow = makeRow(
-            label: "存储格式",
+            label: L.text("存储格式"),
             trailingViews: [formatPopUp]
         )
 
         let screenshotAppearance = ScreenshotAppearancePreferences.load()
         screenshotShadowCheckbox = makeCheckbox(
-            title: "添加阴影",
+            title: L.text("添加阴影"),
             action: #selector(toggleScreenshotShadow)
         )
         screenshotShadowCheckbox.state = screenshotAppearance.addsShadow ? .on : .off
@@ -1120,15 +1120,15 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
         let shadowRow = makeAppearanceControlRow(
             checkbox: screenshotShadowCheckbox,
-            label: "阴影大小:",
+            label: L.text("阴影大小:"),
             slider: screenshotShadowSizeSlider,
             valueLabel: screenshotShadowSizeLabel,
-            extraLabel: "颜色:",
+            extraLabel: L.text("颜色:"),
             extraView: screenshotShadowColorWell
         )
 
         screenshotRoundedCornersCheckbox = makeCheckbox(
-            title: "增加圆角",
+            title: L.text("增加圆角"),
             action: #selector(toggleScreenshotRoundedCorners)
         )
         screenshotRoundedCornersCheckbox.state = screenshotAppearance.addsRoundedCorners ? .on : .off
@@ -1145,37 +1145,37 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
         let cornerRow = makeAppearanceControlRow(
             checkbox: screenshotRoundedCornersCheckbox,
-            label: "默认圆角大小:",
+            label: L.text("默认圆角大小:"),
             slider: screenshotCornerRadiusSlider,
             valueLabel: screenshotCornerRadiusLabel
         )
 
         let imageSection = makeSection(
-            title: "图片",
+            title: L.text("图片"),
             views: [locationRow, formatRow, shadowRow, cornerRow]
         )
 
         // --- 截图 ---
         selectionMagnifierCheckbox = makeCheckbox(
-            title: "启用选区放大镜与取色",
+            title: L.text("启用选区放大镜与取色"),
             action: #selector(toggleSelectionMagnifier)
         )
         selectionMagnifierCheckbox.state = AppPreferences.selectionMagnifierEnabled ? .on : .off
         selectionMagnifierCheckbox.identifier = NSUserInterfaceItemIdentifier("selectionMagnifierEnabled")
 
-        let magnifierHelper = NSTextField(labelWithString: "默认关闭。开启后会实时读取鼠标附近屏幕，可能触发 macOS 屏幕捕捉提示。")
+        let magnifierHelper = NSTextField(labelWithString: L.text("默认关闭。开启后会实时读取鼠标附近屏幕，可能触发 macOS 屏幕捕捉提示。"))
         magnifierHelper.font = .systemFont(ofSize: 11)
         magnifierHelper.textColor = .secondaryLabelColor
         magnifierHelper.lineBreakMode = .byWordWrapping
         magnifierHelper.maximumNumberOfLines = 2
 
         let captureSection = makeSection(
-            title: "截图",
+            title: L.text("截图"),
             views: [selectionMagnifierCheckbox, magnifierHelper]
         )
 
         // --- 延时截图 ---
-        selfTimerDurationLabel = NSTextField(labelWithString: "\(SelfTimerPreferences.durationSeconds()) 秒")
+        selfTimerDurationLabel = NSTextField(labelWithString: L.format("%d 秒", SelfTimerPreferences.durationSeconds()))
         selfTimerDurationLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
         selfTimerDurationLabel.alignment = .right
         selfTimerDurationLabel.identifier = NSUserInterfaceItemIdentifier("selfTimerDurationValue")
@@ -1190,27 +1190,27 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         selfTimerDurationStepper.action = #selector(changeSelfTimerDuration)
         selfTimerDurationStepper.identifier = NSUserInterfaceItemIdentifier("selfTimerDurationStepper")
         let durationRow = makeRow(
-            label: "倒计时时长",
+            label: L.text("倒计时时长"),
             trailingViews: [selfTimerDurationLabel, selfTimerDurationStepper]
         )
 
         selfTimerTickCheckbox = makeCheckbox(
-            title: "播放倒计时提示音",
+            title: L.text("播放倒计时提示音"),
             action: #selector(toggleSelfTimerTickSound)
         )
         selfTimerTickCheckbox.state = SelfTimerPreferences.playsTickSound() ? .on : .off
         selfTimerTickCheckbox.identifier = NSUserInterfaceItemIdentifier("selfTimerTickSound")
         let selfTimerSection = makeSection(
-            title: "延时截图",
+            title: L.text("延时截图"),
             views: [durationRow, selfTimerTickCheckbox]
         )
 
         // --- 快捷键 ---
         let shortcutGroups = makeShortcutGroups()
-        let shortcutSection = makeSection(title: "快捷键", views: [shortcutGroups])
+        let shortcutSection = makeSection(title: L.text("快捷键"), views: [shortcutGroups])
 
         // --- Note ---
-        let note = NSTextField(labelWithString: "快捷键必须包含 ⌘、⌃ 或 ⌥；重复或已被系统占用的组合不会保存。")
+        let note = NSTextField(labelWithString: L.text("快捷键必须包含 ⌘、⌃ 或 ⌥；重复或已被系统占用的组合不会保存。"))
         note.textColor = .secondaryLabelColor
         note.font = .systemFont(ofSize: 11)
         note.translatesAutoresizingMaskIntoConstraints = false
@@ -1307,12 +1307,12 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
     private func makeShortcutGroups() -> NSStackView {
         let captureGroup = makeShortcutGroup(
-            title: "截图与录制",
+            title: L.text("截图与录制"),
             identifier: "shortcutGroup.capture",
             actions: [.capture, .fullscreenCapture, .delayedCapture, .longCapture, .recording]
         )
         let pinGroup = makeShortcutGroup(
-            title: "贴图",
+            title: L.text("贴图"),
             identifier: "shortcutGroup.pin",
             actions: [.pinClipboard, .pinLibrary, .togglePins]
         )
@@ -1521,7 +1521,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     @objc private func changeSelfTimerDuration() {
         let duration = selfTimerDurationStepper.integerValue
         SelfTimerPreferences.setDurationSeconds(duration)
-        selfTimerDurationLabel.stringValue = "\(duration) 秒"
+        selfTimerDurationLabel.stringValue = L.format("%d 秒", duration)
     }
 
     @objc private func toggleSelfTimerTickSound() {
@@ -1563,7 +1563,7 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
             backing: .buffered,
             defer: false
         )
-        window.title = "水印设置"
+        window.title = L.text("水印设置")
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self
@@ -1582,12 +1582,12 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         guard let contentView = window?.contentView else { return }
         let watermarkConfig = WatermarkPreferences.load()
         watermarkCheckbox = makeCheckbox(
-            title: "启用截图水印",
+            title: L.text("启用截图水印"),
             action: #selector(toggleWatermarkEnabled)
         )
         watermarkCheckbox.state = watermarkConfig.isEnabled ? .on : .off
         recordingWatermarkCheckbox = makeCheckbox(
-            title: "应用到录制视频/GIF",
+            title: L.text("应用到录制视频/GIF"),
             action: #selector(toggleRecordingWatermarkEnabled)
         )
         recordingWatermarkCheckbox.state = WatermarkPreferences.recordingEnabled() ? .on : .off
@@ -1602,15 +1602,15 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         updateWatermarkContentHint(for: watermarkConfig)
 
         watermarkTextField = NSTextField(string: watermarkConfig.text)
-        watermarkTextField.placeholderString = "例如：SnapInk {datetime}"
+        watermarkTextField.placeholderString = L.text("例如：SnapInk {datetime}")
         watermarkTextField.target = self
         watermarkTextField.action = #selector(changeWatermarkText)
         watermarkTextField.delegate = self
         watermarkTextField.translatesAutoresizingMaskIntoConstraints = false
         watermarkTextField.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let textHelper = makeHelperLabel("可使用 {date}、{time}、{datetime}")
+        let textHelper = makeHelperLabel(L.text("可使用 {date}、{time}、{datetime}"))
         let textGroup = makeFieldGroup(rows: [
-            makeRow(label: "文字", trailingViews: [watermarkTextField]),
+            makeRow(label: L.text("文字"), trailingViews: [watermarkTextField]),
             makeIndentedView(textHelper)
         ])
 
@@ -1620,15 +1620,15 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         watermarkLogoLabel.lineBreakMode = .byTruncatingMiddle
         watermarkLogoLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         watermarkLogoLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let chooseLogoButton = NSButton(title: "选择…", target: self, action: #selector(chooseWatermarkLogo))
+        let chooseLogoButton = NSButton(title: L.text("选择…"), target: self, action: #selector(chooseWatermarkLogo))
         chooseLogoButton.bezelStyle = .rounded
-        let removeLogoButton = NSButton(title: "移除", target: self, action: #selector(removeWatermarkLogo))
+        let removeLogoButton = NSButton(title: L.text("移除"), target: self, action: #selector(removeWatermarkLogo))
         removeLogoButton.bezelStyle = .rounded
         let logoRow = makeRow(
             label: "Logo",
             trailingViews: [watermarkLogoLabel, chooseLogoButton, removeLogoButton]
         )
-        let logoHelper = makeHelperLabel("支持 PNG/JPG/HEIC，小于 3MB；导入后会自动优化为安全副本")
+        let logoHelper = makeHelperLabel(L.text("支持 PNG/JPG/HEIC，小于 3MB；导入后会自动优化为安全副本"))
         let logoGroup = makeFieldGroup(rows: [
             logoRow,
             makeIndentedView(logoHelper)
@@ -1642,7 +1642,7 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         watermarkRepeatModePopUp.selectItem(withTitle: watermarkConfig.repeatMode.title)
         watermarkRepeatModePopUp.target = self
         watermarkRepeatModePopUp.action = #selector(changeWatermarkRepeatMode)
-        let repeatModeRow = makeRow(label: "重复方式", trailingViews: [watermarkRepeatModePopUp])
+        let repeatModeRow = makeRow(label: L.text("重复方式"), trailingViews: [watermarkRepeatModePopUp])
 
         watermarkPositionPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
         WatermarkConfiguration.Position.allCases.forEach { position in
@@ -1653,7 +1653,7 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         watermarkPositionPopUp.target = self
         watermarkPositionPopUp.action = #selector(changeWatermarkPosition)
         watermarkPositionPopUp.isEnabled = watermarkConfig.repeatMode == .single
-        let positionRow = makeRow(label: "位置", trailingViews: [watermarkPositionPopUp])
+        let positionRow = makeRow(label: L.text("位置"), trailingViews: [watermarkPositionPopUp])
 
         watermarkOpacityLabel = makeValueLabel("\(Int(watermarkConfig.opacity * 100))%", width: 42)
         watermarkOpacitySlider = NSSlider(
@@ -1664,7 +1664,7 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
             action: #selector(changeWatermarkOpacity)
         )
         watermarkOpacitySlider.widthAnchor.constraint(equalToConstant: 160).isActive = true
-        let opacityRow = makeRow(label: "透明度", trailingViews: [watermarkOpacitySlider, watermarkOpacityLabel])
+        let opacityRow = makeRow(label: L.text("透明度"), trailingViews: [watermarkOpacitySlider, watermarkOpacityLabel])
 
         watermarkScaleLabel = makeValueLabel("\(Int(watermarkConfig.scale * 100))%", width: 42)
         watermarkScaleSlider = NSSlider(
@@ -1675,7 +1675,7 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
             action: #selector(changeWatermarkScale)
         )
         watermarkScaleSlider.widthAnchor.constraint(equalToConstant: 160).isActive = true
-        let scaleRow = makeRow(label: "大小", trailingViews: [watermarkScaleSlider, watermarkScaleLabel])
+        let scaleRow = makeRow(label: L.text("大小"), trailingViews: [watermarkScaleSlider, watermarkScaleLabel])
 
         watermarkMarginLabel = makeValueLabel("\(Int(watermarkConfig.margin)) pt", width: 52)
         watermarkMarginStepper = NSStepper()
@@ -1685,16 +1685,16 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         watermarkMarginStepper.doubleValue = Double(watermarkConfig.margin)
         watermarkMarginStepper.target = self
         watermarkMarginStepper.action = #selector(changeWatermarkMargin)
-        let marginRow = makeRow(label: "边距", trailingViews: [watermarkMarginLabel, watermarkMarginStepper])
+        let marginRow = makeRow(label: L.text("边距"), trailingViews: [watermarkMarginLabel, watermarkMarginStepper])
 
         watermarkColorWell = NSColorWell()
         watermarkColorWell.color = watermarkConfig.textColor
         watermarkColorWell.target = self
         watermarkColorWell.action = #selector(changeWatermarkColor)
-        let colorRow = makeRow(label: "文字颜色", trailingViews: [watermarkColorWell])
+        let colorRow = makeRow(label: L.text("文字颜色"), trailingViews: [watermarkColorWell])
 
         let section = makeSection(
-            title: "水印",
+            title: L.text("水印"),
             views: [
                 makeCheckboxInfoRow(watermarkCheckbox, infoButton: screenshotWatermarkInfoButton),
                 makeCheckboxInfoRow(recordingWatermarkCheckbox, infoButton: recordingWatermarkInfoButton),
@@ -1803,7 +1803,7 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         let button: NSButton
         if #available(macOS 11.0, *) {
             button = NSButton(
-                image: NSImage(systemSymbolName: "info.circle", accessibilityDescription: "水印说明")
+                image: NSImage(systemSymbolName: "info.circle", accessibilityDescription: L.text("水印说明"))
                     ?? NSImage(size: CGSize(width: 14, height: 14)),
                 target: self,
                 action: action
@@ -1904,7 +1904,7 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
                 watermarkLogoLabel.stringValue = watermarkLogoDisplayName(from: config)
                 updateWatermarkContentHint(for: config)
             } catch {
-                showError(title: "水印图片无效", message: error.localizedDescription)
+                showError(title: L.text("水印图片无效"), message: error.localizedDescription)
             }
         }
     }
@@ -1921,7 +1921,7 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
             WatermarkPreferences.setRecordingEnabled(false)
         }
         WatermarkPreferences.save(config)
-        watermarkLogoLabel.stringValue = "未选择"
+        watermarkLogoLabel.stringValue = L.text("未选择")
         updateWatermarkContentHint(for: config)
     }
 
@@ -1986,20 +1986,20 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
     }
 
     private func watermarkLogoDisplayName(from config: WatermarkConfiguration) -> String {
-        config.logoURL == nil ? "未选择" : (config.logoDisplayName ?? config.logoURL?.lastPathComponent ?? "已选择")
+        config.logoURL == nil ? L.text("未选择") : (config.logoDisplayName ?? config.logoURL?.lastPathComponent ?? L.text("已选择"))
     }
 
     private func updateWatermarkContentHint(for config: WatermarkConfiguration) {
         if config.hasRenderableContent {
-            watermarkCheckbox.toolTip = "使用当前文字和 Logo 样式应用截图水印"
-            recordingWatermarkCheckbox.toolTip = "导出时添加水印，不会在录制过程中显示"
-            screenshotWatermarkInfoButton.toolTip = "截图水印说明"
-            recordingWatermarkInfoButton.toolTip = "录制水印说明"
+            watermarkCheckbox.toolTip = L.text("使用当前文字和 Logo 样式应用截图水印")
+            recordingWatermarkCheckbox.toolTip = L.text("导出时添加水印，不会在录制过程中显示")
+            screenshotWatermarkInfoButton.toolTip = L.text("截图水印说明")
+            recordingWatermarkInfoButton.toolTip = L.text("录制水印说明")
         } else {
-            watermarkCheckbox.toolTip = "请先填写水印文字或选择 Logo"
-            recordingWatermarkCheckbox.toolTip = "请先填写水印文字或选择 Logo"
-            screenshotWatermarkInfoButton.toolTip = "请先填写水印文字或选择 Logo"
-            recordingWatermarkInfoButton.toolTip = "请先填写水印文字或选择 Logo"
+            watermarkCheckbox.toolTip = L.text("请先填写水印文字或选择 Logo")
+            recordingWatermarkCheckbox.toolTip = L.text("请先填写水印文字或选择 Logo")
+            screenshotWatermarkInfoButton.toolTip = L.text("请先填写水印文字或选择 Logo")
+            recordingWatermarkInfoButton.toolTip = L.text("请先填写水印文字或选择 Logo")
         }
     }
 
@@ -2070,7 +2070,7 @@ final class ShortcutRecorderButton: NSButton {
     @objc private func startRecording() {
         guard keyMonitor == nil else { return }
         onRecordingStarted?()
-        title = "输入新快捷键…"
+        title = L.text("输入新快捷键…")
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.record(event)
             return nil
@@ -2347,7 +2347,7 @@ final class CaptureController {
                 domain: "SnapInk.ScreenCapturePermission",
                 code: 1,
                 userInfo: [
-                    NSLocalizedDescriptionKey: "macOS 未授予屏幕录制权限。"
+                    NSLocalizedDescriptionKey: L.text("macOS 未授予屏幕录制权限。")
                 ]
             ))
         }
@@ -2434,7 +2434,7 @@ final class CaptureController {
             fallback: NSScreen.main
         ), let entry = preCapturedScreens.first(where: { $0.screen.frame == screen.frame }) else {
             preCapturedScreens.removeAll()
-            showFailureAlert(message: "未找到鼠标所在的显示器，无法进行全屏截图。")
+            showFailureAlert(message: L.text("未找到鼠标所在的显示器，无法进行全屏截图。"))
             return
         }
 
@@ -2469,7 +2469,7 @@ final class CaptureController {
         guard selfTimerCountdown == nil,
               let screen = CaptureScreenGeometry.targetScreen(for: globalRect, screens: NSScreen.screens) else {
             closeOverlays()
-            showFailureAlert(message: "所选区域所在的显示器已断开，请重新截图。")
+            showFailureAlert(message: L.text("所选区域所在的显示器已断开，请重新截图。"))
             return
         }
 
@@ -2491,14 +2491,14 @@ final class CaptureController {
         guard let screen = CaptureScreenGeometry.targetScreen(for: globalRect, screens: NSScreen.screens),
               let entry = preCapturedScreens.first(where: { $0.screen.frame == screen.frame }) else {
             preCapturedScreens.removeAll()
-            showFailureAlert(message: "延时截图区域已失效，可能是显示器配置发生了变化。")
+            showFailureAlert(message: L.text("延时截图区域已失效，可能是显示器配置发生了变化。"))
             return
         }
 
         let localRect = CaptureScreenGeometry.localRect(globalRect, in: screen.frame)
         guard localRect.width >= 2, localRect.height >= 2 else {
             preCapturedScreens.removeAll()
-            showFailureAlert(message: "延时截图区域无效，请重新选择。")
+            showFailureAlert(message: L.text("延时截图区域无效，请重新选择。"))
             return
         }
         let window = SelectionOverlayWindow(screen: screen, allowsLiveCaptureActions: false)
@@ -2773,7 +2773,7 @@ final class CaptureController {
                 }
                 return
             }
-            self.showFailureAlert(message: "截图失败：无法通过同步冻结画面获取所选区域。请确认屏幕录制权限已开启后重试。")
+            self.showFailureAlert(message: L.text("截图失败：无法通过同步冻结画面获取所选区域。请确认屏幕录制权限已开启后重试。"))
         }
     }
 
@@ -2791,7 +2791,7 @@ final class CaptureController {
         }
 
         window.annotationEditingDidFail()
-        showFailureAlert(message: "无法进入标注：没有可用的同步冻结截图。请重新截图。")
+        showFailureAlert(message: L.text("无法进入标注：没有可用的同步冻结截图。请重新截图。"))
     }
 
     private func finishAnnotatedCapture(
@@ -2828,7 +2828,7 @@ final class CaptureController {
                             domain: "SnapInk.OCR",
                             code: 2,
                             userInfo: [
-                                NSLocalizedDescriptionKey: "无法读取同步冻结截图，已取消 OCR。请重新截图后再试。"
+                                NSLocalizedDescriptionKey: L.text("无法读取同步冻结截图，已取消 OCR。请重新截图后再试。")
                             ]
                         )
                     }
@@ -2872,14 +2872,14 @@ final class CaptureController {
 
     private func showNoTextAlert() {
         let alert = NSAlert()
-        alert.messageText = "未识别到文字"
-        alert.informativeText = "当前区域未识别到文字。"
+        alert.messageText = L.text("未识别到文字")
+        alert.informativeText = L.text("当前区域未识别到文字。")
         alert.runModal()
     }
 
     private func showOCRFailureAlert(message: String) {
         let alert = NSAlert()
-        alert.messageText = "文字识别失败"
+        alert.messageText = L.text("文字识别失败")
         alert.informativeText = message
         alert.runModal()
     }
@@ -2947,11 +2947,11 @@ final class CaptureController {
 
     private func showPermissionAlert(error: Error) {
         let alert = NSAlert()
-        alert.messageText = "需要屏幕录制权限"
-        alert.informativeText = "SnapInk 已向 macOS 发起屏幕录制授权申请。请在“系统设置 > 隐私与安全性 > 录屏与系统录音”中开启 SnapInk，然后退出并重新打开应用。\n\n如果列表中仍没有 SnapInk，请点击列表底部的“+”，手动选择“应用程序”中的 SnapInk。\n\n系统信息：\(error.localizedDescription)"
-        alert.addButton(withTitle: "打开系统设置")
-        alert.addButton(withTitle: "退出 SnapInk")
-        alert.addButton(withTitle: "取消")
+        alert.messageText = L.text("需要屏幕录制权限")
+        alert.informativeText = L.format("SnapInk 已向 macOS 发起屏幕录制授权申请。请在“系统设置 > 隐私与安全性 > 录屏与系统录音”中开启 SnapInk，然后退出并重新打开应用。\n\n如果列表中仍没有 SnapInk，请点击列表底部的“+”，手动选择“应用程序”中的 SnapInk。\n\n系统信息：%@", error.localizedDescription)
+        alert.addButton(withTitle: L.text("打开系统设置"))
+        alert.addButton(withTitle: L.text("退出 SnapInk"))
+        alert.addButton(withTitle: L.text("取消"))
         switch alert.runModal() {
         case .alertFirstButtonReturn:
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
@@ -2966,14 +2966,14 @@ final class CaptureController {
 
     private func showMicrophonePermissionAlert() {
         let alert = NSAlert()
-        alert.messageText = "需要麦克风权限"
-        alert.informativeText = """
+        alert.messageText = L.text("需要麦克风权限")
+        alert.informativeText = L.text("""
         请在“系统设置 > 隐私与安全性 > 麦克风”中允许 SnapInk，然后重试。
 
         如果列表中没有 SnapInk，请先确认正在运行的是新版 /Applications/SnapInk.app，退出并重新打开后再录制一次；macOS 只有在应用真正请求麦克风权限后才会把它加入列表。
-        """
-        alert.addButton(withTitle: "打开系统设置")
-        alert.addButton(withTitle: "取消")
+        """)
+        alert.addButton(withTitle: L.text("打开系统设置"))
+        alert.addButton(withTitle: L.text("取消"))
         if alert.runModal() == .alertFirstButtonReturn,
            let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
             NSWorkspace.shared.open(url)
@@ -2982,7 +2982,7 @@ final class CaptureController {
 
     private func showFailureAlert(message: String) {
         let alert = NSAlert()
-        alert.messageText = "截图失败"
+        alert.messageText = L.text("截图失败")
         alert.informativeText = message
         alert.runModal()
     }
@@ -3188,8 +3188,8 @@ final class SelectionOverlayView: NSView {
     private lazy var longCaptureBar: LongCaptureStartBar = {
         let bar = LongCaptureStartBar(
             frame: CGRect(x: 0, y: 0, width: 430, height: 48),
-            hint: "框内内容需全部能够上下滚动",
-            startTitle: "开始长截图"
+            hint: L.text("框内内容需全部能够上下滚动"),
+            startTitle: L.text("开始长截图")
         )
         bar.onStart = { [weak self] in self?.requestLongCapture() }
         bar.onCancel = { [weak self] in self?.onSelectionCancelled?() }
@@ -3720,7 +3720,7 @@ final class SelectionOverlayView: NSView {
             let d = dr * dr + dg * dg + db * db
             if d < bestDist { bestDist = d; best = name }
         }
-        return best
+        return L.text(best)
     }
 
     /// iShot-style smart window detection: finds the topmost window under
@@ -4043,10 +4043,10 @@ final class SelectionOverlayView: NSView {
         guard let selection = currentSelection() else {
             bounds.fill()
             let hint = purpose == .longCapture
-                ? "拖动选择可滚动区域，Esc 取消"
+                ? L.text("拖动选择可滚动区域，Esc 取消")
                 : purpose == .delayedCapture
-                    ? "拖动选择延时截图区域，Esc 取消"
-                    : "拖动选择截图区域，Esc 取消"
+                    ? L.text("拖动选择延时截图区域，Esc 取消")
+                    : L.text("拖动选择截图区域，Esc 取消")
             drawHint(hint, at: NSPoint(x: bounds.midX - 110, y: bounds.midY))
             drawSelectionGuideLines()
             drawColorSamplerOverlay()
@@ -4105,7 +4105,7 @@ final class SelectionOverlayView: NSView {
         guard isSelectionFinalized, !isSubmitting else { return }
 
         isSubmitting = true
-        actionBar.setBusy(true, message: "正在识别文字…")
+        actionBar.setBusy(true, message: L.text("正在识别文字…"))
         if annotationCanvas != nil {
             annotationCanvas?.cancelPendingInteraction()
             guard let selection = currentSelection(),
@@ -4115,7 +4115,7 @@ final class SelectionOverlayView: NSView {
                 onAnnotationFailed?(NSError(
                     domain: "SnapInk.OCR",
                     code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "无法读取原始截图区域。"]
+                    userInfo: [NSLocalizedDescriptionKey: L.text("无法读取原始截图区域。")]
                 ))
                 return
             }
@@ -4135,7 +4135,7 @@ final class SelectionOverlayView: NSView {
         guard isSelectionFinalized, !isSubmitting else { return }
         if let annotationCanvas {
             isSubmitting = true
-            actionBar.setBusy(true, message: "正在生成图片…")
+            actionBar.setBusy(true, message: L.text("正在生成图片…"))
             do {
                 guard let selection = currentSelection() else {
                     isSubmitting = false
@@ -4931,13 +4931,13 @@ enum ScreenshotWriter {
             : image
         let bitmap = NSBitmapImageRep(cgImage: image)
         guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
-            throw makeError(code: 1, message: "无法生成剪贴板图片。")
+            throw makeError(code: 1, message: L.text("无法生成剪贴板图片。"))
         }
 
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         guard pasteboard.setData(pngData, forType: .png) else {
-            throw makeError(code: 2, message: "无法写入系统剪贴板。")
+            throw makeError(code: 2, message: L.text("无法写入系统剪贴板。"))
         }
     }
 
@@ -4961,7 +4961,7 @@ enum ScreenshotWriter {
         let url = dir.appendingPathComponent("SnapInk-\(formatter.string(from: Date())).\(fmt.fileExtension)")
 
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL, fmt.utType as CFString, 1, nil) else {
-            throw makeError(code: 3, message: "无法创建 \(fmt.displayName) 文件。")
+            throw makeError(code: 3, message: L.format("无法创建 %@ 文件。", fmt.displayName))
         }
 
         if fmt == .jpg {
@@ -4971,7 +4971,7 @@ enum ScreenshotWriter {
             CGImageDestinationAddImage(destination, image, nil)
         }
         guard CGImageDestinationFinalize(destination) else {
-            throw makeError(code: 4, message: "无法将截图保存到 \(dir.path)。")
+            throw makeError(code: 4, message: L.format("无法将截图保存到 %@。", dir.path))
         }
 
         return url
@@ -4991,7 +4991,7 @@ enum ScreenshotWriter {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         guard pasteboard.setData(data, forType: NSPasteboard.PasteboardType("com.compuserve.gif")) else {
-            throw makeError(code: 5, message: "无法写入系统剪贴板。")
+            throw makeError(code: 5, message: L.text("无法写入系统剪贴板。"))
         }
     }
 
@@ -5009,14 +5009,14 @@ enum ScreenshotWriter {
             space: CGColorSpace(name: CGColorSpace.sRGB)!,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else {
-            throw makeError(code: 6, message: "无法生成 JPG 背景。")
+            throw makeError(code: 6, message: L.text("无法生成 JPG 背景。"))
         }
         let rect = CGRect(x: 0, y: 0, width: image.width, height: image.height)
         context.setFillColor(NSColor.white.cgColor)
         context.fill(rect)
         context.draw(image, in: rect)
         guard let output = context.makeImage() else {
-            throw makeError(code: 7, message: "无法生成 JPG 背景。")
+            throw makeError(code: 7, message: L.text("无法生成 JPG 背景。"))
         }
         return output
     }
