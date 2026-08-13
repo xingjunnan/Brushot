@@ -425,6 +425,8 @@ final class RecordingSessionController: NSObject {
     private var lastDiskCheckAt = Date.distantPast
 
     nonisolated static let borderExpansion: CGFloat = 3
+    static let annotationWindowLevel = NSWindow.Level.screenSaver
+    static let controlWindowLevel = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
 
     init(
         selectionRect: CGRect,
@@ -453,7 +455,7 @@ final class RecordingSessionController: NSObject {
         borderWindow.isOpaque = false
         borderWindow.hasShadow = false
         borderWindow.ignoresMouseEvents = true
-        borderWindow.level = .screenSaver
+        borderWindow.level = Self.annotationWindowLevel
         borderWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         borderWindow.isReleasedWhenClosed = false
 
@@ -476,7 +478,7 @@ final class RecordingSessionController: NSObject {
         annotationWindow.hasShadow = false
         annotationWindow.hidesOnDeactivate = false
         annotationWindow.isReleasedWhenClosed = false
-        annotationWindow.level = .screenSaver
+        annotationWindow.level = Self.annotationWindowLevel
         annotationWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         annotationWindow.ignoresMouseEvents = true
         annotationWindow.contentView = annotationView
@@ -633,7 +635,7 @@ final class RecordingSessionController: NSObject {
         controlWindow.hasShadow = true
         controlWindow.hidesOnDeactivate = false
         controlWindow.isReleasedWhenClosed = false
-        controlWindow.level = .screenSaver
+        controlWindow.level = Self.controlWindowLevel
         controlWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
 
         let background = NSVisualEffectView(frame: controlWindow.contentView?.bounds ?? .zero)

@@ -397,6 +397,13 @@ private final class TestAssetWriterBox: @unchecked Sendable {
 
 @MainActor
 final class RecordingInteractionTests: XCTestCase {
+    func testRecordingControlsStayAboveLiveAnnotationOverlay() {
+        XCTAssertGreaterThan(
+            RecordingSessionController.controlWindowLevel.rawValue,
+            RecordingSessionController.annotationWindowLevel.rawValue
+        )
+    }
+
     func testFormatChooserOffersVideoGIFAndPersistedAudioToggle() throws {
         let originalAudioPreference = RecordingPreferences.systemAudioEnabled()
         let originalMicrophonePreference = RecordingPreferences.microphoneEnabled()
