@@ -1666,7 +1666,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
         let toolDefinitions: [(AnnotationTool, String)] = [
             (.select, "cursorarrow"), (.rectangle, "rectangle"), (.ellipse, "circle"),
             (.line, "line.diagonal"), (.arrow, "arrow.up.right"), (.pen, "pencil.tip"),
-            (.text, "textformat.abc"), (.sequence, "1.circle"),
+            (.text, "brushot.text"), (.sequence, "1.circle"),
             (.mosaic, "checkerboard.rectangle"), (.highlight, "flashlight.on.fill")
         ]
         for (tool, symbol) in toolDefinitions {
@@ -2026,11 +2026,19 @@ final class AnnotationToolbarView: NSVisualEffectView {
     }
 
     private func toolbarSymbol(_ symbol: String, title: String) -> NSImage {
+        if symbol == "brushot.text" {
+            return textToolSymbol(title: title)
+        }
+
         if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
             .withSymbolConfiguration(.init(pointSize: 16, weight: .medium)) {
             return image
         }
 
+        return textToolSymbol(title: title)
+    }
+
+    private func textToolSymbol(title: String) -> NSImage {
         let image = NSImage(size: NSSize(width: 18, height: 18))
         image.lockFocus()
         NSColor.labelColor.set()
