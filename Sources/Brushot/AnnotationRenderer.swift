@@ -348,6 +348,6 @@ enum AnnotationRenderer {
     }
 
     private static func makeError(_ message: String) -> NSError {
-        NSError(domain: "SnapInk.AnnotationRenderer", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+        NSError(domain: "Brushot.AnnotationRenderer", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 }

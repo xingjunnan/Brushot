@@ -1,7 +1,7 @@
 import AppKit
 import Carbon
 import XCTest
-@testable import SnapInk
+@testable import Brushot
 
 @MainActor
 final class ShortcutTests: XCTestCase {
@@ -32,7 +32,7 @@ final class ShortcutTests: XCTestCase {
     }
 
     func testDefaultShortcutsAreUniqueAndPreferencesRoundTrip() throws {
-        let suiteName = "SnapInk.ShortcutTests.\(UUID().uuidString)"
+        let suiteName = "Brushot.ShortcutTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
@@ -54,14 +54,14 @@ final class ShortcutTests: XCTestCase {
     }
 
     func testRecordingShortcutDefaultsToOptionRAndMigratesLegacyGIFValue() throws {
-        let freshSuite = "SnapInk.RecordingShortcutFresh.\(UUID().uuidString)"
+        let freshSuite = "Brushot.RecordingShortcutFresh.\(UUID().uuidString)"
         let fresh = try XCTUnwrap(UserDefaults(suiteName: freshSuite))
         defer { fresh.removePersistentDomain(forName: freshSuite) }
         let defaultShortcut = ShortcutPreferences.load(.recording, defaults: fresh)
         XCTAssertEqual(defaultShortcut.keyCode, UInt32(kVK_ANSI_R))
         XCTAssertEqual(defaultShortcut.modifiers, UInt32(optionKey))
 
-        let legacySuite = "SnapInk.RecordingShortcutLegacy.\(UUID().uuidString)"
+        let legacySuite = "Brushot.RecordingShortcutLegacy.\(UUID().uuidString)"
         let legacy = try XCTUnwrap(UserDefaults(suiteName: legacySuite))
         defer { legacy.removePersistentDomain(forName: legacySuite) }
         legacy.set(Int(kVK_ANSI_K), forKey: "gifCaptureShortcut.keyCode")
@@ -76,7 +76,7 @@ final class ShortcutTests: XCTestCase {
 
     func testValidatorRejectsInternalConflictsAndAllowsCommandComma() {
         let shortcuts = ShortcutPreferences.loadAll(
-            defaults: UserDefaults(suiteName: "SnapInk.ShortcutDefaults.\(UUID().uuidString)")!
+            defaults: UserDefaults(suiteName: "Brushot.ShortcutDefaults.\(UUID().uuidString)")!
         )
 
         XCTAssertEqual(
@@ -146,7 +146,7 @@ final class ShortcutTests: XCTestCase {
         XCTAssertEqual(menu.items[settingsIndex + 1].title, "水印设置…")
         XCTAssertEqual(menu.items[settingsIndex + 1].keyEquivalent, "")
         XCTAssertTrue(menu.items[settingsIndex + 1].keyEquivalentModifierMask.isEmpty)
-        let quit = try XCTUnwrap(menu.items.first { $0.title == "退出 SnapInk" })
+        let quit = try XCTUnwrap(menu.items.first { $0.title == "退出 Brushot" })
         XCTAssertEqual(quit.keyEquivalent, "")
         XCTAssertTrue(quit.keyEquivalentModifierMask.isEmpty)
     }
@@ -253,7 +253,7 @@ final class ShortcutTests: XCTestCase {
         }
 
         var config = WatermarkConfiguration.default
-        config.text = "SnapInk"
+        config.text = "Brushot"
         WatermarkPreferences.save(config)
         let controller = WatermarkSettingsWindowController()
 
@@ -262,7 +262,7 @@ final class ShortcutTests: XCTestCase {
     }
 
     func testTranslationPreferenceDefaultsOnAndPersistsToggle() throws {
-        let suiteName = "SnapInk.TranslationPreferenceTests.\(UUID().uuidString)"
+        let suiteName = "Brushot.TranslationPreferenceTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
@@ -274,7 +274,7 @@ final class ShortcutTests: XCTestCase {
     }
 
     func testSelectionMagnifierPreferenceDefaultsOffAndPersists() throws {
-        let suiteName = "SnapInk.SelectionMagnifier.\(UUID().uuidString)"
+        let suiteName = "Brushot.SelectionMagnifier.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
@@ -286,7 +286,7 @@ final class ShortcutTests: XCTestCase {
     }
 
     func testCompletionSoundPreferenceDefaultsOnAndPersists() throws {
-        let suiteName = "SnapInk.CompletionSound.\(UUID().uuidString)"
+        let suiteName = "Brushot.CompletionSound.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 

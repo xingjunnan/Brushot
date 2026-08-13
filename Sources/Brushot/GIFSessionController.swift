@@ -503,7 +503,7 @@ final class RecordingSessionController: NSObject {
 
         Task { [weak self] in
             guard let self else { return }
-            // Rebuild the filter now that SnapInk's border/control windows
+            // Rebuild the filter now that Brushot's border/control windows
             // are on screen, so they are excluded from every recorded frame.
             await self.capturer.prepareForOverlayExclusion()
             do {

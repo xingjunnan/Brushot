@@ -1,6 +1,6 @@
 import AppKit
 import XCTest
-@testable import SnapInk
+@testable import Brushot
 
 final class LongCaptureTests: XCTestCase {
     func testStitcherJoinsOverlappingFramesLosslessly() throws {
@@ -298,7 +298,7 @@ final class LongCaptureTests: XCTestCase {
 
         var watermark = WatermarkConfiguration.default
         watermark.isEnabled = true
-        watermark.text = "SnapInk"
+        watermark.text = "Brushot"
         watermark.opacity = 1
         watermark.textColor = .black
         WatermarkPreferences.save(watermark)
@@ -332,7 +332,7 @@ final class LongCaptureTests: XCTestCase {
 
         var watermark = WatermarkConfiguration.default
         watermark.isEnabled = true
-        watermark.text = "SnapInk"
+        watermark.text = "Brushot"
         watermark.position = .center
         watermark.opacity = 1
         watermark.textColor = .black
@@ -370,7 +370,7 @@ final class LongCaptureTests: XCTestCase {
 
         var watermark = WatermarkConfiguration.default
         watermark.isEnabled = false
-        watermark.text = "SnapInk"
+        watermark.text = "Brushot"
         watermark.position = .center
         watermark.opacity = 1
         watermark.textColor = .black

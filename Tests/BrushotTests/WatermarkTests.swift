@@ -1,6 +1,6 @@
 import AppKit
 import XCTest
-@testable import SnapInk
+@testable import Brushot
 
 final class WatermarkTests: XCTestCase {
     func testPreferencesDefaultToDisabledAndClampNumericValues() {
@@ -26,13 +26,13 @@ final class WatermarkTests: XCTestCase {
         XCTAssertNil(WatermarkPreferences.currentRecordingConfiguration(defaults: defaults))
 
         var config = WatermarkConfiguration.default
-        config.text = "SnapInk"
+        config.text = "Brushot"
         config.isEnabled = false
         WatermarkPreferences.save(config, defaults: defaults)
 
         let recording = try XCTUnwrap(WatermarkPreferences.currentRecordingConfiguration(defaults: defaults))
         XCTAssertTrue(recording.isEnabled)
-        XCTAssertEqual(recording.text, "SnapInk")
+        XCTAssertEqual(recording.text, "Brushot")
     }
 
     func testPreferencesPersistDiagonalTiledRepeatModeAndFallbackToSingle() {
@@ -63,7 +63,7 @@ final class WatermarkTests: XCTestCase {
     func testPlaceholderResolutionUsesCapturedDate() {
         let date = Date(timeIntervalSince1970: 1_735_689_845)
         let text = WatermarkRenderer.resolvePlaceholders(
-            in: "SnapInk {date} {time} {datetime}",
+            in: "Brushot {date} {time} {datetime}",
             date: date,
             locale: Locale(identifier: "en_US_POSIX")
         )
@@ -76,14 +76,14 @@ final class WatermarkTests: XCTestCase {
         formatter.dateFormat = "HH:mm:ss"
         let timeText = formatter.string(from: date)
 
-        XCTAssertEqual(text, "SnapInk \(dateText) \(timeText) \(datetime)")
+        XCTAssertEqual(text, "Brushot \(dateText) \(timeText) \(datetime)")
     }
 
     func testRendererKeepsDimensionsAndDrawsWatermark() throws {
         let base = try makeSolidImage(width: 240, height: 120, color: .black)
         var config = WatermarkConfiguration.default
         config.isEnabled = true
-        config.text = "SnapInk"
+        config.text = "Brushot"
         config.position = .bottomRight
         config.opacity = 1
         config.textColor = .white
@@ -103,7 +103,7 @@ final class WatermarkTests: XCTestCase {
         let base = try makeSolidImage(width: 480, height: 320, color: .black)
         var singleConfig = WatermarkConfiguration.default
         singleConfig.isEnabled = true
-        singleConfig.text = "SnapInk"
+        singleConfig.text = "Brushot"
         singleConfig.repeatMode = .single
         singleConfig.position = .bottomRight
         singleConfig.opacity = 1

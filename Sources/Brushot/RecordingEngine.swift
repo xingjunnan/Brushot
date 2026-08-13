@@ -112,7 +112,7 @@ enum RecordingMicrophones {
 
 final class MicrophoneCaptureSession: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let session = AVCaptureSession()
-    private let controlQueue = DispatchQueue(label: "com.snapink.recording.microphone.control")
+    private let controlQueue = DispatchQueue(label: "com.brushot.recording.microphone.control")
     private let onSample: @Sendable (CMSampleBuffer) -> Void
 
     init(
@@ -252,7 +252,7 @@ enum RecordingError: LocalizedError {
         case .writerSetupFailed(let reason): L.format("无法准备录制：%@", reason)
         case .writerFailed(let reason): L.format("录制写入失败：%@", reason)
         case .noFrames: L.text("没有录制到有效画面。")
-        case .microphonePermissionDenied: L.text("没有麦克风权限。请在“系统设置 → 隐私与安全性 → 麦克风”中允许 SnapInk，然后重试。")
+        case .microphonePermissionDenied: L.text("没有麦克风权限。请在“系统设置 → 隐私与安全性 → 麦克风”中允许 Brushot，然后重试。")
         case .microphoneUnavailable: L.text("所选麦克风不可用，请重新连接设备或选择其他麦克风。")
         case .insufficientDiskSpace: L.text("磁盘剩余空间不足 1 GB，无法安全录制。请清理空间后重试。")
         }
@@ -285,7 +285,7 @@ final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate {
     private(set) var elapsedTime: TimeInterval = 0
     var onUnexpectedStop: ((Error) -> Void)?
 
-    private let sampleQueue = DispatchQueue(label: "com.snapink.recording.samples", qos: .userInitiated)
+    private let sampleQueue = DispatchQueue(label: "com.brushot.recording.samples", qos: .userInitiated)
     private var stream: SCStream?
     private var microphoneCapture: MicrophoneCaptureSession?
     nonisolated(unsafe) private var writer: RecordingWriter?
@@ -506,7 +506,7 @@ final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate {
 
     private static func temporaryURL(extension pathExtension: String) -> URL {
         FileManager.default.temporaryDirectory
-            .appendingPathComponent("SnapInk-Recording-\(UUID().uuidString)")
+            .appendingPathComponent("Brushot-Recording-\(UUID().uuidString)")
             .appendingPathExtension(pathExtension)
     }
 
@@ -814,7 +814,7 @@ final class RecordingWriter: @unchecked Sendable {
         guard terminalError == nil else { return }
         let reason = error.map(RecordingDiagnostics.describe) ?? fallback
         terminalError = RecordingError.writerFailed(reason)
-        NSLog("SnapInk recording writer failed: %@", reason)
+        NSLog("Brushot recording writer failed: %@", reason)
     }
 
     private func maxZero(_ time: CMTime) -> CMTime {

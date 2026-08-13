@@ -1,7 +1,7 @@
 import AppKit
 import Carbon
 import XCTest
-@testable import SnapInk
+@testable import Brushot
 
 @MainActor
 final class AnnotationEditorTests: XCTestCase {
@@ -282,7 +282,7 @@ final class AnnotationEditorTests: XCTestCase {
 
         var enabled = WatermarkConfiguration.default
         enabled.isEnabled = true
-        enabled.text = "SnapInk"
+        enabled.text = "Brushot"
         enabled.position = .center
         enabled.opacity = 1
         enabled.textColor = .black
@@ -298,7 +298,7 @@ final class AnnotationEditorTests: XCTestCase {
 
         var enabled = WatermarkConfiguration.default
         enabled.isEnabled = true
-        enabled.text = "SnapInk"
+        enabled.text = "Brushot"
         enabled.position = .center
         enabled.opacity = 1
         enabled.textColor = .black
@@ -322,7 +322,7 @@ final class AnnotationEditorTests: XCTestCase {
 
         var disabled = WatermarkConfiguration.default
         disabled.isEnabled = false
-        disabled.text = "SnapInk"
+        disabled.text = "Brushot"
         disabled.position = .center
         disabled.opacity = 1
         disabled.textColor = .black
@@ -348,7 +348,7 @@ final class AnnotationEditorTests: XCTestCase {
 
         var watermark = WatermarkConfiguration.default
         watermark.isEnabled = true
-        watermark.text = "SnapInk"
+        watermark.text = "Brushot"
         watermark.opacity = 1
         watermark.textColor = .black
         let capturedAt = Date(timeIntervalSince1970: 0)
@@ -381,7 +381,7 @@ final class AnnotationEditorTests: XCTestCase {
 
         var watermark = WatermarkConfiguration.default
         watermark.isEnabled = true
-        watermark.text = "SnapInk"
+        watermark.text = "Brushot"
         watermark.opacity = 1
         watermark.textColor = .black
         overlay.enterAnnotationEditing(

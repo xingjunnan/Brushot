@@ -237,7 +237,7 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
 
     private static var clipboardDirectory: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("SnapInk", isDirectory: true)
+            .appendingPathComponent("Brushot", isDirectory: true)
             .appendingPathComponent("RecordingClipboard", isDirectory: true)
     }
 
@@ -248,8 +248,8 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
             includingPropertiesForKeys: nil
         ) else { return }
         for file in files where
-            file.lastPathComponent.hasPrefix("SnapInk-Recording-")
-                || file.lastPathComponent.hasPrefix("SnapInk-Export-") {
+            file.lastPathComponent.hasPrefix("Brushot-Recording-")
+                || file.lastPathComponent.hasPrefix("Brushot-Export-") {
             try? FileManager.default.removeItem(at: file)
         }
     }
@@ -258,6 +258,6 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
-        return "SnapInk-\(formatter.string(from: Date())).\(format.fileExtension)"
+        return "Brushot-\(formatter.string(from: Date())).\(format.fileExtension)"
     }
 }

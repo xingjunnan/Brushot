@@ -4,13 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT_DIR/.build/app-release"
 MODULE_CACHE_DIR="$ROOT_DIR/.build/module-cache"
-APP_DIR="$ROOT_DIR/.build/distribution/SnapInk.app"
+APP_DIR="$ROOT_DIR/.build/distribution/Brushot.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 APP_RESOURCES_DIR="$CONTENTS_DIR/Resources"
 RESOURCES_DIR="$ROOT_DIR/Resources"
-ENTITLEMENTS_PATH="$RESOURCES_DIR/SnapInk.entitlements"
-SOURCE_DIR="$ROOT_DIR/Sources/SnapInk"
+ENTITLEMENTS_PATH="$RESOURCES_DIR/Brushot.entitlements"
+SOURCE_DIR="$ROOT_DIR/Sources/Brushot"
 SOURCE_FILES=("$SOURCE_DIR"/*.swift)
 ARCHS=(arm64 x86_64)
 
@@ -20,7 +20,7 @@ mkdir -p "$MACOS_DIR" "$APP_RESOURCES_DIR" "$BUILD_DIR" "$MODULE_CACHE_DIR"
 ARCH_BINARIES=()
 for ARCH in "${ARCHS[@]}"; do
     ARCH_MODULE_CACHE_DIR="$MODULE_CACHE_DIR/$ARCH"
-    ARCH_BINARY="$BUILD_DIR/SnapInk-$ARCH"
+    ARCH_BINARY="$BUILD_DIR/Brushot-$ARCH"
     mkdir -p "$ARCH_MODULE_CACHE_DIR"
     xcrun swiftc \
         -O \
@@ -44,7 +44,7 @@ for ARCH in "${ARCHS[@]}"; do
         -o "$ARCH_BINARY"
     ARCH_BINARIES+=("$ARCH_BINARY")
 done
-lipo -create "${ARCH_BINARIES[@]}" -output "$MACOS_DIR/SnapInk"
+lipo -create "${ARCH_BINARIES[@]}" -output "$MACOS_DIR/Brushot"
 
 cp "$RESOURCES_DIR/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$RESOURCES_DIR/AppIcon.icns" "$APP_RESOURCES_DIR/AppIcon.icns"
@@ -55,8 +55,8 @@ find "$RESOURCES_DIR" -name '*.lproj' -type d -maxdepth 1 -exec cp -R {} "$APP_R
 # a Developer ID Application identity when available, then the first Apple
 # Development identity in the user's keychain.
 EXPLICIT_CODE_SIGN_IDENTITY=false
-if [[ -n "${SNAPINK_CODESIGN_IDENTITY:-}" ]]; then
-    CODE_SIGN_IDENTITY="$SNAPINK_CODESIGN_IDENTITY"
+if [[ -n "${BRUSHOT_CODESIGN_IDENTITY:-}" ]]; then
+    CODE_SIGN_IDENTITY="$BRUSHOT_CODESIGN_IDENTITY"
     EXPLICIT_CODE_SIGN_IDENTITY=true
 else
     CODE_SIGN_IDENTITY="$(
@@ -74,7 +74,7 @@ CODESIGN_ARGS=(
     --deep
     --entitlements "$ENTITLEMENTS_PATH"
     --options runtime
-    --identifier "com.snapink.app"
+    --identifier "com.brushot.app"
     --sign "$CODE_SIGN_IDENTITY"
 )
 # Secure timestamps are required for distributable Developer ID builds, but
@@ -103,7 +103,7 @@ if ! codesign --verify --deep --strict "$APP_DIR" >/dev/null 2>&1; then
         --deep \
         --entitlements "$ENTITLEMENTS_PATH" \
         --options runtime \
-        --identifier "com.snapink.app" \
+        --identifier "com.brushot.app" \
         --sign "$CODE_SIGN_IDENTITY" \
         "$APP_DIR"
     codesign --verify --deep --strict "$APP_DIR"
@@ -111,7 +111,7 @@ fi
 
 if [[ "$CODE_SIGN_IDENTITY" == "-" ]]; then
     echo "Warning: using an ad-hoc signature; privacy permissions may reset after rebuilding."
-    echo "Install an Apple Development certificate or set SNAPINK_CODESIGN_IDENTITY."
+    echo "Install an Apple Development certificate or set BRUSHOT_CODESIGN_IDENTITY."
 fi
 
 echo "Built $APP_DIR"

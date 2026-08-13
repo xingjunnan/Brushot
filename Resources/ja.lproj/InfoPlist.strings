@@ -1,2 +1,2 @@
-"NSMicrophoneUsageDescription" = "マイク録音を有効にした場合、SnapInk は選択された内蔵または外部マイクを使用します。";
-"NSScreenCaptureUsageDescription" = "SnapInk はスクリーンショット、スクロール撮影、画面収録のために画面とシステム音声へのアクセスを必要とします。";
+"NSMicrophoneUsageDescription" = "マイク録音を有効にした場合、Brushot は選択された内蔵または外部マイクを使用します。";
+"NSScreenCaptureUsageDescription" = "Brushot はスクリーンショット、スクロール撮影、画面収録のために画面とシステム音声へのアクセスを必要とします。";

@@ -531,9 +531,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let mainMenu = NSMenu(title: "Main Menu")
 
         let applicationItem = NSMenuItem()
-        let applicationMenu = NSMenu(title: "SnapInk")
+        let applicationMenu = NSMenu(title: "Brushot")
         let quitItem = NSMenuItem(
-            title: L.text("退出 SnapInk"),
+            title: L.text("退出 Brushot"),
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: ""
         )
@@ -592,8 +592,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.title = ""
             button.image = makeStatusBarIcon()
             button.imagePosition = .imageOnly
-            button.toolTip = L.text("SnapInk 截图")
-            button.setAccessibilityLabel("SnapInk")
+            button.toolTip = L.text("Brushot 截图")
+            button.setAccessibilityLabel("Brushot")
         }
 
         statusItem.menu = makeStatusMenu()
@@ -684,7 +684,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         watermarkSettings.keyEquivalentModifierMask = []
         menu.addItem(watermarkSettings)
         menu.addItem(NSMenuItem.separator())
-        let quitItem = NSMenuItem(title: L.text("退出 SnapInk"), action: #selector(quit), keyEquivalent: "")
+        let quitItem = NSMenuItem(title: L.text("退出 Brushot"), action: #selector(quit), keyEquivalent: "")
         quitItem.target = self
         quitItem.keyEquivalentModifierMask = []
         menu.addItem(quitItem)
@@ -751,7 +751,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             // Reuse the system pencil silhouette so the center mark reads as
             // annotation rather than an export arrow at menu-bar size.
-            let pencil = NSImage(systemSymbolName: "pencil", accessibilityDescription: "SnapInk")?
+            let pencil = NSImage(systemSymbolName: "pencil", accessibilityDescription: "Brushot")?
                 .withSymbolConfiguration(.init(pointSize: 10.5, weight: .semibold))
             pencil?.draw(
                 in: NSRect(x: 3.75, y: 3.75, width: 10.5, height: 10.5),
@@ -790,7 +790,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }, 1, &eventType, Unmanaged.passUnretained(self).toOpaque(), &eventHandlerRef)
 
         if status != noErr {
-            NSLog("SnapInk failed to install hotkey handler: \(status)")
+            NSLog("Brushot failed to install hotkey handler: \(status)")
         }
     }
 
@@ -810,7 +810,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             &hotKeyRef
         )
         guard status == noErr else {
-            NSLog("SnapInk failed to register \(action) hotkey: \(status)")
+            NSLog("Brushot failed to register \(action) hotkey: \(status)")
             return false
         }
         if let hotKeyRef {
@@ -833,7 +833,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 candidate = action.defaultShortcut
                 guard !registeredShortcuts.values.contains(candidate),
                       registerHotKey(candidate, for: action) else {
-                    NSLog("SnapInk could not register a fallback hotkey for \(action)")
+                    NSLog("Brushot could not register a fallback hotkey for \(action)")
                     continue
                 }
                 shortcuts[action] = candidate
@@ -1602,7 +1602,7 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         updateWatermarkContentHint(for: watermarkConfig)
 
         watermarkTextField = NSTextField(string: watermarkConfig.text)
-        watermarkTextField.placeholderString = L.text("例如：SnapInk {datetime}")
+        watermarkTextField.placeholderString = L.text("例如：Brushot {datetime}")
         watermarkTextField.target = self
         watermarkTextField.action = #selector(changeWatermarkText)
         watermarkTextField.delegate = self
@@ -2344,7 +2344,7 @@ final class CaptureController {
             action()
         } else {
             showPermissionAlert(error: NSError(
-                domain: "SnapInk.ScreenCapturePermission",
+                domain: "Brushot.ScreenCapturePermission",
                 code: 1,
                 userInfo: [
                     NSLocalizedDescriptionKey: L.text("macOS 未授予屏幕录制权限。")
@@ -2670,7 +2670,7 @@ final class CaptureController {
         progressWindow.showWindow(nil)
         progressWindow.window?.makeKeyAndOrderFront(nil)
         let exportedURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SnapInk-Export-\(UUID().uuidString)")
+            .appendingPathComponent("Brushot-Export-\(UUID().uuidString)")
             .appendingPathExtension(result.format.fileExtension)
         Task { [weak self] in
             guard let self else { return }
@@ -2760,7 +2760,7 @@ final class CaptureController {
             return
         }
 
-        NSLog("SnapInk: finishCapture fallback - preCapture empty")
+        NSLog("Brushot: finishCapture fallback - preCapture empty")
         preCapturedScreens.removeAll()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             guard let self else { return }
@@ -2825,7 +2825,7 @@ final class CaptureController {
                         image = preCaptured
                     } else {
                         throw NSError(
-                            domain: "SnapInk.OCR",
+                            domain: "Brushot.OCR",
                             code: 2,
                             userInfo: [
                                 NSLocalizedDescriptionKey: L.text("无法读取同步冻结截图，已取消 OCR。请重新截图后再试。")
@@ -2948,9 +2948,9 @@ final class CaptureController {
     private func showPermissionAlert(error: Error) {
         let alert = NSAlert()
         alert.messageText = L.text("需要屏幕录制权限")
-        alert.informativeText = L.format("SnapInk 已向 macOS 发起屏幕录制授权申请。请在“系统设置 > 隐私与安全性 > 录屏与系统录音”中开启 SnapInk，然后退出并重新打开应用。\n\n如果列表中仍没有 SnapInk，请点击列表底部的“+”，手动选择“应用程序”中的 SnapInk。\n\n系统信息：%@", error.localizedDescription)
+        alert.informativeText = L.format("Brushot 已向 macOS 发起屏幕录制授权申请。请在“系统设置 > 隐私与安全性 > 录屏与系统录音”中开启 Brushot，然后退出并重新打开应用。\n\n如果列表中仍没有 Brushot，请点击列表底部的“+”，手动选择“应用程序”中的 Brushot。\n\n系统信息：%@", error.localizedDescription)
         alert.addButton(withTitle: L.text("打开系统设置"))
-        alert.addButton(withTitle: L.text("退出 SnapInk"))
+        alert.addButton(withTitle: L.text("退出 Brushot"))
         alert.addButton(withTitle: L.text("取消"))
         switch alert.runModal() {
         case .alertFirstButtonReturn:
@@ -2968,9 +2968,9 @@ final class CaptureController {
         let alert = NSAlert()
         alert.messageText = L.text("需要麦克风权限")
         alert.informativeText = L.text("""
-        请在“系统设置 > 隐私与安全性 > 麦克风”中允许 SnapInk，然后重试。
+        请在“系统设置 > 隐私与安全性 > 麦克风”中允许 Brushot，然后重试。
 
-        如果列表中没有 SnapInk，请先确认正在运行的是新版 /Applications/SnapInk.app，退出并重新打开后再录制一次；macOS 只有在应用真正请求麦克风权限后才会把它加入列表。
+        如果列表中没有 Brushot，请先确认正在运行的是新版 /Applications/Brushot.app，退出并重新打开后再录制一次；macOS 只有在应用真正请求麦克风权限后才会把它加入列表。
         """)
         alert.addButton(withTitle: L.text("打开系统设置"))
         alert.addButton(withTitle: L.text("取消"))
@@ -2989,7 +2989,7 @@ final class CaptureController {
 
     private func makeCaptureError(_ message: String) -> NSError {
         NSError(
-            domain: "SnapInk.Capture",
+            domain: "Brushot.Capture",
             code: 1,
             userInfo: [NSLocalizedDescriptionKey: message]
         )
@@ -3321,7 +3321,7 @@ final class SelectionOverlayView: NSView {
         // The overlay is intentionally non-activating so menus/popovers can be
         // preserved. During raw area selection AppKit may hand cursor ownership
         // back to the foreground app, so we hide the system cursor and draw a
-        // SnapInk reticle until the selection is finalized.
+        // Brushot reticle until the selection is finalized.
         updateCursorAtCurrentMouseLocation()
         DispatchQueue.main.async { [weak self] in
             self?.updateCursorAtCurrentMouseLocation()
@@ -3499,7 +3499,7 @@ final class SelectionOverlayView: NSView {
         }
         // During raw selection the overlay is non-activating, so AppKit and
         // the foreground app can both try to own the system cursor. Keep the
-        // real cursor invisible and draw SnapInk's reticle ourselves; this
+        // real cursor invisible and draw Brushot's reticle ourselves; this
         // avoids the arrow + crosshair double-cursor artifact.
         Self.invisibleSelectionCursor.set()
 
@@ -4113,7 +4113,7 @@ final class SelectionOverlayView: NSView {
                 isSubmitting = false
                 actionBar.setBusy(false)
                 onAnnotationFailed?(NSError(
-                    domain: "SnapInk.OCR",
+                    domain: "Brushot.OCR",
                     code: 1,
                     userInfo: [NSLocalizedDescriptionKey: L.text("无法读取原始截图区域。")]
                 ))
@@ -4186,7 +4186,7 @@ final class SelectionOverlayView: NSView {
         frozenScreenImage = baseImage
         guard let croppedImage = croppedFrozenImage(for: selection) else {
             onAnnotationFailed?(NSError(
-                domain: "SnapInk.Annotation",
+                domain: "Brushot.Annotation",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "无法裁剪标注截图区域。"]
             ))
@@ -4958,7 +4958,7 @@ enum ScreenshotWriter {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
-        let url = dir.appendingPathComponent("SnapInk-\(formatter.string(from: Date())).\(fmt.fileExtension)")
+        let url = dir.appendingPathComponent("Brushot-\(formatter.string(from: Date())).\(fmt.fileExtension)")
 
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL, fmt.utType as CFString, 1, nil) else {
             throw makeError(code: 3, message: L.format("无法创建 %@ 文件。", fmt.displayName))
@@ -4982,7 +4982,7 @@ enum ScreenshotWriter {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
-        let url = dir.appendingPathComponent("SnapInk-\(formatter.string(from: Date())).gif")
+        let url = dir.appendingPathComponent("Brushot-\(formatter.string(from: Date())).gif")
         try data.write(to: url)
         return url
     }
@@ -4996,7 +4996,7 @@ enum ScreenshotWriter {
     }
 
     private static func makeError(code: Int, message: String) -> NSError {
-        NSError(domain: "SnapInk", code: code, userInfo: [NSLocalizedDescriptionKey: message])
+        NSError(domain: "Brushot", code: code, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
     private static func flattenedOnWhite(_ image: CGImage) throws -> CGImage {

@@ -5,7 +5,7 @@ import CoreMedia
 import CoreVideo
 import ImageIO
 import XCTest
-@testable import SnapInk
+@testable import Brushot
 
 final class RecordingCoreTests: XCTestCase {
     func testEvenVideoDimensionsNeverGrowPastSelection() {
@@ -24,7 +24,7 @@ final class RecordingCoreTests: XCTestCase {
     }
 
     func testSystemAudioPreferenceDefaultsOffAndPersists() throws {
-        let suite = "SnapInk.RecordingPreferences.\(UUID().uuidString)"
+        let suite = "Brushot.RecordingPreferences.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         XCTAssertFalse(RecordingPreferences.systemAudioEnabled(defaults: defaults))
@@ -33,7 +33,7 @@ final class RecordingCoreTests: XCTestCase {
     }
 
     func testMicrophonePreferenceAndDeviceSelectionPersist() throws {
-        let suite = "SnapInk.MicrophonePreferences.\(UUID().uuidString)"
+        let suite = "Brushot.MicrophonePreferences.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         XCTAssertFalse(RecordingPreferences.microphoneEnabled(defaults: defaults))
@@ -150,7 +150,7 @@ final class RecordingExporterTests: XCTestCase {
         }
         var watermark = WatermarkConfiguration.default
         watermark.isEnabled = true
-        watermark.text = "SnapInk"
+        watermark.text = "Brushot"
         watermark.opacity = 1
         watermark.textColor = .white
 
@@ -238,7 +238,7 @@ final class RecordingExporterTests: XCTestCase {
 
     private func temporaryURL(extension pathExtension: String) -> URL {
         FileManager.default.temporaryDirectory
-            .appendingPathComponent("SnapInk-RecordingTests-\(UUID().uuidString)")
+            .appendingPathComponent("Brushot-RecordingTests-\(UUID().uuidString)")
             .appendingPathExtension(pathExtension)
     }
 
@@ -418,7 +418,7 @@ final class RecordingInteractionTests: XCTestCase {
         RecordingPreferences.setSystemAudioEnabled(false)
         RecordingPreferences.setMicrophoneEnabled(false)
         var watermark = WatermarkConfiguration.default
-        watermark.text = "SnapInk"
+        watermark.text = "Brushot"
         WatermarkPreferences.save(watermark)
         WatermarkPreferences.setRecordingEnabled(false)
         let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 104))
@@ -528,7 +528,7 @@ final class RecordingInteractionTests: XCTestCase {
 
     func testRecordingPreviewOffersSaveCopyDiscardAndDiscardDeletesTempFile() throws {
         let file = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SnapInk-PreviewTests-\(UUID().uuidString).gif")
+            .appendingPathComponent("Brushot-PreviewTests-\(UUID().uuidString).gif")
         let gif = try XCTUnwrap(Data(base64Encoded: "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="))
         try gif.write(to: file)
         var closed = false

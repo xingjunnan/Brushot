@@ -1,6 +1,6 @@
-# SnapInk
+# Brushot
 
-SnapInk is a lightweight native macOS screenshot app for fast capture, annotation, OCR, pinning, and screen recording. The current build includes the complete capture and inline annotation loop:
+Brushot is a lightweight native macOS screenshot app for fast capture, annotation, OCR, pinning, and screen recording. The current build includes the complete capture and inline annotation loop:
 
 It supports macOS 13 or later on both Apple Silicon and Intel Macs through a Universal 2 executable.
 
@@ -37,11 +37,11 @@ The `text.viewfinder` button runs OCR entirely on the Mac and opens an editable 
 
 Use `Command + C` or `Command + S` while the selection is active for the copy and save actions. Global shortcuts can be changed from `快捷键设置…` in the menu bar.
 
-Choose `全屏截图` or press `Control + Option + F` to freeze the display under the mouse and preselect its entire area. The normal SnapInk action and annotation controls remain available, so the selection can still be adjusted before output.
+Choose `全屏截图` or press `Control + Option + F` to freeze the display under the mouse and preselect its entire area. The normal Brushot action and annotation controls remain available, so the selection can still be adjusted before output.
 
-Choose `延时截图…` or press `Control + Option + D` to select an area first, then start the countdown. SnapInk restores the live desktop during the countdown and captures the current pixels when time expires; its border and countdown HUD are hidden before capture. The delay defaults to 5 seconds and can be set from 1 to 60 seconds in Preferences, together with the countdown sound option.
+Choose `延时截图…` or press `Control + Option + D` to select an area first, then start the countdown. Brushot restores the live desktop during the countdown and captures the current pixels when time expires; its border and countdown HUD are hidden before capture. The delay defaults to 5 seconds and can be set from 1 to 60 seconds in Preferences, together with the countdown sound option.
 
-Watermarks can be configured from the menu bar via `水印设置…`, below `偏好设置…`. SnapInk supports text, Logo images, or both together, plus position, opacity, size, margin, and text color. Screenshot and recording watermarks can be enabled independently while sharing the same visual style. Recording watermarks are burned into video/GIF pixels using the recording start time for `{date}`, `{time}`, and `{datetime}`. OCR reads the original image.
+Watermarks can be configured from the menu bar via `水印设置…`, below `偏好设置…`. Brushot supports text, Logo images, or both together, plus position, opacity, size, margin, and text color. Screenshot and recording watermarks can be enabled independently while sharing the same visual style. Recording watermarks are burned into video/GIF pixels using the recording start time for `{date}`, `{time}`, and `{datetime}`. OCR reads the original image.
 
 Annotation tool shortcuts are `V/R/O/L/A/P/T/N/M/H`. Use `Command + Z` and `Shift + Command + Z` for undo and redo, and Delete to remove the selected annotation. While editing text, `Command + Return` commits and Escape cancels the text edit.
 
@@ -69,12 +69,12 @@ GIF recording stops automatically at 3 minutes. Video recording stops automatica
 - Right-click a pin to change opacity or corner radius, keep it on the current desktop or show it on every desktop, copy/save it, or annotate it again.
 - Double-clicking a pin opens the complete annotation toolset; completing the edit updates the pin and adds the edited result to history.
 - Use `隐藏全部贴图` / `显示全部贴图` from the menu bar to temporarily toggle every open pin.
-- Choose `快捷键设置…` to customize all global actions. SnapInk rejects duplicate combinations and shortcuts already reserved by macOS or other applications.
+- Choose `快捷键设置…` to customize all global actions. Brushot rejects duplicate combinations and shortcuts already reserved by macOS or other applications.
 
 ## Run From Source
 
 ```bash
-swift run SnapInk
+swift run Brushot
 ```
 
 This path uses Swift Package Manager for development. The packaging scripts below use the Xcode toolchain directly and keep build output inside the project.
@@ -83,25 +83,25 @@ This path uses Swift Package Manager for development. The packaging scripts belo
 
 ```bash
 ./scripts/build-app.sh
-open dist/SnapInk.app
+open .build/distribution/Brushot.app
 ```
 
 ## Build `.dmg`
 
 ```bash
 ./scripts/build-dmg.sh
-open dist/SnapInk.dmg
+open dist/Brushot.dmg
 ```
 
 The generated app and DMG are signed as complete app bundles. The build automatically uses the first Apple Development certificate in the login keychain, which keeps macOS privacy permissions stable across rebuilds. To select a different Apple Development or Developer ID identity:
 
 ```bash
-SNAPINK_CODESIGN_IDENTITY="Apple Development: Your Name (TEAMID)" ./scripts/build-app.sh
+BRUSHOT_CODESIGN_IDENTITY="Apple Development: Your Name (TEAMID)" ./scripts/build-app.sh
 ```
 
 macOS screen recording permission is required on first use. For permission testing, launch the generated app instead of `swift run`, because direct command-line builds do not have the packaged app's signing identity.
 
-The first capture requires macOS screen recording permission. If permission is denied, enable SnapInk in System Settings > Privacy & Security > Screen & System Audio Recording, then relaunch the app.
+The first capture requires macOS screen recording permission. If permission is denied, enable Brushot in System Settings > Privacy & Security > Screen & System Audio Recording, then relaunch the app.
 
 ## Next Core Features
 

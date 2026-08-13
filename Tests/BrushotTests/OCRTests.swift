@@ -1,6 +1,6 @@
 import AppKit
 import XCTest
-@testable import SnapInk
+@testable import Brushot
 
 final class OCRValueTests: XCTestCase {
     func testResultPreservesLineOrderAndNewlines() throws {
@@ -27,13 +27,13 @@ final class OCRValueTests: XCTestCase {
 
     func testVisionRecognizesGeneratedChineseAndEnglishImage() async throws {
         let image = try await MainActor.run {
-            try Self.makeTextImage(lines: ["SnapInk OCR 2026", "中文文字识别"])
+            try Self.makeTextImage(lines: ["Brushot OCR 2026", "中文文字识别"])
         }
 
         let result = try await VisionTextRecognizer().recognizeText(in: image)
 
         XCTAssertFalse(result.text.isEmpty)
-        XCTAssertTrue(result.text.localizedCaseInsensitiveContains("SnapInk"))
+        XCTAssertTrue(result.text.localizedCaseInsensitiveContains("Brushot"))
         XCTAssertGreaterThanOrEqual(result.lines.count, 2)
     }
 
@@ -86,7 +86,7 @@ final class OCRInteractionTests: XCTestCase {
             translationProvider: .unavailable
         )
         controller.text = "编辑后的第一行\nEdited second line"
-        let pasteboard = NSPasteboard(name: .init("SnapInkTests.OCR.\(UUID().uuidString)"))
+        let pasteboard = NSPasteboard(name: .init("BrushotTests.OCR.\(UUID().uuidString)"))
 
         XCTAssertTrue(controller.copyText(to: pasteboard))
         XCTAssertEqual(
@@ -144,7 +144,7 @@ final class OCRInteractionTests: XCTestCase {
 
         XCTAssertEqual(receivedText, "Hello, world")
         XCTAssertEqual(controller.translatedText, "你好，世界")
-        let pasteboard = NSPasteboard(name: .init("SnapInkTests.OCRTranslation.\(UUID().uuidString)"))
+        let pasteboard = NSPasteboard(name: .init("BrushotTests.OCRTranslation.\(UUID().uuidString)"))
         XCTAssertTrue(controller.copyTranslatedText(to: pasteboard))
         XCTAssertEqual(pasteboard.string(forType: .string), "你好，世界")
         XCTAssertTrue(

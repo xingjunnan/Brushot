@@ -15,11 +15,11 @@ final class ScreenRegionCapturer {
     private let configuration: SCStreamConfiguration
     private var preparedOverlayExclusion = false
     /// Window IDs that should remain visible in the recording even when all
-    /// other SnapInk windows are excluded (e.g. the GIF annotation overlay).
+    /// other Brushot windows are excluded (e.g. the GIF annotation overlay).
     var exceptedWindowIDs: Set<CGWindowID> = []
 
     /// Exposed so the GIF recorder can build a long-running stream from the
-    /// same filter/config (source rect, scale, exclusion of SnapInk overlays)
+    /// same filter/config (source rect, scale, exclusion of Brushot overlays)
     /// already prepared for this selection.
     var captureContentFilter: SCContentFilter { contentFilter }
     var streamConfiguration: SCStreamConfiguration { configuration }
@@ -87,9 +87,9 @@ final class ScreenRegionCapturer {
         configuration = streamConfiguration
     }
 
-    /// The first frame is captured before SnapInk's live border and preview
+    /// The first frame is captured before Brushot's live border and preview
     /// windows exist. Once those windows are visible, rebuild the filter once
-    /// so all subsequent scrolling frames exclude SnapInk itself.
+    /// so all subsequent scrolling frames exclude Brushot itself.
     func prepareForOverlayExclusion() async {
         guard !preparedOverlayExclusion else { return }
         do {
@@ -138,7 +138,7 @@ final class ScreenRegionCapturer {
 
     private static func captureError(_ message: String) -> NSError {
         NSError(
-            domain: "SnapInk.Capture",
+            domain: "Brushot.Capture",
             code: 1,
             userInfo: [NSLocalizedDescriptionKey: message]
         )

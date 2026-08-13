@@ -40,7 +40,7 @@ final class VisionTextRecognizer: TextRecognizing, @unchecked Sendable {
     static let preferredLanguages = ["zh-Hans", "zh-Hant", "en-US"]
 
     private let queue = DispatchQueue(
-        label: "com.snapink.ocr",
+        label: "com.brushot.ocr",
         qos: .userInitiated
     )
 

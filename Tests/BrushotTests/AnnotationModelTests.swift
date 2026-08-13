@@ -1,6 +1,6 @@
 import AppKit
 import XCTest
-@testable import SnapInk
+@testable import Brushot
 
 @MainActor
 final class AnnotationModelTests: XCTestCase {
@@ -176,7 +176,7 @@ final class AnnotationModelTests: XCTestCase {
     }
 
     func testStylePreferencesRoundTripAndInvalidFallback() throws {
-        let suiteName = "SnapInkTests.\(UUID().uuidString)"
+        let suiteName = "BrushotTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 

@@ -1,11 +1,11 @@
 import AppKit
 import XCTest
-@testable import SnapInk
+@testable import Brushot
 
 @MainActor
 final class SelfTimerCaptureTests: XCTestCase {
     func testPreferencesDefaultClampAndPersist() throws {
-        let suiteName = "SnapInk.SelfTimerPreferences.\(UUID().uuidString)"
+        let suiteName = "Brushot.SelfTimerPreferences.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 

@@ -2,16 +2,16 @@
 import PackageDescription
 
 let package = Package(
-    name: "SnapInk",
+    name: "Brushot",
     platforms: [
         .macOS(.v13)
     ],
     products: [
-        .executable(name: "SnapInk", targets: ["SnapInk"])
+        .executable(name: "Brushot", targets: ["Brushot"])
     ],
     targets: [
         .executableTarget(
-            name: "SnapInk",
+            name: "Brushot",
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("AVFoundation"),
@@ -30,8 +30,8 @@ let package = Package(
             ]
         ),
         .testTarget(
-            name: "SnapInkTests",
-            dependencies: ["SnapInk"]
+            name: "BrushotTests",
+            dependencies: ["Brushot"]
         )
     ]
 )

@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>SnapInk</string>
+    <string>Brushot</string>
     <key>CFBundleIdentifier</key>
-    <string>com.snapink.app</string>
+    <string>com.brushot.app</string>
     <key>CFBundleName</key>
-    <string>SnapInk</string>
+    <string>Brushot</string>
     <key>CFBundleDisplayName</key>
-    <string>SnapInk</string>
+    <string>Brushot</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundlePackageType</key>
@@ -23,8 +23,8 @@
     <key>LSUIElement</key>
     <true/>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>SnapInk needs screen and system audio access for screenshots, scrolling capture, and screen recording.</string>
+    <string>Brushot needs screen and system audio access for screenshots, scrolling capture, and screen recording.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>SnapInk uses the selected built-in or external microphone when you enable microphone recording.</string>
+    <string>Brushot uses the selected built-in or external microphone when you enable microphone recording.</string>
 </dict>
 </plist>

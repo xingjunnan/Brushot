@@ -244,7 +244,7 @@ enum WatermarkPreferences {
     private static func supportDirectory() throws -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser
-        let directory = base.appendingPathComponent("SnapInk", isDirectory: true)
+        let directory = base.appendingPathComponent("Brushot", isDirectory: true)
             .appendingPathComponent("Watermarks", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
@@ -270,7 +270,7 @@ enum WatermarkPreferences {
     }
 
     private static func makeError(code: Int, message: String) -> NSError {
-        NSError(domain: "SnapInk.Watermark", code: code, userInfo: [NSLocalizedDescriptionKey: message])
+        NSError(domain: "Brushot.Watermark", code: code, userInfo: [NSLocalizedDescriptionKey: message])
     }
 }
 
@@ -590,6 +590,6 @@ enum WatermarkRenderer {
     }
 
     private static func makeError(code: Int, message: String) -> NSError {
-        NSError(domain: "SnapInk.Watermark", code: code, userInfo: [NSLocalizedDescriptionKey: message])
+        NSError(domain: "Brushot.Watermark", code: code, userInfo: [NSLocalizedDescriptionKey: message])
     }
 }

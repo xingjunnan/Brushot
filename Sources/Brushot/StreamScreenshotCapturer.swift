@@ -8,7 +8,7 @@ import ScreenCaptureKit
 /// `SCScreenshotManager` is not available yet.
 final class StreamScreenshotCapturer: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private let outputQueue = DispatchQueue(
-        label: "com.snapink.screenshot-stream",
+        label: "com.brushot.screenshot-stream",
         qos: .userInitiated
     )
     private let lock = NSLock()
@@ -63,7 +63,7 @@ final class StreamScreenshotCapturer: NSObject, SCStreamOutput, SCStreamDelegate
 
             outputQueue.asyncAfter(deadline: .now() + 5) { [weak self] in
                 self?.complete(with: .failure(NSError(
-                    domain: "SnapInk.ScreenCapture",
+                    domain: "Brushot.ScreenCapture",
                     code: 2,
                     userInfo: [NSLocalizedDescriptionKey: L.text("等待截图画面超时。")]
                 )))

@@ -157,7 +157,7 @@ enum PinImageCodec {
     }
 
     private static func makeError(_ message: String) -> NSError {
-        NSError(domain: "SnapInk.PinImage", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+        NSError(domain: "Brushot.PinImage", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 }
 
@@ -567,7 +567,7 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss"
-        return "SnapInk-贴图-\(formatter.string(from: now)).png"
+        return "Brushot-贴图-\(formatter.string(from: now)).png"
     }
 
     private func applyCornerRadius() {
@@ -647,7 +647,7 @@ final class PinManager {
             self.historyStore = historyStore
         } else {
             let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-                .appendingPathComponent("SnapInk", isDirectory: true)
+                .appendingPathComponent("Brushot", isDirectory: true)
                 .appendingPathComponent("PinLibrary", isDirectory: true)
             self.historyStore = PinHistoryStore(directoryURL: base)
         }
@@ -676,7 +676,7 @@ final class PinManager {
     func pinClipboard(_ pasteboard: NSPasteboard = .general) throws -> PinWindowController {
         guard let image = PinImageCodec.imageFromPasteboard(pasteboard) else {
             throw NSError(
-                domain: "SnapInk.PinClipboard",
+                domain: "Brushot.PinClipboard",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: L.text("剪贴板中没有可贴出的图片。")]
             )
@@ -686,7 +686,7 @@ final class PinManager {
 
     func pinHistoryEntry(_ entry: PinHistoryEntry) throws {
         guard let image = historyStore.image(for: entry) else {
-            throw NSError(domain: "SnapInk.PinHistory", code: 1, userInfo: [NSLocalizedDescriptionKey: L.text("历史图片已经丢失。")])
+            throw NSError(domain: "Brushot.PinHistory", code: 1, userInfo: [NSLocalizedDescriptionKey: L.text("历史图片已经丢失。")])
         }
         try historyStore.touch(entry)
         _ = try pin(image, recordHistory: false)
@@ -751,7 +751,7 @@ final class PinLibraryWindowController: NSWindowController, NSTableViewDataSourc
             backing: .buffered,
             defer: false
         )
-        window.title = L.text("SnapInk 贴图库")
+        window.title = L.text("Brushot 贴图库")
         window.isReleasedWhenClosed = false
         super.init(window: window)
         configureContent()

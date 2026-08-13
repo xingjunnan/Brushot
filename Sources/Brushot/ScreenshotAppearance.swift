@@ -198,6 +198,6 @@ enum ScreenshotAppearanceRenderer {
     }
 
     private static func makeError(code: Int, message: String) -> NSError {
-        NSError(domain: "SnapInk.ScreenshotAppearance", code: code, userInfo: [NSLocalizedDescriptionKey: message])
+        NSError(domain: "Brushot.ScreenshotAppearance", code: code, userInfo: [NSLocalizedDescriptionKey: message])
     }
 }

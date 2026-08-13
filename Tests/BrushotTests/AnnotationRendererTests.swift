@@ -1,6 +1,6 @@
 import AppKit
 import XCTest
-@testable import SnapInk
+@testable import Brushot
 
 final class AnnotationRendererTests: XCTestCase {
     func testRendererPreservesBasePixelDimensionsAtRetinaScale() throws {
@@ -77,7 +77,7 @@ final class AnnotationRendererTests: XCTestCase {
             AnnotationItem(tool: .line, geometry: .line(start: CGPoint(x: 10, y: 70), end: CGPoint(x: 120, y: 90)), style: red),
             AnnotationItem(tool: .arrow, geometry: .line(start: CGPoint(x: 10, y: 105), end: CGPoint(x: 120, y: 130)), style: red),
             AnnotationItem(tool: .pen, geometry: .path([CGPoint(x: 160, y: 20), CGPoint(x: 200, y: 50), CGPoint(x: 240, y: 20)]), style: red),
-            AnnotationItem(tool: .text, geometry: .text(frame: CGRect(x: 160, y: 65, width: 140, height: 45), value: "SnapInk"), style: .defaultStyle(for: .text)),
+            AnnotationItem(tool: .text, geometry: .text(frame: CGRect(x: 160, y: 65, width: 140, height: 45), value: "Brushot"), style: .defaultStyle(for: .text)),
             AnnotationItem(tool: .sequence, geometry: .badge(StepAnnotationGeometry(badgeFrame: CGRect(x: 160, y: 125, width: 30, height: 30), number: 1, labelFrame: CGRect(x: 198, y: 125, width: 105, height: 35), text: "第一步")), style: .defaultStyle(for: .sequence))
         ]
         let result = try AnnotationRenderer.render(

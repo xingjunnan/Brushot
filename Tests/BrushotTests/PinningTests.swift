@@ -1,6 +1,6 @@
 import AppKit
 import XCTest
-@testable import SnapInk
+@testable import Brushot
 
 @MainActor
 final class PinningTests: XCTestCase {
@@ -149,7 +149,7 @@ final class PinningTests: XCTestCase {
     func testClipboardImagePins() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let pasteboard = NSPasteboard(name: NSPasteboard.Name("SnapInk-PinningTests-\(UUID().uuidString)"))
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("Brushot-PinningTests-\(UUID().uuidString)"))
         pasteboard.declareTypes([.png], owner: nil)
         let base = try makeImage(width: 80, height: 60, color: .white)
         guard pasteboard.setData(try PinImageCodec.pngData(from: base), forType: .png) else {
@@ -227,7 +227,7 @@ final class PinningTests: XCTestCase {
         let panel = controller.configuredSavePanel(now: date)
 
         XCTAssertEqual(panel.directoryURL, directory)
-        XCTAssertEqual(panel.nameFieldStringValue, "SnapInk-贴图-20260812-143036.png")
+        XCTAssertEqual(panel.nameFieldStringValue, "Brushot-贴图-20260812-143036.png")
     }
 
     func testTallAnnotationImageUsesScrollableCanvasWithoutShrinkingItsWidth() throws {
@@ -250,7 +250,7 @@ final class PinningTests: XCTestCase {
 
     private func temporaryDirectory() -> URL {
         FileManager.default.temporaryDirectory
-            .appendingPathComponent("SnapInk-PinningTests-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("Brushot-PinningTests-\(UUID().uuidString)", isDirectory: true)
     }
 
     private func descendants(of view: NSView) -> [NSView] {

@@ -1,6 +1,6 @@
 import AppKit
 import XCTest
-@testable import SnapInk
+@testable import Brushot
 
 final class ScreenshotAppearanceTests: XCTestCase {
     func testPreferencesRoundTrip() {
