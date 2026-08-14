@@ -166,6 +166,19 @@ enum PinDesktopBehavior: Int {
     case allDesktops
 }
 
+enum PinDesktopBehaviorPreferences {
+    private static let behaviorKey = "pin.desktopBehavior"
+
+    static func load(defaults: UserDefaults = .standard) -> PinDesktopBehavior {
+        guard defaults.object(forKey: behaviorKey) != nil else { return .allDesktops }
+        return PinDesktopBehavior(rawValue: defaults.integer(forKey: behaviorKey)) ?? .allDesktops
+    }
+
+    static func save(_ behavior: PinDesktopBehavior, defaults: UserDefaults = .standard) {
+        defaults.set(behavior.rawValue, forKey: behaviorKey)
+    }
+}
+
 final class PinPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -352,6 +365,7 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
     private(set) var image: CGImage
     private weak var manager: PinManager?
     private let imageView: PinImageView
+    private let defaults: UserDefaults
     private(set) var opacity: CGFloat = 1
     private(set) var cornerRadius: CGFloat = 10
     private(set) var desktopBehavior: PinDesktopBehavior = .allDesktops
@@ -361,10 +375,12 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
         image: CGImage,
         manager: PinManager,
         displaySize: CGSize? = nil,
-        origin: CGPoint? = nil
+        origin: CGPoint? = nil,
+        defaults: UserDefaults = .standard
     ) {
         self.image = image
         self.manager = manager
+        self.defaults = defaults
         let size = Self.displaySize(for: image, preferredSize: displaySize)
         let imageSize = CGSize(width: image.width, height: image.height)
         imageView = PinImageView(frame: CGRect(origin: .zero, size: size), image: image)
@@ -388,7 +404,7 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
         panel.minSize = Self.minimumSize(for: image)
         panel.aspectRatio = imageSize
         applyCornerRadius()
-        setDesktopBehavior(.allDesktops)
+        setDesktopBehavior(PinDesktopBehaviorPreferences.load(defaults: defaults), persists: false)
         if origin == nil { centerNearPointer(size: size) }
     }
 
@@ -489,8 +505,11 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
         applyCornerRadius()
     }
 
-    func setDesktopBehavior(_ behavior: PinDesktopBehavior) {
+    func setDesktopBehavior(_ behavior: PinDesktopBehavior, persists: Bool = true) {
         desktopBehavior = behavior
+        if persists {
+            PinDesktopBehaviorPreferences.save(behavior, defaults: defaults)
+        }
         switch behavior {
         case .currentDesktop:
             window?.collectionBehavior = [.managed, .fullScreenAuxiliary]
@@ -687,12 +706,14 @@ final class PinManager {
     static let shared = PinManager()
 
     let historyStore: PinHistoryStore
+    private let defaults: UserDefaults
     private(set) var pinWindows: [UUID: PinWindowController] = [:]
     private var libraryController: PinLibraryWindowController?
     private var arePinsHidden = false
     var onVisibilityChanged: (() -> Void)?
 
-    init(historyStore: PinHistoryStore? = nil) {
+    init(historyStore: PinHistoryStore? = nil, defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         if let historyStore {
             self.historyStore = historyStore
         } else {
@@ -714,7 +735,12 @@ final class PinManager {
             arePinsHidden = false
             for existing in pinWindows.values { existing.show() }
         }
-        let controller = PinWindowController(image: image, manager: self, displaySize: displaySize)
+        let controller = PinWindowController(
+            image: image,
+            manager: self,
+            displaySize: displaySize,
+            defaults: defaults
+        )
         pinWindows[controller.id] = controller
         controller.show()
         libraryController?.reload()

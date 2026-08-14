@@ -202,11 +202,13 @@ final class RecordingAnnotationToolbarView: NSView {
         RGBAColor(red: 1, green: 0.8, blue: 0),
         RGBAColor(red: 0.204, green: 0.78, blue: 0.349),
         RGBAColor(red: 0.196, green: 0.678, blue: 0.902),
-        RGBAColor(red: 0, green: 0.478, blue: 1),
-        RGBAColor(red: 0.12, green: 0.12, blue: 0.12)
+        RGBAColor(red: 0, green: 0.478, blue: 1)
     ]
     private var toolButtons: [AnnotationTool: AnnotationHoverButton] = [:]
     private var colorButtons: [NSButton] = []
+    private let customColorButton = AnnotationColorPickerButton(
+        frame: CGRect(x: 0, y: 0, width: 19, height: 19)
+    )
     private let tooltipPresenter = AnnotationHoverTooltipPresenter()
     private let styleRow = NSStackView()
     private lazy var widthSlider = NSSlider(
@@ -226,7 +228,7 @@ final class RecordingAnnotationToolbarView: NSView {
         title: L.text("重做"),
         action: #selector(redoAction)
     )
-    private var selectedColorIndex = 0
+    private var selectedColor = RGBAColor.annotationRed
     private var selectedTool: AnnotationTool = .select
 
     override init(frame frameRect: NSRect) {
@@ -237,7 +239,10 @@ final class RecordingAnnotationToolbarView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
-        if newWindow == nil { tooltipPresenter.detach() }
+        if newWindow == nil {
+            tooltipPresenter.detach()
+            detachColorPanel()
+        }
         super.viewWillMove(toWindow: newWindow)
     }
 
@@ -290,6 +295,14 @@ final class RecordingAnnotationToolbarView: NSView {
             colorButtons.append(button)
             styleRow.addArrangedSubview(button)
         }
+        customColorButton.identifier = NSUserInterfaceItemIdentifier("recordingAnnotation.color.6")
+        customColorButton.toolTip = L.text("选择标注颜色")
+        customColorButton.target = self
+        customColorButton.action = #selector(customColorAction)
+        customColorButton.translatesAutoresizingMaskIntoConstraints = false
+        customColorButton.widthAnchor.constraint(equalToConstant: 19).isActive = true
+        customColorButton.heightAnchor.constraint(equalToConstant: 19).isActive = true
+        styleRow.addArrangedSubview(customColorButton)
         let widthLabel = NSTextField(labelWithString: L.text("粗细"))
         widthLabel.font = .systemFont(ofSize: 11)
         widthLabel.textColor = .secondaryLabelColor
@@ -324,7 +337,30 @@ final class RecordingAnnotationToolbarView: NSView {
 
     @objc private func colorAction(_ sender: NSButton) {
         guard palette.indices.contains(sender.tag) else { return }
-        selectedColorIndex = sender.tag
+        selectedColor = palette[sender.tag]
+        refreshColorSelection()
+        notifyStyleChanged()
+    }
+
+    @objc private func customColorAction() {
+        let panel = NSColorPanel.shared
+        panel.showsAlpha = false
+        panel.color = selectedColor.nsColor.withAlphaComponent(1)
+        panel.setTarget(self)
+        panel.setAction(#selector(customColorChanged(_:)))
+        AnnotationColorPanelCoordinator.owner = self
+        panel.level = NSWindow.Level(
+            rawValue: max(NSWindow.Level.floating.rawValue, (window?.level.rawValue ?? 0) + 1)
+        )
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        panel.orderFrontRegardless()
+    }
+
+    @objc private func customColorChanged(_ sender: NSColorPanel) {
+        selectedColor = RGBAColor(sender.color)
+        selectedColor.alpha = 1
         refreshColorSelection()
         notifyStyleChanged()
     }
@@ -343,16 +379,32 @@ final class RecordingAnnotationToolbarView: NSView {
     }
 
     private func notifyStyleChanged() {
-        onStyleChanged?(palette[selectedColorIndex].nsColor, CGFloat(widthSlider.doubleValue))
+        onStyleChanged?(selectedColor.nsColor, CGFloat(widthSlider.doubleValue))
     }
 
     private func refreshColorSelection() {
+        var matchesPreset = false
         for (index, button) in colorButtons.enumerated() {
-            button.layer?.borderWidth = index == selectedColorIndex ? 2.5 : 1
-            button.layer?.borderColor = index == selectedColorIndex
+            let candidate = palette[index]
+            let selected = abs(candidate.red - selectedColor.red) < 0.01
+                && abs(candidate.green - selectedColor.green) < 0.01
+                && abs(candidate.blue - selectedColor.blue) < 0.01
+            matchesPreset = matchesPreset || selected
+            button.layer?.borderWidth = selected ? 2.5 : 1
+            button.layer?.borderColor = selected
                 ? NSColor.controlAccentColor.cgColor
                 : NSColor.white.withAlphaComponent(0.55).cgColor
         }
+        customColorButton.setSelected(!matchesPreset)
+    }
+
+    private func detachColorPanel() {
+        let panel = NSColorPanel.shared
+        guard AnnotationColorPanelCoordinator.owner === self else { return }
+        AnnotationColorPanelCoordinator.owner = nil
+        panel.setTarget(nil)
+        panel.setAction(nil)
+        panel.orderOut(nil)
     }
 
     private func makeToolButton(symbol: String, title: String, action: Selector) -> AnnotationHoverButton {
@@ -765,7 +817,7 @@ final class RecordingSessionController: NSObject {
 
 @MainActor
 final class RecordingStartBar: NSVisualEffectView {
-    var onStart: ((RecordingFormat, Bool, Bool, String?) -> Void)?
+    var onStart: ((RecordingFormat, Bool, Bool, String?, WatermarkConfiguration?) -> Void)?
     var onCancel: (() -> Void)?
     private let audioCheckbox = NSButton(
         checkboxWithTitle: L.text("系统音频"),
@@ -814,6 +866,7 @@ final class RecordingStartBar: NSVisualEffectView {
     private let silentHint = NSTextField(labelWithString: L.text("GIF 录制为静音"))
     private var hasMicrophones = false
     private var canUseMicrophonePermission = true
+    private var watermarkSetupPopover: WatermarkQuickSetupPopover?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -922,6 +975,13 @@ final class RecordingStartBar: NSVisualEffectView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil {
+            watermarkSetupPopover?.close()
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
     @objc private func audioChanged() {
         RecordingPreferences.setSystemAudioEnabled(audioCheckbox.state == .on)
     }
@@ -940,6 +1000,7 @@ final class RecordingStartBar: NSVisualEffectView {
         guard WatermarkPreferences.load().hasRenderableContent else {
             watermarkCheckbox.state = .off
             updateWatermarkState()
+            showWatermarkQuickSetup()
             return
         }
         WatermarkPreferences.setRecordingEnabled(watermarkCheckbox.state == .on)
@@ -953,14 +1014,16 @@ final class RecordingStartBar: NSVisualEffectView {
     @objc private func formatChanged() { updateFormatState() }
 
     @objc private func startAction() {
+        let watermarkConfiguration = WatermarkPreferences.currentRecordingConfiguration()
         if formatControl.selectedSegment == 1 {
-            onStart?(.gif, false, false, nil)
+            onStart?(.gif, false, false, nil, watermarkConfiguration)
         } else {
             onStart?(
                 .video,
                 audioCheckbox.state == .on,
                 microphoneCheckbox.state == .on && microphoneCheckbox.isEnabled,
-                selectedMicrophoneID
+                selectedMicrophoneID,
+                watermarkConfiguration
             )
         }
     }
@@ -986,13 +1049,29 @@ final class RecordingStartBar: NSVisualEffectView {
         } else if WatermarkPreferences.recordingEnabled() {
             watermarkCheckbox.state = .on
         }
-        watermarkCheckbox.isEnabled = hasWatermarkContent
+        watermarkCheckbox.isEnabled = true
         watermarkCheckbox.toolTip = hasWatermarkContent
             ? L.text("导出时添加水印，不会在录制画面中显示")
-            : L.text("请先在水印设置中填写文字或选择 Logo")
-        watermarkInfoButton.toolTip = hasWatermarkContent
-            ? L.text("导出时添加水印，不会出现在录制过程中")
-            : L.text("请先在水印设置中填写文字或选择 Logo")
+            : L.text("设置水印")
+        watermarkInfoButton.toolTip = L.text("导出时添加水印，不会出现在录制过程中")
+    }
+
+    private func showWatermarkQuickSetup() {
+        guard watermarkSetupPopover == nil else { return }
+        let setup = WatermarkQuickSetupPopover(
+            context: .recording,
+            configuration: WatermarkPreferences.load(),
+            onApply: { [weak self] configuration in
+                WatermarkPreferences.save(configuration)
+                WatermarkPreferences.setRecordingEnabled(true)
+                self?.updateWatermarkState()
+            },
+            onClose: { [weak self] in
+                self?.watermarkSetupPopover = nil
+            }
+        )
+        watermarkSetupPopover = setup
+        setup.show(relativeTo: watermarkCheckbox)
     }
 
     @objc private func cancelAction() { onCancel?() }

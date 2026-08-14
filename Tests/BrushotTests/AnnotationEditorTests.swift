@@ -86,6 +86,10 @@ final class AnnotationEditorTests: XCTestCase {
         XCTAssertEqual(controls.compactMap { $0 as? NSButton }.filter {
             $0.identifier?.rawValue.hasPrefix("annotationColor.") == true
         }.count, 7)
+        let customColorButton = try XCTUnwrap(controls.compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "annotationColor.6"
+        })
+        XCTAssertTrue(customColorButton is AnnotationColorPickerButton)
         var receivedStyle: AnnotationStyle?
         toolbar.onStyleChanged = { receivedStyle = $0 }
 
@@ -116,7 +120,7 @@ final class AnnotationEditorTests: XCTestCase {
         var received: [Bool] = []
         toolbar.onWatermarkToggle = { received.append($0) }
 
-        toolbar.setWatermarkAvailable(true, enabled: true)
+        toolbar.setWatermarkState(hasContent: true, enabled: true)
         let button = try XCTUnwrap(descendants(of: toolbar).compactMap { $0 as? NSButton }.first {
             $0.identifier?.rawValue == "watermarkAction"
         })
@@ -127,6 +131,49 @@ final class AnnotationEditorTests: XCTestCase {
 
         XCTAssertEqual(received, [false])
         XCTAssertEqual(button.state, .off)
+    }
+
+    func testToolbarKeepsWatermarkButtonVisibleWhenContentIsMissing() throws {
+        let toolbar = AnnotationToolbarView(frame: CGRect(x: 0, y: 0, width: 650, height: 72))
+        toolbar.setWatermarkState(hasContent: false, enabled: false)
+
+        let button = try XCTUnwrap(descendants(of: toolbar).compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "watermarkAction"
+        })
+        XCTAssertFalse(button.isHidden)
+        XCTAssertTrue(button.isEnabled)
+        XCTAssertEqual(button.state, .off)
+        XCTAssertEqual(button.toolTip, "设置水印")
+    }
+
+    func testQuickWatermarkSetupRequiresContentAndReturnsDraftConfiguration() throws {
+        var appliedConfiguration: WatermarkConfiguration?
+        var dismissed = false
+        let controller = WatermarkQuickSetupViewController(
+            context: .screenshot,
+            configuration: .default,
+            onApply: { appliedConfiguration = $0 },
+            onDismiss: { dismissed = true }
+        )
+        controller.loadViewIfNeeded()
+        let controls = descendants(of: controller.view)
+        let textField = try XCTUnwrap(controls.compactMap { $0 as? NSTextField }.first {
+            $0.identifier?.rawValue == "watermarkQuick.text"
+        })
+        let applyButton = try XCTUnwrap(controls.compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "watermarkQuick.apply"
+        })
+
+        XCTAssertFalse(applyButton.isEnabled)
+        XCTAssertEqual(applyButton.title, "应用到本次截图")
+        textField.stringValue = "Brushot {datetime}"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: textField))
+        XCTAssertTrue(applyButton.isEnabled)
+        applyButton.performClick(nil)
+
+        XCTAssertEqual(appliedConfiguration?.text, "Brushot {datetime}")
+        XCTAssertFalse(appliedConfiguration?.isEnabled ?? true)
+        XCTAssertTrue(dismissed)
     }
 
     func testAnnotationCanvasCanRenderWithReplacementBaseImage() throws {

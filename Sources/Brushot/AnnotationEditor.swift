@@ -2,6 +2,60 @@ import AppKit
 import Carbon
 import Foundation
 
+/// Circular rainbow swatch used to open the system color picker.
+final class AnnotationColorPickerButton: NSButton {
+    private let rainbowLayer = CAGradientLayer()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        title = ""
+        isBordered = false
+        refusesFirstResponder = true
+        wantsLayer = true
+        layer?.cornerRadius = min(frameRect.width, frameRect.height) / 2
+        rainbowLayer.type = .conic
+        rainbowLayer.startPoint = CGPoint(x: 0.5, y: 0.5)
+        rainbowLayer.endPoint = CGPoint(x: 0.5, y: 0)
+        rainbowLayer.colors = [
+            NSColor.systemRed.cgColor,
+            NSColor.systemOrange.cgColor,
+            NSColor.systemYellow.cgColor,
+            NSColor.systemGreen.cgColor,
+            NSColor.systemBlue.cgColor,
+            NSColor.systemPurple.cgColor,
+            NSColor.systemRed.cgColor
+        ]
+        rainbowLayer.locations = [0, 0.16, 0.32, 0.5, 0.68, 0.84, 1]
+        layer?.addSublayer(rainbowLayer)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer?.cornerRadius = min(bounds.width, bounds.height) / 2
+        rainbowLayer.frame = bounds.insetBy(dx: 1.5, dy: 1.5)
+        rainbowLayer.cornerRadius = min(rainbowLayer.bounds.width, rainbowLayer.bounds.height) / 2
+        CATransaction.commit()
+    }
+
+    func setSelected(_ selected: Bool) {
+        layer?.borderWidth = selected ? 2.5 : 1
+        layer?.borderColor = selected
+            ? NSColor.controlAccentColor.cgColor
+            : NSColor.white.withAlphaComponent(0.55).cgColor
+    }
+}
+
+@MainActor
+final class AnnotationColorPanelCoordinator {
+    weak static var owner: AnyObject?
+}
+
 enum AnnotationCursorKind: Equatable {
     case arrow
     case crosshair
@@ -1490,6 +1544,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
     var onCopy: (() -> Void)?
     var onSave: (() -> Void)?
     var onWatermarkToggle: ((Bool) -> Void)?
+    var onWatermarkSetup: ((WatermarkConfiguration) -> Void)?
     var onPreferredSizeChanged: (() -> Void)?
 
     private var currentTool: AnnotationTool = .select
@@ -1506,10 +1561,12 @@ final class AnnotationToolbarView: NSVisualEffectView {
         RGBAColor(red: 1, green: 0.8, blue: 0),
         RGBAColor(red: 0.204, green: 0.78, blue: 0.349),
         RGBAColor(red: 0.196, green: 0.678, blue: 0.902),
-        RGBAColor(red: 0, green: 0.478, blue: 1),
-        RGBAColor(red: 0.12, green: 0.12, blue: 0.12)
+        RGBAColor(red: 0, green: 0.478, blue: 1)
     ]
     private var presetColorButtons: [NSButton] = []
+    private let customColorButton = AnnotationColorPickerButton(
+        frame: NSRect(x: 0, y: 0, width: 19, height: 19)
+    )
     private let sizeLabel = NSTextField(labelWithString: L.text("粗细"))
     private lazy var sizeSlider = NSSlider(value: 3, minValue: 1, maxValue: 48, target: self, action: #selector(styleControlChanged))
     private let opacityLabel = NSTextField(labelWithString: L.text("透明度"))
@@ -1537,8 +1594,9 @@ final class AnnotationToolbarView: NSVisualEffectView {
     private var isBusy = false
     private var isLongCaptureAvailable = true
     private var isGIFAvailable = true
-    private var isWatermarkAvailable = false
+    private var hasWatermarkContent = false
     private var isWatermarkEnabled = false
+    private var watermarkSetupPopover: WatermarkQuickSetupPopover?
     private var canUndo = false
     private var canRedo = false
     private var isPinEditingMode = false
@@ -1561,6 +1619,8 @@ final class AnnotationToolbarView: NSVisualEffectView {
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if newWindow == nil {
             hoverTooltipPresenter.detach()
+            detachColorPanel()
+            watermarkSetupPopover?.close()
         }
         super.viewWillMove(toWindow: newWindow)
     }
@@ -1604,18 +1664,28 @@ final class AnnotationToolbarView: NSVisualEffectView {
         gifButton.isEnabled = !isBusy && enabled
     }
 
-    func setWatermarkAvailable(_ available: Bool, enabled: Bool) {
+    func setWatermarkState(hasContent: Bool, enabled: Bool) {
         guard !isPinEditingMode else {
             watermarkButton.isHidden = true
             return
         }
-        isWatermarkAvailable = available
-        isWatermarkEnabled = enabled
-        watermarkButton.isHidden = !available
-        watermarkButton.state = enabled ? .on : .off
-        watermarkButton.contentTintColor = enabled ? .systemBlue : .labelColor
-        watermarkButton.toolTip = enabled ? L.text("关闭本次截图水印") : L.text("开启本次截图水印")
-        watermarkButton.isEnabled = !isBusy && available
+        hasWatermarkContent = hasContent
+        isWatermarkEnabled = hasContent && enabled
+        watermarkButton.isHidden = false
+        watermarkButton.state = isWatermarkEnabled ? .on : .off
+        watermarkButton.contentTintColor = isWatermarkEnabled ? .systemBlue : .labelColor
+        let watermarkHint: String
+        if !hasContent {
+            watermarkHint = L.text("设置水印")
+        } else {
+            watermarkHint = isWatermarkEnabled
+                ? L.text("关闭本次截图水印")
+                : L.text("开启本次截图水印")
+        }
+        watermarkButton.toolTip = watermarkHint
+        watermarkButton.hoverTitle = watermarkHint
+        watermarkButton.setAccessibilityLabel("\(L.text("水印")): \(watermarkHint)")
+        watermarkButton.isEnabled = !isBusy
         updatePreferredSize()
     }
 
@@ -1645,7 +1715,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
         gifButton.isEnabled = !busy && isGIFAvailable
         ocrButton.isEnabled = !busy
         pinButton.isEnabled = !busy
-        watermarkButton.isEnabled = !busy && isWatermarkAvailable
+        watermarkButton.isEnabled = !busy
         copyButton.isEnabled = !busy
         saveButton.isEnabled = !busy
         cancelButton.isEnabled = true
@@ -1730,6 +1800,14 @@ final class AnnotationToolbarView: NSVisualEffectView {
             presetColorButtons.append(button)
             colorPaletteStack.addArrangedSubview(button)
         }
+        customColorButton.identifier = NSUserInterfaceItemIdentifier("annotationColor.6")
+        customColorButton.toolTip = L.text("选择标注颜色")
+        customColorButton.target = self
+        customColorButton.action = #selector(customColorAction)
+        customColorButton.translatesAutoresizingMaskIntoConstraints = false
+        customColorButton.widthAnchor.constraint(equalToConstant: 19).isActive = true
+        customColorButton.heightAnchor.constraint(equalToConstant: 19).isActive = true
+        colorPaletteStack.addArrangedSubview(customColorButton)
         sizeSlider.translatesAutoresizingMaskIntoConstraints = false
         opacitySlider.translatesAutoresizingMaskIntoConstraints = false
         sizeSlider.widthAnchor.constraint(equalToConstant: 90).isActive = true
@@ -1937,17 +2015,59 @@ final class AnnotationToolbarView: NSVisualEffectView {
         onStyleChanged?(currentStyle)
     }
 
+    @objc private func customColorAction() {
+        guard contextTool != .select else { return }
+        let panel = NSColorPanel.shared
+        panel.showsAlpha = false
+        panel.color = currentStyle.color.nsColor.withAlphaComponent(1)
+        panel.setTarget(self)
+        panel.setAction(#selector(customColorChanged(_:)))
+        AnnotationColorPanelCoordinator.owner = self
+        panel.level = NSWindow.Level(
+            rawValue: max(NSWindow.Level.floating.rawValue, (window?.level.rawValue ?? 0) + 1)
+        )
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        // The capture overlay is a nonactivating panel, so a click inside it
+        // does not normally bring Brushot forward. The system color panel must
+        // belong to the active app and become key before it can be displayed
+        // and interacted with.
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        panel.orderFrontRegardless()
+    }
+
+    @objc private func customColorChanged(_ sender: NSColorPanel) {
+        guard contextTool != .select else { return }
+        var color = RGBAColor(sender.color)
+        color.alpha = 1
+        currentStyle.color = color
+        refreshPresetColorSelection()
+        onStyleChanged?(currentStyle)
+    }
+
+    private func detachColorPanel() {
+        let panel = NSColorPanel.shared
+        guard AnnotationColorPanelCoordinator.owner === self else { return }
+        AnnotationColorPanelCoordinator.owner = nil
+        panel.setTarget(nil)
+        panel.setAction(nil)
+        panel.orderOut(nil)
+    }
+
     private func refreshPresetColorSelection() {
+        var matchesPreset = false
         for (index, button) in presetColorButtons.enumerated() {
             let candidate = presetColors[index]
             let selected = abs(candidate.red - currentStyle.color.red) < 0.01
                 && abs(candidate.green - currentStyle.color.green) < 0.01
                 && abs(candidate.blue - currentStyle.color.blue) < 0.01
+            matchesPreset = matchesPreset || selected
             button.layer?.borderWidth = selected ? 2.5 : 1
             button.layer?.borderColor = selected
                 ? NSColor.controlAccentColor.cgColor
                 : NSColor.white.withAlphaComponent(0.55).cgColor
         }
+        customColorButton.setSelected(!matchesPreset)
     }
 
     @objc private func undoAction() { onUndo?() }
@@ -1958,9 +2078,29 @@ final class AnnotationToolbarView: NSVisualEffectView {
     @objc private func ocrAction() { onOCR?() }
     @objc private func pinAction() { onPin?() }
     @objc private func watermarkAction() {
+        guard hasWatermarkContent else {
+            showWatermarkQuickSetup()
+            return
+        }
         isWatermarkEnabled.toggle()
-        setWatermarkAvailable(isWatermarkAvailable, enabled: isWatermarkEnabled)
+        setWatermarkState(hasContent: hasWatermarkContent, enabled: isWatermarkEnabled)
         onWatermarkToggle?(isWatermarkEnabled)
+    }
+
+    private func showWatermarkQuickSetup() {
+        guard watermarkSetupPopover == nil else { return }
+        let setup = WatermarkQuickSetupPopover(
+            context: .screenshot,
+            configuration: WatermarkPreferences.load(),
+            onApply: { [weak self] configuration in
+                self?.onWatermarkSetup?(configuration)
+            },
+            onClose: { [weak self] in
+                self?.watermarkSetupPopover = nil
+            }
+        )
+        watermarkSetupPopover = setup
+        setup.show(relativeTo: watermarkButton)
     }
     @objc private func copyAction() { onCopy?() }
     @objc private func saveAction() { onSave?() }

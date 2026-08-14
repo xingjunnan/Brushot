@@ -1366,10 +1366,14 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
         annotationToolbar.onWatermarkToggle = { [weak self] enabled in
             self?.setSessionWatermarkEnabled(enabled)
         }
-        annotationToolbar.setWatermarkAvailable(
-            WatermarkPreferences.load().hasRenderableContent,
+        annotationToolbar.setWatermarkState(
+            hasContent: WatermarkPreferences.load().hasRenderableContent,
             enabled: sessionWatermarkEnabled
         )
+        annotationToolbar.onWatermarkSetup = { [weak self] configuration in
+            WatermarkPreferences.save(configuration)
+            self?.setSessionWatermarkEnabled(true)
+        }
         annotationCanvas.onDocumentChanged = { [weak self] in
             guard let self else { return }
             self.annotationToolbar.setUndoEnabled(
@@ -1405,8 +1409,8 @@ final class LongCapturePreviewWindowController: NSWindowController, NSWindowDele
             logicalOrigin: annotationCanvas.bounds.origin
         )
         annotationCanvas.needsDisplay = true
-        annotationToolbar.setWatermarkAvailable(
-            WatermarkPreferences.load().hasRenderableContent,
+        annotationToolbar.setWatermarkState(
+            hasContent: WatermarkPreferences.load().hasRenderableContent,
             enabled: enabled
         )
     }

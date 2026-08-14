@@ -46,7 +46,8 @@ final class PinningTests: XCTestCase {
     func testPinWindowAppliesAppearanceDesktopBehaviorAndPixelMovement() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let manager = PinManager(historyStore: PinHistoryStore(directoryURL: directory))
+        let defaults = temporaryDefaults()
+        let manager = PinManager(historyStore: PinHistoryStore(directoryURL: directory), defaults: defaults)
         let image = try makeImage(width: 200, height: 100, color: .white)
         let controller = try manager.pin(image)
         let duplicateWindow = try manager.pin(image)
@@ -84,6 +85,25 @@ final class PinningTests: XCTestCase {
         XCTAssertEqual(manager.visibilityMenuTitle, "隐藏全部贴图")
     }
 
+    func testPinDesktopBehaviorPersistsLastSelectionForNewPins() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let defaults = temporaryDefaults()
+        let manager = PinManager(historyStore: PinHistoryStore(directoryURL: directory), defaults: defaults)
+        let image = try makeImage(width: 80, height: 60, color: .white)
+
+        let first = try manager.pin(image, recordHistory: false)
+        XCTAssertEqual(first.desktopBehavior, .allDesktops)
+        first.setDesktopBehavior(.currentDesktop)
+        manager.closePin(id: first.id)
+
+        let second = try manager.pin(image, recordHistory: false)
+        defer { manager.closePin(id: second.id) }
+
+        XCTAssertEqual(second.desktopBehavior, .currentDesktop)
+        XCTAssertFalse(second.window?.collectionBehavior.contains(.canJoinAllSpaces) == true)
+    }
+
     func testPinCloseButtonOnlyAppearsInTopLeftHotspot() throws {
         let image = try makeImage(width: 100, height: 80, color: .white)
         let view = PinImageView(frame: CGRect(x: 0, y: 0, width: 100, height: 80), image: image)
@@ -100,7 +120,10 @@ final class PinningTests: XCTestCase {
     func testDoubleClickClosesPin() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let manager = PinManager(historyStore: PinHistoryStore(directoryURL: directory))
+        let manager = PinManager(
+            historyStore: PinHistoryStore(directoryURL: directory),
+            defaults: temporaryDefaults()
+        )
         let controller = try manager.pin(try makeImage(width: 80, height: 60, color: .white))
         let view = try XCTUnwrap(controller.window?.contentView as? PinImageView)
         let event = try XCTUnwrap(NSEvent.mouseEvent(
@@ -123,7 +146,10 @@ final class PinningTests: XCTestCase {
     func testScreenshotPinUsesLogicalSelectionSizeForRetinaImage() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let manager = PinManager(historyStore: PinHistoryStore(directoryURL: directory))
+        let manager = PinManager(
+            historyStore: PinHistoryStore(directoryURL: directory),
+            defaults: temporaryDefaults()
+        )
         let retinaImage = try makeImage(width: 340, height: 280, color: .white)
 
         let controller = try manager.pin(
@@ -140,7 +166,10 @@ final class PinningTests: XCTestCase {
     func testExtremeAndTinyPinImagesKeepTheirOriginalAspectRatio() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let manager = PinManager(historyStore: PinHistoryStore(directoryURL: directory))
+        let manager = PinManager(
+            historyStore: PinHistoryStore(directoryURL: directory),
+            defaults: temporaryDefaults()
+        )
         let dimensions = [(400, 30), (30, 400), (30, 30)]
 
         for (width, height) in dimensions {
@@ -190,7 +219,10 @@ final class PinningTests: XCTestCase {
         guard pasteboard.setData(try PinImageCodec.pngData(from: base), forType: .png) else {
             throw XCTSkip("当前测试环境禁止访问 NSPasteboard")
         }
-        let manager = PinManager(historyStore: PinHistoryStore(directoryURL: directory))
+        let manager = PinManager(
+            historyStore: PinHistoryStore(directoryURL: directory),
+            defaults: temporaryDefaults()
+        )
         let pin = try manager.pinClipboard(pasteboard)
         defer { manager.closePin(id: pin.id) }
         XCTAssertEqual(pin.image.width, 80)
@@ -247,7 +279,10 @@ final class PinningTests: XCTestCase {
 
         let historyDirectory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: historyDirectory) }
-        let manager = PinManager(historyStore: PinHistoryStore(directoryURL: historyDirectory))
+        let manager = PinManager(
+            historyStore: PinHistoryStore(directoryURL: historyDirectory),
+            defaults: temporaryDefaults()
+        )
         let controller = try manager.pin(try makeImage(width: 80, height: 60, color: .white))
         defer { manager.closePin(id: controller.id) }
 
@@ -286,6 +321,13 @@ final class PinningTests: XCTestCase {
     private func temporaryDirectory() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("Brushot-PinningTests-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    private func temporaryDefaults() -> UserDefaults {
+        let suiteName = "Brushot.PinningTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        return defaults
     }
 
     private func descendants(of view: NSView) -> [NSView] {

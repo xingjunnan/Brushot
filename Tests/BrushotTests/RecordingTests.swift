@@ -444,8 +444,10 @@ final class RecordingInteractionTests: XCTestCase {
         let audioLabel = try XCTUnwrap(labels.first { $0.stringValue == "视频音频" })
         let silentHint = try XCTUnwrap(labels.first { $0.stringValue == "GIF 录制为静音" })
         var received: [(RecordingFormat, Bool, Bool)] = []
-        bar.onStart = { (format: RecordingFormat, systemAudio: Bool, microphone: Bool, _: String?) in
+        var receivedWatermarks: [WatermarkConfiguration?] = []
+        bar.onStart = { format, systemAudio, microphone, _, watermark in
             received.append((format, systemAudio, microphone))
+            receivedWatermarks.append(watermark)
         }
 
         audio.performClick(nil)
@@ -464,6 +466,7 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertEqual(received.map(\.0), [.video, .gif])
         XCTAssertEqual(received.map(\.1), [true, false])
         XCTAssertEqual(received.map(\.2), [false, false])
+        XCTAssertEqual(receivedWatermarks.compactMap { $0?.text }, ["Brushot", "Brushot"])
         XCTAssertTrue(RecordingPreferences.systemAudioEnabled())
         XCTAssertTrue(WatermarkPreferences.recordingEnabled())
     }
@@ -484,10 +487,10 @@ final class RecordingInteractionTests: XCTestCase {
         let watermarkInfo = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingWatermarkInfo" })
         let labels = descendants(of: bar).compactMap { $0 as? NSTextField }
 
-        XCTAssertFalse(watermarkButton.isEnabled)
+        XCTAssertTrue(watermarkButton.isEnabled)
         XCTAssertEqual(watermarkButton.state, .off)
-        XCTAssertEqual(watermarkButton.toolTip, "请先在水印设置中填写文字或选择 Logo")
-        XCTAssertEqual(watermarkInfo.toolTip, "请先在水印设置中填写文字或选择 Logo")
+        XCTAssertEqual(watermarkButton.toolTip, "设置水印")
+        XCTAssertEqual(watermarkInfo.toolTip, "导出时添加水印，不会出现在录制过程中")
         XCTAssertFalse(WatermarkPreferences.recordingEnabled())
         XCTAssertFalse(labels.contains { $0.stringValue.contains("录制水印会增加导出时间") })
     }
@@ -514,6 +517,10 @@ final class RecordingInteractionTests: XCTestCase {
         })
         blue.performClick(nil)
         XCTAssertEqual(selectedColor?.blueComponent ?? 0, 1, accuracy: 0.001)
+        let customColor = try XCTUnwrap(buttons.first {
+            $0.identifier?.rawValue == "recordingAnnotation.color.6"
+        })
+        XCTAssertTrue(customColor is AnnotationColorPickerButton)
 
         let undo = try XCTUnwrap(buttons.first {
             $0.identifier?.rawValue == "recordingAnnotation.undo"

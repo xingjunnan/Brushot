@@ -59,7 +59,7 @@ struct WatermarkConfiguration: Equatable, @unchecked Sendable {
         text: "",
         logoURL: nil,
         logoDisplayName: nil,
-        repeatMode: .single,
+        repeatMode: .diagonalTiled,
         position: .bottomRight,
         opacity: 0.65,
         scale: 1,
@@ -135,7 +135,7 @@ enum WatermarkPreferences {
     }
 
     static func save(_ config: WatermarkConfiguration, defaults: UserDefaults = .standard) {
-        defaults.set(config.isEnabled, forKey: enabledKey)
+        defaults.set(config.isEnabled && config.hasRenderableContent, forKey: enabledKey)
         defaults.set(config.text, forKey: textKey)
         defaults.set(config.logoURL?.path ?? "", forKey: logoPathKey)
         defaults.set(config.logoDisplayName ?? "", forKey: logoDisplayNameKey)
@@ -149,6 +149,9 @@ enum WatermarkPreferences {
         defaults.set(Double(color.greenComponent), forKey: colorGreenKey)
         defaults.set(Double(color.blueComponent), forKey: colorBlueKey)
         defaults.set(Double(color.alphaComponent), forKey: colorAlphaKey)
+        if !config.hasRenderableContent {
+            defaults.set(false, forKey: recordingEnabledKey)
+        }
     }
 
     static func setEnabled(_ enabled: Bool, defaults: UserDefaults = .standard) {

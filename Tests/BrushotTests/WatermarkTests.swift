@@ -12,7 +12,7 @@ final class WatermarkTests: XCTestCase {
         let config = WatermarkPreferences.load(defaults: defaults)
 
         XCTAssertFalse(config.isEnabled)
-        XCTAssertEqual(config.repeatMode, .single)
+        XCTAssertEqual(config.repeatMode, .diagonalTiled)
         XCTAssertEqual(config.opacity, 1)
         XCTAssertEqual(config.scale, 0.5)
         XCTAssertEqual(config.margin, 80)
@@ -35,7 +35,22 @@ final class WatermarkTests: XCTestCase {
         XCTAssertEqual(recording.text, "Brushot")
     }
 
-    func testPreferencesPersistDiagonalTiledRepeatModeAndFallbackToSingle() {
+    func testSavingEmptyContentDisablesScreenshotAndRecordingWatermarks() {
+        let defaults = UserDefaults(suiteName: "WatermarkTests.\(UUID().uuidString)")!
+        var config = WatermarkConfiguration.default
+        config.text = "Brushot"
+        config.isEnabled = true
+        WatermarkPreferences.save(config, defaults: defaults)
+        WatermarkPreferences.setRecordingEnabled(true, defaults: defaults)
+
+        config.text = "   "
+        WatermarkPreferences.save(config, defaults: defaults)
+
+        XCTAssertFalse(WatermarkPreferences.load(defaults: defaults).isEnabled)
+        XCTAssertFalse(WatermarkPreferences.recordingEnabled(defaults: defaults))
+    }
+
+    func testPreferencesPersistDiagonalTiledRepeatModeAndFallbackToDefault() {
         let defaults = UserDefaults(suiteName: "WatermarkTests.\(UUID().uuidString)")!
         var config = WatermarkConfiguration.default
         config.repeatMode = .diagonalTiled
@@ -50,7 +65,7 @@ final class WatermarkTests: XCTestCase {
 
         defaults.set("unsupported", forKey: "watermark.repeatMode")
 
-        XCTAssertEqual(WatermarkPreferences.load(defaults: defaults).repeatMode, .single)
+        XCTAssertEqual(WatermarkPreferences.load(defaults: defaults).repeatMode, .diagonalTiled)
     }
 
     func testPreferencesFallBackToLogoFileNameWhenDisplayNameIsMissing() {

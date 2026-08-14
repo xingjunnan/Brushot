@@ -1643,7 +1643,7 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
             label: "Logo",
             trailingViews: [watermarkLogoLabel, chooseLogoButton, removeLogoButton]
         )
-        let logoHelper = makeHelperLabel(L.text("支持 PNG/JPG/HEIC，小于 3MB；导入后会自动优化为安全副本"))
+        let logoHelper = makeHelperLabel(L.text("支持 PNG/JPG/HEIC，小于 3MB；"))
         let logoGroup = makeFieldGroup(rows: [
             logoRow,
             makeIndentedView(logoHelper)
@@ -2430,13 +2430,14 @@ final class CaptureController {
         }
         window.onOCRRequested = { [weak self] source in self?.finishOCR(source: source) }
         window.onLongCaptureRequested = { [weak self] rect in self?.startLongCapture(globalRect: rect) }
-        window.onRecordingRequested = { [weak self] rect, format, systemAudio, microphone, deviceID in
+        window.onRecordingRequested = { [weak self] rect, format, systemAudio, microphone, deviceID, watermark in
             self?.startRecording(
                 globalRect: rect,
                 format: format,
                 systemAudio: systemAudio,
                 microphone: microphone,
-                microphoneDeviceID: deviceID
+                microphoneDeviceID: deviceID,
+                watermarkConfiguration: watermark
             )
         }
     }
@@ -2557,13 +2558,14 @@ final class CaptureController {
             window.onSelectionCancelled = { [weak self] in
                 self?.closeOverlays()
             }
-            window.onRecordingRequested = { [weak self] rect, format, systemAudio, microphone, deviceID in
+            window.onRecordingRequested = { [weak self] rect, format, systemAudio, microphone, deviceID, watermark in
                 self?.startRecording(
                     globalRect: rect,
                     format: format,
                     systemAudio: systemAudio,
                     microphone: microphone,
-                    microphoneDeviceID: deviceID
+                    microphoneDeviceID: deviceID,
+                    watermarkConfiguration: watermark
                 )
             }
             return window
@@ -2626,7 +2628,8 @@ final class CaptureController {
         format: RecordingFormat,
         systemAudio: Bool,
         microphone: Bool,
-        microphoneDeviceID: String?
+        microphoneDeviceID: String?,
+        watermarkConfiguration: WatermarkConfiguration?
     ) {
         guard recordingSession == nil, !isExportingRecording else { return }
         closeOverlays()
@@ -2653,7 +2656,7 @@ final class CaptureController {
                         capturesMicrophone: format == .video && microphone,
                         microphoneDeviceID: microphoneDeviceID,
                         showsCursor: true,
-                        watermarkConfiguration: WatermarkPreferences.currentRecordingConfiguration(),
+                        watermarkConfiguration: watermarkConfiguration,
                         capturedAt: Date()
                     ),
                     onFinish: { [weak self] result in
@@ -3026,7 +3029,7 @@ final class SelectionOverlayWindow: NSPanel {
     var onAnnotationFailed: ((Error) -> Void)?
     var onOCRRequested: ((OCRSource) -> Void)?
     var onLongCaptureRequested: ((CGRect) -> Void)?
-    var onRecordingRequested: ((CGRect, RecordingFormat, Bool, Bool, String?) -> Void)?
+    var onRecordingRequested: ((CGRect, RecordingFormat, Bool, Bool, String?, WatermarkConfiguration?) -> Void)?
     var onDelayedCaptureRequested: ((CGRect) -> Void)?
 
     private var overlayView: SelectionOverlayView? {
@@ -3082,8 +3085,8 @@ final class SelectionOverlayWindow: NSPanel {
         view.onLongCaptureRequested = { [weak self] rect in
             self?.onLongCaptureRequested?(rect)
         }
-        view.onRecordingRequested = { [weak self] rect, format, systemAudio, microphone, deviceID in
-            self?.onRecordingRequested?(rect, format, systemAudio, microphone, deviceID)
+        view.onRecordingRequested = { [weak self] rect, format, systemAudio, microphone, deviceID, watermark in
+            self?.onRecordingRequested?(rect, format, systemAudio, microphone, deviceID, watermark)
         }
         view.onDelayedCaptureRequested = { [weak self] rect in
             self?.onDelayedCaptureRequested?(rect)
@@ -3161,7 +3164,7 @@ final class SelectionOverlayView: NSView {
     var onAnnotationFailed: ((Error) -> Void)?
     var onOCRRequested: ((OCRSource) -> Void)?
     var onLongCaptureRequested: ((CGRect) -> Void)?
-    var onRecordingRequested: ((CGRect, RecordingFormat, Bool, Bool, String?) -> Void)?
+    var onRecordingRequested: ((CGRect, RecordingFormat, Bool, Bool, String?, WatermarkConfiguration?) -> Void)?
     var onDelayedCaptureRequested: ((CGRect) -> Void)?
 
     private let purpose: SelectionPurpose
@@ -3212,7 +3215,7 @@ final class SelectionOverlayView: NSView {
     }()
     private lazy var recordingBar: RecordingStartBar = {
         let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 104))
-        bar.onStart = { [weak self] format, systemAudio, microphone, deviceID in
+        bar.onStart = { [weak self] format, systemAudio, microphone, deviceID, watermark in
             guard let self,
                   let selection = self.currentSelection(),
                   selection.width >= 80,
@@ -3223,7 +3226,7 @@ final class SelectionOverlayView: NSView {
             }
             self.isSubmitting = true
             self.hideSelectionControls()
-            self.onRecordingRequested?(globalRect, format, systemAudio, microphone, deviceID)
+            self.onRecordingRequested?(globalRect, format, systemAudio, microphone, deviceID, watermark)
         }
         bar.onCancel = { [weak self] in
             guard let self else { return }
@@ -4326,8 +4329,8 @@ final class SelectionOverlayView: NSView {
 
     private func setSessionWatermarkEnabled(_ enabled: Bool) {
         sessionWatermarkEnabled = enabled
-        actionBar.setWatermarkAvailable(
-            WatermarkPreferences.load().hasRenderableContent,
+        actionBar.setWatermarkState(
+            hasContent: WatermarkPreferences.load().hasRenderableContent,
             enabled: enabled
         )
         if let selection = currentSelection(), isSelectionFinalized {
@@ -4431,8 +4434,8 @@ final class SelectionOverlayView: NSView {
     private func makeActionBar() -> AnnotationToolbarView {
         let width = min(720, max(520, bounds.width - 16))
         let bar = AnnotationToolbarView(frame: NSRect(x: 0, y: 0, width: width, height: 82))
-        bar.setWatermarkAvailable(
-            WatermarkPreferences.load().hasRenderableContent,
+        bar.setWatermarkState(
+            hasContent: WatermarkPreferences.load().hasRenderableContent,
             enabled: sessionWatermarkEnabled
         )
         bar.onToolSelected = { [weak self] tool in
@@ -4471,6 +4474,10 @@ final class SelectionOverlayView: NSView {
         }
         bar.onWatermarkToggle = { [weak self] enabled in
             self?.setSessionWatermarkEnabled(enabled)
+        }
+        bar.onWatermarkSetup = { [weak self] configuration in
+            WatermarkPreferences.save(configuration)
+            self?.setSessionWatermarkEnabled(true)
         }
         bar.onPreferredSizeChanged = { [weak self] in
             guard let self, let selection = self.currentSelection() else { return }
