@@ -63,7 +63,6 @@ final class PinningTests: XCTestCase {
         controller.setCornerRadius(16)
         XCTAssertEqual(controller.cornerRadius, 16)
 
-        controller.setDesktopBehavior(.allDesktops)
         XCTAssertEqual(controller.desktopBehavior, .allDesktops)
         XCTAssertTrue(controller.window?.collectionBehavior.contains(.canJoinAllSpaces) == true)
         controller.setDesktopBehavior(.currentDesktop)
@@ -83,6 +82,42 @@ final class PinningTests: XCTestCase {
         XCTAssertTrue(controller.window?.isVisible == true)
         XCTAssertTrue(newPin.window?.isVisible == true)
         XCTAssertEqual(manager.visibilityMenuTitle, "隐藏全部贴图")
+    }
+
+    func testPinCloseButtonOnlyAppearsInTopLeftHotspot() throws {
+        let image = try makeImage(width: 100, height: 80, color: .white)
+        let view = PinImageView(frame: CGRect(x: 0, y: 0, width: 100, height: 80), image: image)
+
+        XCTAssertFalse(view.isCloseButtonVisibleForTesting)
+        view.updateCloseButtonVisibility(for: CGPoint(x: 12, y: 70))
+        XCTAssertTrue(view.isCloseButtonVisibleForTesting)
+        view.updateCloseButtonVisibility(for: CGPoint(x: 80, y: 70))
+        XCTAssertFalse(view.isCloseButtonVisibleForTesting)
+        view.updateCloseButtonVisibility(for: CGPoint(x: 12, y: 12))
+        XCTAssertFalse(view.isCloseButtonVisibleForTesting)
+    }
+
+    func testDoubleClickClosesPin() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let manager = PinManager(historyStore: PinHistoryStore(directoryURL: directory))
+        let controller = try manager.pin(try makeImage(width: 80, height: 60, color: .white))
+        let view = try XCTUnwrap(controller.window?.contentView as? PinImageView)
+        let event = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: CGPoint(x: 20, y: 20),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: controller.window?.windowNumber ?? 0,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 2,
+            pressure: 1
+        ))
+
+        view.mouseDown(with: event)
+
+        XCTAssertNil(manager.pinWindows[controller.id])
     }
 
     func testScreenshotPinUsesLogicalSelectionSizeForRetinaImage() throws {

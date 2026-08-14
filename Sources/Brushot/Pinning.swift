@@ -177,12 +177,15 @@ final class PinImageView: NSView {
         didSet { needsDisplay = true }
     }
     weak var owner: PinWindowController?
+    private let closeButton = NSButton()
+    private let closeButtonHotspotSize: CGFloat = 44
 
     init(frame: CGRect, image: CGImage) {
         self.image = image
         super.init(frame: frame)
         wantsLayer = true
         layer?.masksToBounds = true
+        configureCloseButton()
     }
 
     required init?(coder: NSCoder) {
@@ -196,7 +199,7 @@ final class PinImageView: NSView {
         trackingAreas.forEach { removeTrackingArea($0) }
         addTrackingArea(NSTrackingArea(
             rect: .zero,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
             owner: self,
             userInfo: nil
         ))
@@ -205,6 +208,15 @@ final class PinImageView: NSView {
     override func mouseEntered(with event: NSEvent) {
         window?.makeKey()
         window?.makeFirstResponder(self)
+        updateCloseButtonVisibility(for: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        updateCloseButtonVisibility(for: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        closeButton.isHidden = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -241,7 +253,7 @@ final class PinImageView: NSView {
         window?.makeKey()
         window?.makeFirstResponder(self)
         if event.clickCount >= 2 {
-            owner?.beginAnnotation()
+            owner?.closePin()
         } else {
             window?.performDrag(with: event)
         }
@@ -294,6 +306,44 @@ final class PinImageView: NSView {
         default: super.keyDown(with: event)
         }
     }
+
+    var isCloseButtonVisibleForTesting: Bool {
+        !closeButton.isHidden
+    }
+
+    func updateCloseButtonVisibility(for point: CGPoint) {
+        closeButton.isHidden = !CGRect(
+            x: 0,
+            y: max(0, bounds.height - closeButtonHotspotSize),
+            width: closeButtonHotspotSize,
+            height: closeButtonHotspotSize
+        ).contains(point)
+    }
+
+    private func configureCloseButton() {
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        closeButton.isBordered = false
+        closeButton.bezelStyle = .regularSquare
+        closeButton.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: L.text("关闭贴图"))
+        closeButton.imagePosition = .imageOnly
+        closeButton.contentTintColor = .controlTextColor
+        closeButton.toolTip = L.text("关闭贴图")
+        closeButton.setAccessibilityLabel(L.text("关闭贴图"))
+        closeButton.target = self
+        closeButton.action = #selector(closeButtonAction)
+        closeButton.isHidden = true
+        addSubview(closeButton)
+        NSLayoutConstraint.activate([
+            closeButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            closeButton.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            closeButton.widthAnchor.constraint(equalToConstant: 24),
+            closeButton.heightAnchor.constraint(equalToConstant: 24)
+        ])
+    }
+
+    @objc private func closeButtonAction() {
+        owner?.closePin()
+    }
 }
 
 @MainActor
@@ -304,7 +354,7 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
     private let imageView: PinImageView
     private(set) var opacity: CGFloat = 1
     private(set) var cornerRadius: CGFloat = 10
-    private(set) var desktopBehavior: PinDesktopBehavior = .currentDesktop
+    private(set) var desktopBehavior: PinDesktopBehavior = .allDesktops
     private var annotationEditor: PinAnnotationEditorWindowController?
 
     init(
@@ -338,7 +388,7 @@ final class PinWindowController: NSWindowController, NSWindowDelegate {
         panel.minSize = Self.minimumSize(for: image)
         panel.aspectRatio = imageSize
         applyCornerRadius()
-        setDesktopBehavior(.currentDesktop)
+        setDesktopBehavior(.allDesktops)
         if origin == nil { centerNearPointer(size: size) }
     }
 

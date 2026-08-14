@@ -146,7 +146,12 @@ final class ShortcutTests: XCTestCase {
         XCTAssertEqual(menu.items[settingsIndex + 1].title, "水印设置…")
         XCTAssertEqual(menu.items[settingsIndex + 1].keyEquivalent, "")
         XCTAssertTrue(menu.items[settingsIndex + 1].keyEquivalentModifierMask.isEmpty)
+        let feedback = try XCTUnwrap(menu.items.first { $0.title == "问题反馈…" })
+        XCTAssertEqual(feedback.keyEquivalent, "")
+        XCTAssertTrue(feedback.keyEquivalentModifierMask.isEmpty)
         let quit = try XCTUnwrap(menu.items.first { $0.title == "退出 Brushot" })
+        let feedbackIndex = try XCTUnwrap(menu.items.firstIndex(of: feedback))
+        XCTAssertEqual(menu.items[feedbackIndex + 1], quit)
         XCTAssertEqual(quit.keyEquivalent, "")
         XCTAssertTrue(quit.keyEquivalentModifierMask.isEmpty)
     }

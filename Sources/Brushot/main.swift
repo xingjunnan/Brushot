@@ -684,6 +684,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         watermarkSettings.keyEquivalentModifierMask = []
         menu.addItem(watermarkSettings)
         menu.addItem(NSMenuItem.separator())
+        let feedbackItem = NSMenuItem(
+            title: L.text("问题反馈…"),
+            action: #selector(showFeedback),
+            keyEquivalent: ""
+        )
+        feedbackItem.target = self
+        feedbackItem.keyEquivalentModifierMask = []
+        menu.addItem(feedbackItem)
         let quitItem = NSMenuItem(title: L.text("退出 Brushot"), action: #selector(quit), keyEquivalent: "")
         quitItem.target = self
         quitItem.keyEquivalentModifierMask = []
@@ -725,6 +733,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = L.text("贴图失败")
         alert.informativeText = message
+        alert.runModal()
+    }
+
+    @objc private func showFeedback() {
+        let alert = NSAlert()
+        alert.messageText = L.text("问题反馈")
+        alert.informativeText = L.text("QQ交流群：1063488835\n联系邮箱：brushot@163.com")
+        alert.addButton(withTitle: L.text("确定"))
         alert.runModal()
     }
 
