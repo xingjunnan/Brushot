@@ -186,6 +186,24 @@ final class AnnotationEditorTests: XCTestCase {
         XCTAssertEqual(regularSubmitCount, 0)
     }
 
+    func testConfirmedSelectionUsesOpenHandCursorInsideMovableRegion() throws {
+        let overlay = SelectionOverlayView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = overlay
+        overlay.mouseDown(with: try mouseEvent(type: .leftMouseDown, at: CGPoint(x: 40, y: 50)))
+        overlay.mouseDragged(with: try mouseEvent(type: .leftMouseDragged, at: CGPoint(x: 260, y: 210)))
+        overlay.mouseUp(with: try mouseEvent(type: .leftMouseUp, at: CGPoint(x: 260, y: 210)))
+
+        overlay.cursorUpdate(with: try mouseEvent(type: .mouseMoved, at: CGPoint(x: 120, y: 120)))
+
+        XCTAssertEqual(NSCursor.current, NSCursor.openHand)
+    }
+
     func testCapturedResultAndSmallSelectionDisableLongCaptureAndRecording() throws {
         let capturedResult = SelectionOverlayView(
             frame: CGRect(x: 0, y: 0, width: 500, height: 400),

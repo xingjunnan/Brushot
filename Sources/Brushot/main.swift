@@ -3310,7 +3310,7 @@ final class SelectionOverlayView: NSView {
         )
         if isSelectionFinalized, !isPreselected, let selection = currentSelection() {
             if annotationCanvas == nil {
-                addCursorRect(selection, cursor: .crosshair)
+                addCursorRect(selection, cursor: .openHand)
             }
             for controls in visibleSelectionControls {
                 addCursorRect(controls.frame, cursor: .arrow)
@@ -3490,6 +3490,15 @@ final class SelectionOverlayView: NSView {
         }
         if let annotationCanvas, annotationCanvas.frame.contains(location) {
             restoreSystemCursorIfNeeded()
+            return
+        }
+        if annotationCanvas == nil,
+           isSelectionFinalized,
+           !isPreselected,
+           let selection = currentSelection(),
+           selection.contains(location) {
+            restoreSystemCursorIfNeeded()
+            NSCursor.openHand.set()
             return
         }
         if shouldUseSyntheticSelectionCursor {
