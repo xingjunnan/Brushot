@@ -730,35 +730,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func makeStatusBarIcon() -> NSImage {
         let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
-            NSColor.black.setStroke()
-            let corners = NSBezierPath()
-            corners.lineWidth = 1.6
-            corners.lineCapStyle = .round
-            corners.lineJoinStyle = .round
-            corners.move(to: NSPoint(x: 2.5, y: 7))
-            corners.line(to: NSPoint(x: 2.5, y: 14.5))
-            corners.line(to: NSPoint(x: 7, y: 14.5))
-            corners.move(to: NSPoint(x: 11, y: 14.5))
-            corners.line(to: NSPoint(x: 15.5, y: 14.5))
-            corners.line(to: NSPoint(x: 15.5, y: 10))
-            corners.move(to: NSPoint(x: 2.5, y: 8))
-            corners.line(to: NSPoint(x: 2.5, y: 3.5))
-            corners.line(to: NSPoint(x: 7, y: 3.5))
-            corners.move(to: NSPoint(x: 11, y: 3.5))
-            corners.line(to: NSPoint(x: 15.5, y: 3.5))
-            corners.line(to: NSPoint(x: 15.5, y: 8))
-            corners.stroke()
+            NSColor.black.setFill()
 
-            // Reuse the system pencil silhouette so the center mark reads as
-            // annotation rather than an export arrow at menu-bar size.
-            let pencil = NSImage(systemSymbolName: "pencil", accessibilityDescription: "Brushot")?
-                .withSymbolConfiguration(.init(pointSize: 10.5, weight: .semibold))
-            pencil?.draw(
-                in: NSRect(x: 3.75, y: 3.75, width: 10.5, height: 10.5),
-                from: .zero,
-                operation: .sourceOver,
-                fraction: 1
-            )
+            func fillCorner(_ rect: NSRect) {
+                NSBezierPath(roundedRect: rect, xRadius: 1.15, yRadius: 1.15).fill()
+            }
+
+            fillCorner(NSRect(x: 1.3, y: 12.7, width: 6.25, height: 2.6))
+            fillCorner(NSRect(x: 1.3, y: 8.65, width: 2.6, height: 6.65))
+            fillCorner(NSRect(x: 9.95, y: 12.7, width: 6.75, height: 2.6))
+            fillCorner(NSRect(x: 14.1, y: 9.05, width: 2.6, height: 6.25))
+            fillCorner(NSRect(x: 1.3, y: 2.7, width: 6.25, height: 2.6))
+            fillCorner(NSRect(x: 1.3, y: 2.7, width: 2.6, height: 5.35))
+            fillCorner(NSRect(x: 9.95, y: 2.7, width: 6.75, height: 2.6))
+            fillCorner(NSRect(x: 14.1, y: 2.7, width: 2.6, height: 5.35))
+
+            guard let context = NSGraphicsContext.current?.cgContext else { return true }
+            context.saveGState()
+            context.setBlendMode(.clear)
+            NSColor.black.setFill()
+            let bristleCuts = [
+                NSRect(x: 9.95, y: 13.05, width: 2.15, height: 0.42),
+                NSRect(x: 9.7, y: 13.85, width: 2.55, height: 0.42),
+                NSRect(x: 9.55, y: 14.58, width: 2.35, height: 0.36)
+            ]
+            for rect in bristleCuts {
+                NSBezierPath(roundedRect: rect, xRadius: 0.18, yRadius: 0.18).fill()
+            }
+            context.restoreGState()
             return true
         }
         image.isTemplate = true
