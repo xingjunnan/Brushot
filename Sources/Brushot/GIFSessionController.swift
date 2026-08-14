@@ -863,7 +863,7 @@ final class RecordingStartBar: NSVisualEffectView {
         button.bezelStyle = .circular
         return button
     }()
-    private let silentHint = NSTextField(labelWithString: L.text("GIF 录制为静音"))
+    private let silentHint = NSTextField(labelWithString: L.text("录制 GIF 时静音"))
     private var hasMicrophones = false
     private var canUseMicrophonePermission = true
     private var watermarkSetupPopover: WatermarkQuickSetupPopover?
@@ -944,13 +944,16 @@ final class RecordingStartBar: NSVisualEffectView {
             audioCheckbox,
             microphoneCheckbox,
             microphonePopup,
+            silentHint,
             watermarkCheckbox,
-            watermarkInfoButton,
-            silentHint
+            watermarkInfoButton
         ])
         audioRow.orientation = .horizontal
         audioRow.alignment = .centerY
         audioRow.spacing = 10
+        // NSButton's alignment rect extends slightly beyond its visible frame, so 26
+        // points here yields a visually clear 24-point gap between the two groups.
+        audioRow.setCustomSpacing(26, after: silentHint)
 
         let stack = NSStackView(views: [formatRow, audioRow])
         stack.orientation = .vertical

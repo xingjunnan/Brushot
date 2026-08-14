@@ -53,6 +53,20 @@ final class ShortcutTests: XCTestCase {
         XCTAssertEqual(ShortcutPreferences.load(.pinLibrary, defaults: defaults), replacement)
     }
 
+    func testAppLanguagePreferenceDefaultsToSystemAndRoundTripsEveryLanguage() throws {
+        let suiteName = "Brushot.AppLanguagePreferences.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertEqual(AppLanguagePreferences.selectedLanguage(defaults: defaults), .system)
+        for language in AppLanguage.allCases {
+            AppLanguagePreferences.setSelectedLanguage(language, defaults: defaults)
+            XCTAssertEqual(AppLanguagePreferences.selectedLanguage(defaults: defaults), language)
+        }
+        defaults.set("unsupported", forKey: "appLanguage")
+        XCTAssertEqual(AppLanguagePreferences.selectedLanguage(defaults: defaults), .system)
+    }
+
     func testRecordingShortcutDefaultsToOptionRAndMigratesLegacyGIFValue() throws {
         let freshSuite = "Brushot.RecordingShortcutFresh.\(UUID().uuidString)"
         let fresh = try XCTUnwrap(UserDefaults(suiteName: freshSuite))
@@ -191,6 +205,21 @@ final class ShortcutTests: XCTestCase {
         } as? NSButton)
         XCTAssertEqual(completionSound.title, "播放操作完成提示音")
         XCTAssertEqual(completionSound.state, AppPreferences.completionSoundEnabled ? .on : .off)
+        let languageSection = try XCTUnwrap(descendants(of: content).first {
+            $0.identifier?.rawValue == "languageSection"
+        } as? NSStackView)
+        let languagePopUp = try XCTUnwrap(descendants(of: languageSection).first {
+            $0.identifier?.rawValue == "appLanguage"
+        } as? NSPopUpButton)
+        XCTAssertEqual(languagePopUp.itemArray.compactMap { $0.representedObject as? String }, AppLanguage.allCases.map(\.rawValue))
+        XCTAssertEqual(
+            languagePopUp.selectedItem?.representedObject as? String,
+            AppLanguagePreferences.selectedLanguage().rawValue
+        )
+        let languageRestartHint = try XCTUnwrap(descendants(of: languageSection).first {
+            $0.identifier?.rawValue == "appLanguageRestartHint"
+        } as? NSTextField)
+        XCTAssertTrue(languageRestartHint.isHidden)
         let shortcutGroups = try XCTUnwrap(descendants(of: content).first {
             $0.identifier?.rawValue == "shortcutGroups"
         } as? NSStackView)

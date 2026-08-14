@@ -1,6 +1,42 @@
 import CoreFoundation
 import Foundation
 
+enum AppLanguage: String, CaseIterable {
+    case system
+    case simplifiedChinese
+    case traditionalChinese
+    case english
+    case japanese
+    case korean
+
+    var displayName: String {
+        switch self {
+        case .system: L.text("跟随系统")
+        case .simplifiedChinese: "简体中文"
+        case .traditionalChinese: "繁體中文"
+        case .english: "English"
+        case .japanese: "日本語"
+        case .korean: "한국어"
+        }
+    }
+}
+
+enum AppLanguagePreferences {
+    private static let languageKey = "appLanguage"
+
+    static func selectedLanguage(defaults: UserDefaults = .standard) -> AppLanguage {
+        guard let rawValue = defaults.string(forKey: languageKey),
+              let language = AppLanguage(rawValue: rawValue) else {
+            return .system
+        }
+        return language
+    }
+
+    static func setSelectedLanguage(_ language: AppLanguage, defaults: UserDefaults = .standard) {
+        defaults.set(language.rawValue, forKey: languageKey)
+    }
+}
+
 enum L {
     private enum Language {
         case simplifiedChinese
@@ -47,6 +83,10 @@ enum L {
         "启用 OCR 英译中（需要 macOS 15 或更高版本）": "Enable OCR English to Chinese (requires macOS 15 or later)",
         "播放操作完成提示音": "Play completion sound",
         "通用": "General",
+        "语言": "Language",
+        "应用语言": "App Language",
+        "跟随系统": "Follow System",
+        "重新启动 Brushot 后生效": "Takes effect after restarting Brushot",
         "选择…": "Choose...",
         "保存位置": "Save Location",
         "存储格式": "Format",
@@ -185,7 +225,7 @@ enum L {
         "麦克风": "Microphone",
         "开始录制视频": "Start Recording Video",
         "开始录制 GIF": "Start Recording GIF",
-        "GIF 录制为静音": "GIF recordings are silent",
+        "录制 GIF 时静音": "GIF recordings are silent",
         "录制格式": "Recording Format",
         "未检测到麦克风": "No microphone detected",
         "选择内置或外置麦克风": "Choose a built-in or external microphone",
@@ -385,6 +425,10 @@ enum L {
         "启用 OCR 英译中（需要 macOS 15 或更高版本）": "OCR の英中翻訳を有効化 (macOS 15 以降が必要)",
         "播放操作完成提示音": "完了音を再生",
         "通用": "一般",
+        "语言": "言語",
+        "应用语言": "アプリの言語",
+        "跟随系统": "システム設定に従う",
+        "重新启动 Brushot 后生效": "Brushot の再起動後に反映されます",
         "选择…": "選択...",
         "保存位置": "保存先",
         "存储格式": "形式",
@@ -496,7 +540,7 @@ enum L {
         "麦克风": "マイク",
         "开始录制视频": "動画収録を開始",
         "开始录制 GIF": "GIF 収録を開始",
-        "GIF 录制为静音": "GIF は無音で収録されます",
+        "录制 GIF 时静音": "GIF は無音で収録されます",
         "录制格式": "収録形式",
         "未检测到麦克风": "マイクが検出されません",
         "翻译成中文": "中国語に翻訳",
@@ -588,6 +632,10 @@ enum L {
         "启用 OCR 英译中（需要 macOS 15 或更高版本）": "OCR 영어-중국어 번역 사용(macOS 15 이상 필요)",
         "播放操作完成提示音": "완료 알림음 재생",
         "通用": "일반",
+        "语言": "언어",
+        "应用语言": "앱 언어",
+        "跟随系统": "시스템 설정 따르기",
+        "重新启动 Brushot 后生效": "Brushot을 다시 시작하면 적용됩니다",
         "选择…": "선택...",
         "保存位置": "저장 위치",
         "存储格式": "형식",
@@ -699,7 +747,7 @@ enum L {
         "麦克风": "마이크",
         "开始录制视频": "동영상 녹화 시작",
         "开始录制 GIF": "GIF 녹화 시작",
-        "GIF 录制为静音": "GIF는 무음으로 녹화됩니다",
+        "录制 GIF 时静音": "GIF는 무음으로 녹화됩니다",
         "录制格式": "녹화 형식",
         "未检测到麦克风": "마이크가 감지되지 않음",
         "翻译成中文": "중국어로 번역",
@@ -759,7 +807,26 @@ enum L {
         "橙色": "주황색"
     ]
 
-    private static var activeLanguage: Language {
+    static let languagePreferenceAtLaunch = AppLanguagePreferences.selectedLanguage()
+
+    private static let activeLanguage: Language = resolvedLanguage(for: languagePreferenceAtLaunch)
+
+    private static func resolvedLanguage(for preference: AppLanguage) -> Language {
+        switch preference {
+        case .simplifiedChinese:
+            return .simplifiedChinese
+        case .traditionalChinese:
+            return .traditionalChinese
+        case .english:
+            return .english
+        case .japanese:
+            return .japanese
+        case .korean:
+            return .korean
+        case .system:
+            break
+        }
+
         for rawLanguage in Locale.preferredLanguages {
             let language = rawLanguage.lowercased()
             if language.hasPrefix("zh-hant")

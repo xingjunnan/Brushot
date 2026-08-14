@@ -442,7 +442,7 @@ final class RecordingInteractionTests: XCTestCase {
         })
         let labels = descendants(of: bar).compactMap { $0 as? NSTextField }
         let audioLabel = try XCTUnwrap(labels.first { $0.stringValue == "视频音频" })
-        let silentHint = try XCTUnwrap(labels.first { $0.stringValue == "GIF 录制为静音" })
+        let silentHint = try XCTUnwrap(labels.first { $0.stringValue == "录制 GIF 时静音" })
         var received: [(RecordingFormat, Bool, Bool)] = []
         var receivedWatermarks: [WatermarkConfiguration?] = []
         bar.onStart = { format, systemAudio, microphone, _, watermark in
@@ -460,6 +460,8 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertTrue(microphone.isHidden)
         XCTAssertTrue(microphonePopup.isHidden)
         XCTAssertFalse(silentHint.isHidden)
+        bar.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThanOrEqual(watermarkButton.frame.minX - silentHint.frame.maxX, 24)
         XCTAssertEqual(start.title, "开始录制 GIF")
         start.performClick(nil)
 

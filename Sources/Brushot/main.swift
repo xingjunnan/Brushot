@@ -993,6 +993,8 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     private var selfTimerDurationLabel: NSTextField!
     private var selfTimerDurationStepper: NSStepper!
     private var selfTimerTickCheckbox: NSButton!
+    private var languagePopUp: NSPopUpButton!
+    private var languageRestartHint: NSTextField!
 
     init(
         shortcuts: [ShortcutAction: KeyboardShortcut],
@@ -1232,6 +1234,38 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         note.setContentHuggingPriority(.defaultLow, for: .horizontal)
         note.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
+        // --- 语言 ---
+        languagePopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+        for language in AppLanguage.allCases {
+            languagePopUp.addItem(withTitle: language.displayName)
+            languagePopUp.lastItem?.representedObject = language.rawValue
+        }
+        let selectedLanguageRawValue = AppLanguagePreferences.selectedLanguage().rawValue
+        if let selectedIndex = languagePopUp.itemArray.firstIndex(where: {
+            ($0.representedObject as? String) == selectedLanguageRawValue
+        }) {
+            languagePopUp.selectItem(at: selectedIndex)
+        }
+        languagePopUp.target = self
+        languagePopUp.action = #selector(changeLanguage)
+        languagePopUp.identifier = NSUserInterfaceItemIdentifier("appLanguage")
+        languagePopUp.widthAnchor.constraint(equalToConstant: 190).isActive = true
+
+        let languageRow = makeRow(
+            label: L.text("应用语言"),
+            trailingViews: [languagePopUp]
+        )
+        languageRestartHint = NSTextField(labelWithString: L.text("重新启动 Brushot 后生效"))
+        languageRestartHint.font = .systemFont(ofSize: 11)
+        languageRestartHint.textColor = .secondaryLabelColor
+        languageRestartHint.identifier = NSUserInterfaceItemIdentifier("appLanguageRestartHint")
+        languageRestartHint.isHidden = true
+        let languageSection = makeSection(
+            title: L.text("语言"),
+            views: [languageRow, languageRestartHint]
+        )
+        languageSection.identifier = NSUserInterfaceItemIdentifier("languageSection")
+
         // --- Assemble ---
         let outerStack = NSStackView(views: [
             generalSection,
@@ -1239,7 +1273,8 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
             captureSection,
             selfTimerSection,
             shortcutSection,
-            note
+            note,
+            languageSection
         ])
         outerStack.orientation = .vertical
         outerStack.alignment = .leading
@@ -1541,6 +1576,13 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func toggleSelfTimerTickSound() {
         SelfTimerPreferences.setPlaysTickSound(selfTimerTickCheckbox.state == .on)
+    }
+
+    @objc private func changeLanguage() {
+        guard let rawValue = languagePopUp.selectedItem?.representedObject as? String,
+              let language = AppLanguage(rawValue: rawValue) else { return }
+        AppLanguagePreferences.setSelectedLanguage(language)
+        languageRestartHint.isHidden = language == L.languagePreferenceAtLaunch
     }
 
     private func stopRecording(except activeButton: ShortcutRecorderButton?) {
