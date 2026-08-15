@@ -185,6 +185,8 @@ final class AnnotationCanvasView: NSView {
     private var textEditingTarget: TextEditingTarget?
     private var pendingSingleClick: DispatchWorkItem?
     private var pendingSingleClickAction: (() -> Void)?
+    private weak var pendingNewTextEditor: InlineAnnotationTextView?
+    private var pendingSequenceAddition: AnnotationTransientAddition?
     private var cursorTrackingArea: NSTrackingArea?
     var singleClickDelay = NSEvent.doubleClickInterval
 
@@ -371,7 +373,10 @@ final class AnnotationCanvasView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        guard inlineTextView == nil else {
+        if let editor = inlineTextView {
+            if event.clickCount >= 2, handlePendingNewTextDoubleClick(editor: editor) {
+                return
+            }
             finishInlineText(commit: true)
             return
         }
@@ -431,9 +436,27 @@ final class AnnotationCanvasView: NSView {
 
         switch currentTool {
         case .text:
-            scheduleSingleClick { [weak self] in self?.beginNewText(at: point) }
+            let editor = beginNewText(at: point)
+            scheduleSingleClick { [weak self, weak editor] in
+                guard let self, let editor else { return }
+                self.confirmPendingNewTextEditor(editor)
+            }
+            pendingNewTextEditor = editor
+            editor.onPendingDoubleClick = { [weak self, weak editor] in
+                guard let self, let editor else { return }
+                _ = self.handlePendingNewTextDoubleClick(editor: editor)
+            }
         case .sequence:
-            scheduleSingleClick { [weak self] in self?.addSequence(at: point) }
+            let (editor, addition) = addTransientSequence(at: point)
+            scheduleSingleClick { [weak self] in
+                self?.confirmPendingSequence(addition)
+            }
+            pendingNewTextEditor = editor
+            pendingSequenceAddition = addition
+            editor.onPendingDoubleClick = { [weak self, weak editor] in
+                guard let self, let editor else { return }
+                _ = self.handlePendingNewTextDoubleClick(editor: editor)
+            }
         case .pen, .mosaic:
             interaction = .creating(start: point, points: [point])
             draftItem = AnnotationItem(tool: currentTool, geometry: .path([point]), style: currentStyle)
@@ -667,6 +690,15 @@ final class AnnotationCanvasView: NSView {
         pendingSingleClick?.cancel()
         pendingSingleClick = nil
         pendingSingleClickAction = nil
+        pendingNewTextEditor?.onPendingDoubleClick = nil
+        pendingNewTextEditor = nil
+        if let pendingSequenceAddition {
+            document.discardTransientAddition(pendingSequenceAddition)
+            self.pendingSequenceAddition = nil
+            onSelectionChanged?(document.selectedItem)
+            onDocumentChanged?()
+            needsDisplay = true
+        }
     }
 
     private func runPendingSingleClick() {
@@ -678,11 +710,15 @@ final class AnnotationCanvasView: NSView {
 
     func performPendingSingleClickNow() {
         guard let action = pendingSingleClickAction else { return }
-        cancelPendingSingleClick()
+        pendingSingleClick?.cancel()
+        pendingSingleClick = nil
+        pendingSingleClickAction = nil
         action()
     }
 
-    private func addSequence(at point: CGPoint) {
+    private func addTransientSequence(
+        at point: CGPoint
+    ) -> (editor: InlineAnnotationTextView, addition: AnnotationTransientAddition) {
         let diameter = min(max(currentStyle.lineWidth, 20), 80)
         let badgeFrame = clampedSquareFrame(CGRect(
             x: point.x - diameter / 2,
@@ -691,7 +727,7 @@ final class AnnotationCanvasView: NSView {
             height: diameter
         ))
         let labelFrame = initialStepLabelFrame(for: badgeFrame)
-        let item = document.add(
+        let result = document.addTransient(
             tool: .sequence,
             geometry: .badge(StepAnnotationGeometry(
                 badgeFrame: badgeFrame,
@@ -701,16 +737,47 @@ final class AnnotationCanvasView: NSView {
             )),
             style: currentStyle
         )
+        let item = result.item
         onSelectionChanged?(item)
         onDocumentChanged?()
         needsDisplay = true
-        beginEditingStep(item: item, initialCreation: true)
+        let editor = beginEditingStep(item: item, initialCreation: true)
+        return (editor, result.addition)
     }
 
-    private func beginNewText(at point: CGPoint) {
+    private func confirmPendingNewTextEditor(_ editor: InlineAnnotationTextView) {
+        guard pendingNewTextEditor === editor else { return }
+        editor.onPendingDoubleClick = nil
+        pendingNewTextEditor = nil
+    }
+
+    private func confirmPendingSequence(_ addition: AnnotationTransientAddition) {
+        guard pendingSequenceAddition?.itemID == addition.itemID else { return }
+        pendingSingleClick?.cancel()
+        pendingSingleClick = nil
+        pendingSingleClickAction = nil
+        document.commitTransientAddition(addition)
+        pendingNewTextEditor?.onPendingDoubleClick = nil
+        pendingNewTextEditor = nil
+        pendingSequenceAddition = nil
+        onDocumentChanged?()
+    }
+
+    private func handlePendingNewTextDoubleClick(editor: InlineAnnotationTextView) -> Bool {
+        guard pendingNewTextEditor === editor else { return false }
+        cancelPendingSingleClick()
+        finishInlineText(editor: editor, commit: false)
+        onCommit?(.copy)
+        needsDisplay = true
+        refreshCursor()
+        return true
+    }
+
+    @discardableResult
+    private func beginNewText(at point: CGPoint) -> InlineAnnotationTextView {
         let width = min(max(currentStyle.fontSize + 14, 28), max(28, bounds.maxX - point.x))
         let height = min(max(currentStyle.fontSize + 12, 28), max(28, bounds.maxY - point.y))
-        beginTextEditor(
+        return beginTextEditor(
             frame: CGRect(x: point.x, y: point.y, width: width, height: height),
             value: "",
             target: .newText,
@@ -723,9 +790,12 @@ final class AnnotationCanvasView: NSView {
         beginTextEditor(frame: frame, value: value, target: .text(item.id), style: item.style)
     }
 
-    private func beginEditingStep(item: AnnotationItem, initialCreation: Bool) {
-        guard case .badge(let step) = item.geometry else { return }
-        beginTextEditor(
+    @discardableResult
+    private func beginEditingStep(item: AnnotationItem, initialCreation: Bool) -> InlineAnnotationTextView {
+        guard case .badge(let step) = item.geometry else {
+            preconditionFailure("Sequence annotations must use badge geometry")
+        }
+        return beginTextEditor(
             frame: step.labelFrame,
             value: step.text,
             target: initialCreation ? .initialStep(item.id) : .step(item.id),
@@ -733,12 +803,13 @@ final class AnnotationCanvasView: NSView {
         )
     }
 
+    @discardableResult
     private func beginTextEditor(
         frame: CGRect,
         value: String,
         target: TextEditingTarget,
         style: AnnotationStyle
-    ) {
+    ) -> InlineAnnotationTextView {
         finishInlineText(commit: true)
         let editor = InlineAnnotationTextView(frame: clampedFrame(frame))
         editor.string = value
@@ -767,6 +838,7 @@ final class AnnotationCanvasView: NSView {
         editor.setSelectedRange(endRange)
         editor.scrollRangeToVisible(endRange)
         setCursorKind(.iBeam)
+        return editor
     }
 
     private func resizeInlineTextEditor(
@@ -824,6 +896,11 @@ final class AnnotationCanvasView: NSView {
         let target = textEditingTarget
         let frame = editor.frame
         let style = inlineTextStyle ?? currentStyle
+        if case .some(.initialStep(let itemID)) = target,
+           let addition = pendingSequenceAddition,
+           addition.itemID == itemID {
+            confirmPendingSequence(addition)
+        }
         inlineTextView = nil
         inlineTextStyle = nil
         textEditingTarget = nil
@@ -1273,6 +1350,7 @@ enum AnnotationHitTesting {
 final class InlineAnnotationTextView: NSTextView {
     var onFinish: ((Bool) -> Void)?
     var onTextChanged: (() -> Void)?
+    var onPendingDoubleClick: (() -> Void)?
     private var didFinish = false
     private let ownedTextStorage: NSTextStorage?
     private let ownedLayoutManager: NSLayoutManager?
@@ -1338,6 +1416,14 @@ final class InlineAnnotationTextView: NSTextView {
         } else {
             super.keyDown(with: event)
         }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount >= 2, let onPendingDoubleClick {
+            onPendingDoubleClick()
+            return
+        }
+        super.mouseDown(with: event)
     }
 
     override func didChangeText() {

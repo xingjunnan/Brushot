@@ -277,6 +277,12 @@ struct AnnotationDocumentState: Equatable {
     var nextSequenceNumber = 1
 }
 
+struct AnnotationTransientAddition {
+    let itemID: UUID
+    fileprivate let previousState: AnnotationDocumentState
+    fileprivate let previousSelectedID: UUID?
+}
+
 @MainActor
 final class AnnotationDocument {
     private struct ContentSnapshot {
@@ -302,6 +308,52 @@ final class AnnotationDocument {
 
     @discardableResult
     func add(tool: AnnotationTool, geometry: AnnotationGeometry, style: AnnotationStyle) -> AnnotationItem {
+        add(tool: tool, geometry: geometry, style: style, registersUndo: true)
+    }
+
+    func addTransient(
+        tool: AnnotationTool,
+        geometry: AnnotationGeometry,
+        style: AnnotationStyle
+    ) -> (item: AnnotationItem, addition: AnnotationTransientAddition) {
+        let addition = AnnotationTransientAddition(
+            itemID: UUID(),
+            previousState: state,
+            previousSelectedID: selectedID
+        )
+        let item = add(
+            id: addition.itemID,
+            tool: tool,
+            geometry: geometry,
+            style: style,
+            registersUndo: false
+        )
+        return (item, addition)
+    }
+
+    func commitTransientAddition(_ addition: AnnotationTransientAddition) {
+        guard state.items.contains(where: { $0.id == addition.itemID }) else { return }
+        registerRemovalUndo(
+            itemID: addition.itemID,
+            restoringNextSequenceNumber: addition.previousState.nextSequenceNumber,
+            actionName: L.text("添加标注")
+        )
+    }
+
+    func discardTransientAddition(_ addition: AnnotationTransientAddition) {
+        guard state.items.contains(where: { $0.id == addition.itemID }) else { return }
+        state = addition.previousState
+        selectedID = addition.previousSelectedID
+    }
+
+    @discardableResult
+    private func add(
+        id: UUID = UUID(),
+        tool: AnnotationTool,
+        geometry: AnnotationGeometry,
+        style: AnnotationStyle,
+        registersUndo: Bool
+    ) -> AnnotationItem {
         let previousNextSequenceNumber = state.nextSequenceNumber
         let resolvedGeometry: AnnotationGeometry
         if tool == .sequence {
@@ -321,14 +373,16 @@ final class AnnotationDocument {
         } else {
             resolvedGeometry = geometry
         }
-        let item = AnnotationItem(tool: tool, geometry: resolvedGeometry, style: style)
+        let item = AnnotationItem(id: id, tool: tool, geometry: resolvedGeometry, style: style)
         state.items.append(item)
         selectedID = item.id
-        registerRemovalUndo(
-            itemID: item.id,
-            restoringNextSequenceNumber: previousNextSequenceNumber,
-            actionName: L.text("添加标注")
-        )
+        if registersUndo {
+            registerRemovalUndo(
+                itemID: item.id,
+                restoringNextSequenceNumber: previousNextSequenceNumber,
+                actionName: L.text("添加标注")
+            )
+        }
         return item
     }
 

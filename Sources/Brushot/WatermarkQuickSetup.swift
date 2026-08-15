@@ -12,6 +12,15 @@ enum WatermarkQuickSetupContext {
             L.text("应用并开启录制水印")
         }
     }
+
+    var subtitle: String {
+        switch self {
+        case .screenshot:
+            L.text("添加文字或 Logo，应用到当前截图")
+        case .recording:
+            L.text("添加文字或 Logo，用于导出的视频或 GIF")
+        }
+    }
 }
 
 @MainActor
@@ -23,6 +32,7 @@ final class WatermarkQuickSetupViewController: NSViewController, NSTextFieldDele
 
     private let textField = NSTextField()
     private let logoLabel = NSTextField(labelWithString: "")
+    private let removeLogoButton = NSButton()
     private let validationLabel = NSTextField(labelWithString: "")
     private let applyButton = NSButton()
     private var draftConfiguration: WatermarkConfiguration
@@ -41,7 +51,7 @@ final class WatermarkQuickSetupViewController: NSViewController, NSTextFieldDele
         self.onApply = onApply
         self.onDismiss = onDismiss
         super.init(nibName: nil, bundle: nil)
-        preferredContentSize = CGSize(width: 390, height: 230)
+        preferredContentSize = CGSize(width: 410, height: 232)
     }
 
     required init?(coder: NSCoder) {
@@ -53,12 +63,19 @@ final class WatermarkQuickSetupViewController: NSViewController, NSTextFieldDele
         content.translatesAutoresizingMaskIntoConstraints = false
 
         let title = NSTextField(labelWithString: L.text("设置水印"))
-        title.font = .systemFont(ofSize: 15, weight: .semibold)
+        title.font = .systemFont(ofSize: 16, weight: .semibold)
+
+        let subtitle = NSTextField(labelWithString: context.subtitle)
+        subtitle.font = .systemFont(ofSize: 11)
+        subtitle.textColor = .secondaryLabelColor
 
         textField.stringValue = draftConfiguration.text
         textField.placeholderString = L.text("例如：Brushot {datetime}")
         textField.delegate = self
         textField.identifier = NSUserInterfaceItemIdentifier("watermarkQuick.text")
+        textField.font = .systemFont(ofSize: 13)
+        textField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        textField.heightAnchor.constraint(equalToConstant: 28).isActive = true
 
         logoLabel.stringValue = logoDisplayName
         logoLabel.font = .systemFont(ofSize: 12)
@@ -72,27 +89,29 @@ final class WatermarkQuickSetupViewController: NSViewController, NSTextFieldDele
             target: self,
             action: #selector(chooseLogo)
         )
+        chooseLogoButton.bezelStyle = .rounded
         chooseLogoButton.identifier = NSUserInterfaceItemIdentifier("watermarkQuick.chooseLogo")
-        let removeLogoButton = NSButton(
-            title: L.text("移除"),
-            target: self,
-            action: #selector(removeLogo)
-        )
+        removeLogoButton.title = L.text("移除")
+        removeLogoButton.target = self
+        removeLogoButton.action = #selector(removeLogo)
+        removeLogoButton.bezelStyle = .rounded
         removeLogoButton.identifier = NSUserInterfaceItemIdentifier("watermarkQuick.removeLogo")
 
-        let logoControls = NSStackView(views: [logoLabel, chooseLogoButton, removeLogoButton])
+        let logoIcon = NSImageView()
+        logoIcon.image = NSImage(systemSymbolName: "photo", accessibilityDescription: nil)
+        logoIcon.contentTintColor = .secondaryLabelColor
+        logoIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .regular)
+        logoIcon.widthAnchor.constraint(equalToConstant: 16).isActive = true
+
+        let logoControls = NSStackView(views: [logoIcon, logoLabel, chooseLogoButton, removeLogoButton])
         logoControls.orientation = .horizontal
         logoControls.alignment = .centerY
         logoControls.spacing = 8
 
-        validationLabel.stringValue = L.text("文字和 Logo 至少填写一项")
+        validationLabel.stringValue = L.text("请添加文字或 Logo；位置、透明度和大小沿用水印设置")
         validationLabel.font = .systemFont(ofSize: 11)
         validationLabel.textColor = .secondaryLabelColor
         validationLabel.identifier = NSUserInterfaceItemIdentifier("watermarkQuick.validation")
-
-        let helper = NSTextField(labelWithString: L.text("位置、透明度和大小沿用水印设置"))
-        helper.font = .systemFont(ofSize: 11)
-        helper.textColor = .secondaryLabelColor
 
         let cancelButton = NSButton(
             title: L.text("取消"),
@@ -100,11 +119,13 @@ final class WatermarkQuickSetupViewController: NSViewController, NSTextFieldDele
             action: #selector(cancel)
         )
         cancelButton.identifier = NSUserInterfaceItemIdentifier("watermarkQuick.cancel")
+        cancelButton.bezelStyle = .rounded
         applyButton.title = context.actionTitle
         applyButton.target = self
         applyButton.action = #selector(apply)
         applyButton.keyEquivalent = "\r"
         applyButton.contentTintColor = .controlAccentColor
+        applyButton.bezelStyle = .rounded
         applyButton.identifier = NSUserInterfaceItemIdentifier("watermarkQuick.apply")
 
         let buttonSpacer = NSView()
@@ -114,28 +135,39 @@ final class WatermarkQuickSetupViewController: NSViewController, NSTextFieldDele
         buttons.alignment = .centerY
         buttons.spacing = 8
 
-        let stack = NSStackView(views: [
-            title,
-            makeRow(label: L.text("文字"), content: textField),
-            makeRow(label: "Logo", content: logoControls),
-            validationLabel,
-            helper,
-            buttons
+        let header = NSStackView(views: [title, subtitle])
+        header.orientation = .vertical
+        header.alignment = .leading
+        header.spacing = 2
+
+        let form = NSGridView(views: [
+            [makeFormLabel(L.text("文字")), textField],
+            [makeFormLabel("Logo"), logoControls]
         ])
+        form.columnSpacing = 12
+        form.rowSpacing = 10
+        form.column(at: 0).width = 48
+        form.column(at: 0).xPlacement = .trailing
+        form.column(at: 1).xPlacement = .fill
+
+        let separator = NSBox()
+        separator.boxType = .separator
+
+        let stack = NSStackView(views: [header, form, validationLabel, separator, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 10
+        stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
-            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -14),
-            textField.widthAnchor.constraint(greaterThanOrEqualToConstant: 245),
-            logoControls.widthAnchor.constraint(greaterThanOrEqualToConstant: 245),
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 18),
+            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -16),
+            header.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            form.widthAnchor.constraint(equalTo: stack.widthAnchor),
             validationLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            helper.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            separator.widthAnchor.constraint(equalTo: stack.widthAnchor),
             buttons.widthAnchor.constraint(equalTo: stack.widthAnchor)
         ])
         view = content
@@ -152,15 +184,12 @@ final class WatermarkQuickSetupViewController: NSViewController, NSTextFieldDele
         self.draftImportedLogoURL = nil
     }
 
-    private func makeRow(label: String, content: NSView) -> NSStackView {
-        let labelField = NSTextField(labelWithString: label)
-        labelField.font = .systemFont(ofSize: 13)
-        labelField.widthAnchor.constraint(equalToConstant: 54).isActive = true
-        let row = NSStackView(views: [labelField, content])
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = 10
-        return row
+    private func makeFormLabel(_ text: String) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 12, weight: .medium)
+        label.textColor = .secondaryLabelColor
+        label.alignment = .right
+        return label
     }
 
     private var logoDisplayName: String {
@@ -177,8 +206,10 @@ final class WatermarkQuickSetupViewController: NSViewController, NSTextFieldDele
 
     private func updateValidationState(error: String? = nil) {
         applyButton.isEnabled = hasDraftContent
-        validationLabel.stringValue = error ?? L.text("文字和 Logo 至少填写一项")
+        validationLabel.stringValue = error
+            ?? L.text("请添加文字或 Logo；位置、透明度和大小沿用水印设置")
         validationLabel.textColor = error == nil ? .secondaryLabelColor : .systemRed
+        removeLogoButton.isHidden = draftConfiguration.logoURL == nil
     }
 
     @objc private func chooseLogo() {

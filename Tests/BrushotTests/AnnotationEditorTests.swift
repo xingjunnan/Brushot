@@ -47,7 +47,6 @@ final class AnnotationEditorTests: XCTestCase {
         let canvas = try makeCanvas()
         canvas.setTool(.text, style: .defaultStyle(for: .text))
         canvas.mouseDown(with: try mouseDownEvent(at: CGPoint(x: 30, y: 30)))
-        canvas.performPendingSingleClickNow()
 
         let editor = try XCTUnwrap(canvas.subviews.compactMap { $0 as? InlineAnnotationTextView }.first)
         let initialWidth = editor.frame.width
@@ -533,9 +532,12 @@ final class AnnotationEditorTests: XCTestCase {
         let canvas = try makeCanvas()
         canvas.setTool(.sequence, style: .defaultStyle(for: .sequence))
         canvas.mouseDown(with: try mouseDownEvent(at: CGPoint(x: 40, y: 40)))
-        canvas.performPendingSingleClickNow()
 
         let editor = try XCTUnwrap(canvas.subviews.compactMap { $0 as? InlineAnnotationTextView }.first)
+        XCTAssertEqual(canvas.document.items.count, 1)
+        XCTAssertFalse(canvas.document.undoManager.canUndo)
+        canvas.performPendingSingleClickNow()
+        XCTAssertTrue(canvas.document.undoManager.canUndo)
         editor.insertText("检查登录\n确认结果", replacementRange: editor.selectedRange())
         editor.onFinish?(true)
         XCTAssertEqual(canvas.document.items.count, 1)
@@ -564,6 +566,26 @@ final class AnnotationEditorTests: XCTestCase {
             keyCode: 7
         ))
         canvas.keyDown(with: event)
+    }
+
+    func testSequenceCommittedBeforeDoubleClickWindowStillRegistersOneUndoStep() throws {
+        let canvas = try makeCanvas()
+        canvas.setTool(.sequence, style: .defaultStyle(for: .sequence))
+        canvas.mouseDown(with: try mouseDownEvent(at: CGPoint(x: 60, y: 60)))
+
+        let editor = try XCTUnwrap(canvas.subviews.compactMap { $0 as? InlineAnnotationTextView }.first)
+        editor.insertText("快速输入", replacementRange: editor.selectedRange())
+        editor.onFinish?(true)
+
+        guard case .badge(let step) = canvas.document.items.first?.geometry else {
+            return XCTFail("Expected sequence badge")
+        }
+        XCTAssertEqual(step.text, "快速输入")
+        XCTAssertTrue(canvas.document.undoManager.canUndo)
+
+        canvas.undo()
+        XCTAssertTrue(canvas.document.items.isEmpty)
+        XCTAssertFalse(canvas.document.undoManager.canUndo)
     }
 
     func testResizingTextChangesFontSize() throws {
@@ -809,7 +831,9 @@ final class AnnotationEditorTests: XCTestCase {
             at: CGPoint(x: 200, y: 150),
             clickCount: 1
         ))
-        canvas.mouseDown(with: try mouseEvent(
+        XCTAssertEqual(canvas.document.items.count, 1)
+        let editor = try XCTUnwrap(canvas.subviews.compactMap { $0 as? InlineAnnotationTextView }.first)
+        editor.mouseDown(with: try mouseEvent(
             type: .leftMouseDown,
             at: CGPoint(x: 200, y: 150),
             clickCount: 2
@@ -818,6 +842,33 @@ final class AnnotationEditorTests: XCTestCase {
 
         XCTAssertEqual(copied, 1)
         XCTAssertTrue(canvas.document.items.isEmpty)
+        XCTAssertFalse(canvas.document.undoManager.canUndo)
+        XCTAssertFalse(canvas.document.undoManager.canRedo)
+    }
+
+    func testDoubleClickRollsBackImmediateTextEditorAndCopiesOnce() throws {
+        let canvas = try makeCanvas()
+        canvas.setTool(.text, style: .defaultStyle(for: .text))
+        var copied = 0
+        canvas.onCommit = { action in
+            if case .copy = action { copied += 1 }
+        }
+
+        canvas.mouseDown(with: try mouseEvent(
+            type: .leftMouseDown,
+            at: CGPoint(x: 200, y: 150),
+            clickCount: 1
+        ))
+        let editor = try XCTUnwrap(canvas.subviews.compactMap { $0 as? InlineAnnotationTextView }.first)
+        editor.mouseDown(with: try mouseEvent(
+            type: .leftMouseDown,
+            at: CGPoint(x: 200, y: 150),
+            clickCount: 2
+        ))
+
+        XCTAssertEqual(copied, 1)
+        XCTAssertTrue(canvas.document.items.isEmpty)
+        XCTAssertTrue(canvas.subviews.compactMap { $0 as? InlineAnnotationTextView }.isEmpty)
     }
 
     func testPendingTextOrSequenceClickIsCancelledByToolChange() throws {
