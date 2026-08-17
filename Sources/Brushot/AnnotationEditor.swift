@@ -476,6 +476,13 @@ final class AnnotationCanvasView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        // AppKit may report a tiny drag for an otherwise normal click. A newly
+        // created step already owns its inline editor, so confirm the transient
+        // addition instead of discarding the numbered badge underneath it.
+        if inlineTextView != nil {
+            performPendingSingleClickNow()
+            return
+        }
         cancelPendingSingleClick()
         let point = clamped(convert(event.locationInWindow, from: nil))
         guard let interaction else { return }

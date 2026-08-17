@@ -107,8 +107,16 @@ final class PinningTests: XCTestCase {
     func testPinCloseButtonOnlyAppearsInTopLeftHotspot() throws {
         let image = try makeImage(width: 100, height: 80, color: .white)
         let view = PinImageView(frame: CGRect(x: 0, y: 0, width: 100, height: 80), image: image)
+        let closeButton = try XCTUnwrap(view.subviews.compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "pinCloseButton"
+        })
+        view.layoutSubtreeIfNeeded()
 
         XCTAssertFalse(view.isCloseButtonVisibleForTesting)
+        XCTAssertTrue(closeButton is PinCloseButton)
+        XCTAssertEqual(closeButton.frame.size, CGSize(width: 20, height: 20))
+        XCTAssertEqual(closeButton.frame.origin, CGPoint(x: 7, y: 53))
+        XCTAssertEqual(closeButton.contentTintColor, .white)
         view.updateCloseButtonVisibility(for: CGPoint(x: 12, y: 70))
         XCTAssertTrue(view.isCloseButtonVisibleForTesting)
         view.updateCloseButtonVisibility(for: CGPoint(x: 80, y: 70))

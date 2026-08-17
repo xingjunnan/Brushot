@@ -588,6 +588,31 @@ final class AnnotationEditorTests: XCTestCase {
         XCTAssertFalse(canvas.document.undoManager.canUndo)
     }
 
+    func testTinyDragAfterCreatingSequenceKeepsBadgeAndSavesText() throws {
+        let canvas = try makeCanvas()
+        canvas.setTool(.sequence, style: .defaultStyle(for: .sequence))
+        canvas.mouseDown(with: try mouseDownEvent(at: CGPoint(x: 60, y: 60)))
+
+        let editor = try XCTUnwrap(canvas.subviews.compactMap { $0 as? InlineAnnotationTextView }.first)
+        canvas.mouseDragged(with: try mouseEvent(
+            type: .leftMouseDragged,
+            at: windowPoint(for: CGPoint(x: 61, y: 61))
+        ))
+
+        XCTAssertEqual(canvas.document.items.count, 1, "轻微拖动不应移除编辑器对应的步骤")
+        guard case .badge(let visibleStep) = canvas.document.items[0].geometry else {
+            return XCTFail("Expected sequence badge")
+        }
+        XCTAssertEqual(visibleStep.number, 1)
+
+        editor.insertText("拖动后仍保存", replacementRange: editor.selectedRange())
+        editor.onFinish?(true)
+        guard case .badge(let savedStep) = canvas.document.items[0].geometry else {
+            return XCTFail("Expected sequence badge")
+        }
+        XCTAssertEqual(savedStep.text, "拖动后仍保存")
+    }
+
     func testResizingTextChangesFontSize() throws {
         let canvas = try makeCanvas()
         let item = canvas.document.add(

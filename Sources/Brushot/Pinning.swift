@@ -184,13 +184,30 @@ final class PinPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+final class PinCloseButton: NSButton {
+    override var alignmentRectInsets: NSEdgeInsets {
+        NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let circleRect = bounds.insetBy(dx: 0.75, dy: 0.75)
+        let circle = NSBezierPath(ovalIn: circleRect)
+        NSColor.black.withAlphaComponent(0.78).setFill()
+        circle.fill()
+        NSColor.white.withAlphaComponent(0.9).setStroke()
+        circle.lineWidth = 1
+        circle.stroke()
+        super.draw(dirtyRect)
+    }
+}
+
 @MainActor
 final class PinImageView: NSView {
     var image: CGImage {
         didSet { needsDisplay = true }
     }
     weak var owner: PinWindowController?
-    private let closeButton = NSButton()
+    private let closeButton = PinCloseButton()
     private let closeButtonHotspotSize: CGFloat = 44
 
     init(frame: CGRect, image: CGImage) {
@@ -337,9 +354,13 @@ final class PinImageView: NSView {
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         closeButton.isBordered = false
         closeButton.bezelStyle = .regularSquare
-        closeButton.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: L.text("关闭贴图"))
+        closeButton.identifier = NSUserInterfaceItemIdentifier("pinCloseButton")
+        closeButton.image = NSImage(
+            systemSymbolName: "xmark",
+            accessibilityDescription: L.text("关闭贴图")
+        )?.withSymbolConfiguration(.init(pointSize: 9, weight: .bold))
         closeButton.imagePosition = .imageOnly
-        closeButton.contentTintColor = .controlTextColor
+        closeButton.contentTintColor = .white
         closeButton.toolTip = L.text("关闭贴图")
         closeButton.setAccessibilityLabel(L.text("关闭贴图"))
         closeButton.target = self
@@ -347,10 +368,10 @@ final class PinImageView: NSView {
         closeButton.isHidden = true
         addSubview(closeButton)
         NSLayoutConstraint.activate([
-            closeButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            closeButton.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            closeButton.widthAnchor.constraint(equalToConstant: 24),
-            closeButton.heightAnchor.constraint(equalToConstant: 24)
+            closeButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 7),
+            closeButton.topAnchor.constraint(equalTo: topAnchor, constant: 7),
+            closeButton.widthAnchor.constraint(equalToConstant: 20),
+            closeButton.heightAnchor.constraint(equalToConstant: 20)
         ])
     }
 
