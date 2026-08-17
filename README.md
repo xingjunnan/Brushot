@@ -93,13 +93,15 @@ open .build/distribution/Brushot.app
 open dist/Brushot.dmg
 ```
 
-The generated app and DMG are signed as complete app bundles. The build automatically uses the first Apple Development certificate in the login keychain, which keeps macOS privacy permissions stable across rebuilds. To select a different Apple Development or Developer ID identity:
+The generated app and DMG are signed as complete app bundles. `build-app.sh` always uses the bundle identifier `com.brushot.app` and overwrites `/Applications/Brushot.app` after a successful build, so normal local updates keep the same app path and do not require repeatedly removing the app or granting privacy permissions again.
+
+The build prefers an explicitly configured identity, then the signing identity already used by `/Applications/Brushot.app`, then a Developer ID Application identity, then the first Apple Development identity in the login keychain. To select a different Apple Development or Developer ID identity:
 
 ```bash
 BRUSHOT_CODESIGN_IDENTITY="Apple Development: Your Name (TEAMID)" ./scripts/build-app.sh
 ```
 
-macOS screen recording permission is required on first use. For permission testing, launch the generated app instead of `swift run`, because direct command-line builds do not have the packaged app's signing identity.
+macOS screen recording permission is required on first use. For permission testing, launch `/Applications/Brushot.app` instead of `swift run`, because direct command-line builds do not have the packaged app's signing identity.
 
 The first capture requires macOS screen recording permission. If permission is denied, enable Brushot in System Settings > Privacy & Security > Screen & System Audio Recording, then relaunch the app.
 

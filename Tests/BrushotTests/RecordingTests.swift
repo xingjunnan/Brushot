@@ -560,6 +560,65 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
     }
 
+    func testVideoRecordingPreviewShowsPlaybackControls() throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Brushot-PreviewTests-\(UUID().uuidString).mp4")
+        try Data().write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let controller = RecordingPreviewWindowController(
+            fileURL: file,
+            format: .video,
+            duration: 12,
+            pixelSize: CGSize(width: 320, height: 180),
+            onClose: {}
+        )
+        let views = descendants(of: try XCTUnwrap(controller.window?.contentView))
+
+        XCTAssertTrue(try XCTUnwrap(controller.window).styleMask.contains(.resizable))
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingPreviewPlayer" })
+        XCTAssertNotNil(views.compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "recordingPreviewPlayPause"
+        })
+        XCTAssertNotNil(views.compactMap { $0 as? NSSlider }.first {
+            $0.identifier?.rawValue == "recordingPreviewProgress"
+        })
+        XCTAssertNotNil(views.compactMap { $0 as? NSSlider }.first {
+            $0.identifier?.rawValue == "recordingPreviewVolume"
+        })
+        controller.close()
+    }
+
+    func testGIFRecordingPreviewDoesNotShowPlaybackControls() throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Brushot-PreviewTests-\(UUID().uuidString).gif")
+        let gif = try XCTUnwrap(Data(base64Encoded: "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="))
+        try gif.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let controller = RecordingPreviewWindowController(
+            fileURL: file,
+            format: .gif,
+            duration: 1,
+            pixelSize: CGSize(width: 1, height: 1),
+            onClose: {}
+        )
+        let views = descendants(of: try XCTUnwrap(controller.window?.contentView))
+
+        XCTAssertFalse(try XCTUnwrap(controller.window).styleMask.contains(.resizable))
+        XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingPreviewPlayer" })
+        XCTAssertNil(views.compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "recordingPreviewPlayPause"
+        })
+        XCTAssertNil(views.compactMap { $0 as? NSSlider }.first {
+            $0.identifier?.rawValue == "recordingPreviewProgress"
+        })
+        XCTAssertNil(views.compactMap { $0 as? NSSlider }.first {
+            $0.identifier?.rawValue == "recordingPreviewVolume"
+        })
+        controller.close()
+    }
+
     private func descendants(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap(descendants(of:))
     }

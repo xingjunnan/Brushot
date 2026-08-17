@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$ROOT_DIR/.build/app-release"
 MODULE_CACHE_DIR="$ROOT_DIR/.build/module-cache"
 APP_DIR="$ROOT_DIR/.build/distribution/Brushot.app"
+INSTALL_APP_DIR="/Applications/Brushot.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 APP_RESOURCES_DIR="$CONTENTS_DIR/Resources"
@@ -13,6 +14,23 @@ ENTITLEMENTS_PATH="$RESOURCES_DIR/Brushot.entitlements"
 SOURCE_DIR="$ROOT_DIR/Sources/Brushot"
 SOURCE_FILES=("$SOURCE_DIR"/*.swift)
 ARCHS=(arm64 x86_64)
+BUNDLE_IDENTIFIER="com.brushot.app"
+
+installed_signing_identity() {
+    [[ -d "$INSTALL_APP_DIR" ]] || return 1
+    local signature_info authority team_identifier
+    signature_info="$(codesign -dvv "$INSTALL_APP_DIR" 2>&1)" || return 1
+    authority="$(awk -F= '/^Authority=/{ print $2; exit }' <<<"$signature_info")"
+    if [[ -n "$authority" && "$authority" != "(unavailable)" ]]; then
+        security find-identity -v -p codesigning 2>/dev/null \
+            | awk -v identity="$authority" -F '"' '$2 == identity { print $2; found=1; exit } END { exit found ? 0 : 1 }'
+        return
+    fi
+    team_identifier="$(awk -F= '/^TeamIdentifier=/{ print $2; exit }' <<<"$signature_info")"
+    [[ -n "$team_identifier" && "$team_identifier" != "not set" ]] || return 1
+    security find-identity -v -p codesigning 2>/dev/null \
+        | awk -v team="($team_identifier)" -F '"' 'index($2, team) { print $2; found=1; exit } END { exit found ? 0 : 1 }'
+}
 
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$APP_RESOURCES_DIR" "$BUILD_DIR" "$MODULE_CACHE_DIR"
@@ -50,14 +68,23 @@ cp "$RESOURCES_DIR/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$RESOURCES_DIR/AppIcon.icns" "$APP_RESOURCES_DIR/AppIcon.icns"
 find "$RESOURCES_DIR" -name '*.lproj' -type d -maxdepth 1 -exec cp -R {} "$APP_RESOURCES_DIR/" \;
 
+PLIST_BUNDLE_IDENTIFIER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$CONTENTS_DIR/Info.plist")"
+if [[ "$PLIST_BUNDLE_IDENTIFIER" != "$BUNDLE_IDENTIFIER" ]]; then
+    echo "Error: Info.plist bundle id is $PLIST_BUNDLE_IDENTIFIER, expected $BUNDLE_IDENTIFIER." >&2
+    exit 1
+fi
+
 # Sign after every bundle resource has been copied so Info.plist and resources
 # are sealed as part of the app. Prefer an explicitly configured identity, then
-# a Developer ID Application identity when available, then the first Apple
-# Development identity in the user's keychain.
+# the identity already used by /Applications/Brushot.app, then a Developer ID
+# Application identity when available, then the first Apple Development identity
+# in the user's keychain.
 EXPLICIT_CODE_SIGN_IDENTITY=false
 if [[ -n "${BRUSHOT_CODESIGN_IDENTITY:-}" ]]; then
     CODE_SIGN_IDENTITY="$BRUSHOT_CODESIGN_IDENTITY"
     EXPLICIT_CODE_SIGN_IDENTITY=true
+elif CODE_SIGN_IDENTITY="$(installed_signing_identity)"; then
+    :
 else
     CODE_SIGN_IDENTITY="$(
         security find-identity -v -p codesigning 2>/dev/null \
@@ -74,7 +101,7 @@ CODESIGN_ARGS=(
     --deep
     --entitlements "$ENTITLEMENTS_PATH"
     --options runtime
-    --identifier "com.brushot.app"
+    --identifier "$BUNDLE_IDENTIFIER"
     --sign "$CODE_SIGN_IDENTITY"
 )
 # Secure timestamps are required for distributable Developer ID builds, but
@@ -103,7 +130,7 @@ if ! codesign --verify --deep --strict "$APP_DIR" >/dev/null 2>&1; then
         --deep \
         --entitlements "$ENTITLEMENTS_PATH" \
         --options runtime \
-        --identifier "com.brushot.app" \
+        --identifier "$BUNDLE_IDENTIFIER" \
         --sign "$CODE_SIGN_IDENTITY" \
         "$APP_DIR"
     codesign --verify --deep --strict "$APP_DIR"
@@ -115,3 +142,7 @@ if [[ "$CODE_SIGN_IDENTITY" == "-" ]]; then
 fi
 
 echo "Built $APP_DIR"
+echo "Installing $APP_DIR to $INSTALL_APP_DIR"
+ditto "$APP_DIR" "$INSTALL_APP_DIR"
+codesign --verify --deep --strict "$INSTALL_APP_DIR"
+echo "Installed $INSTALL_APP_DIR"
