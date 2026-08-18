@@ -524,6 +524,28 @@ private final class TestAssetWriterBox: @unchecked Sendable {
 
 @MainActor
 final class RecordingInteractionTests: XCTestCase {
+    func testUnresolvedPreviewPromptOffersSaveDiscardAndCancel() {
+        let alert = RecordingPreviewResolutionPrompt.makeAlert()
+
+        XCTAssertEqual(alert.messageText, L.text("还有一段未保存的录制"))
+        XCTAssertEqual(
+            alert.buttons.map(\.title),
+            [L.text("保存并继续录制"), L.text("丢弃并继续录制"), L.text("取消")]
+        )
+        XCTAssertEqual(
+            RecordingPreviewResolutionPrompt.decision(for: .alertFirstButtonReturn),
+            .saveAndContinue
+        )
+        XCTAssertEqual(
+            RecordingPreviewResolutionPrompt.decision(for: .alertSecondButtonReturn),
+            .discardAndContinue
+        )
+        XCTAssertEqual(
+            RecordingPreviewResolutionPrompt.decision(for: .alertThirdButtonReturn),
+            .cancel
+        )
+    }
+
     func testTimelineDirectlyTrimsAndSeeks() {
         let timeline = RecordingTimelineView(frame: CGRect(x: 0, y: 0, width: 640, height: 76))
         timeline.duration = 10
@@ -727,6 +749,40 @@ final class RecordingInteractionTests: XCTestCase {
 
         XCTAssertTrue(closed)
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    func testRecordingPreviewCanSaveSilentlyBeforeStartingAnotherRecording() throws {
+        let source = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Brushot-PreviewTests-\(UUID().uuidString).gif")
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Brushot-PreviewSaveTests-\(UUID().uuidString)", isDirectory: true)
+        let gif = try XCTUnwrap(Data(base64Encoded: "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="))
+        try gif.write(to: source)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let originalSaveLocation = AppPreferences.saveLocation
+        AppPreferences.saveLocation = directory
+        defer {
+            AppPreferences.saveLocation = originalSaveLocation
+            try? FileManager.default.removeItem(at: source)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        var closed = false
+        var saved: Bool?
+        let controller = RecordingPreviewWindowController(
+            fileURL: source,
+            format: .gif,
+            duration: 1,
+            pixelSize: CGSize(width: 1, height: 1),
+            onClose: { closed = true }
+        )
+
+        controller.saveAndCloseForNewRecording { saved = $0 }
+
+        XCTAssertEqual(saved, true)
+        XCTAssertTrue(closed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        let savedFiles = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        XCTAssertEqual(savedFiles.filter { $0.pathExtension == "gif" }.count, 1)
     }
 
     func testVideoRecordingPreviewShowsPlaybackControls() throws {

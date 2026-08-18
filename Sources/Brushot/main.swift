@@ -2228,6 +2228,34 @@ private extension CGRect {
     var area: CGFloat { isNull || isInfinite ? 0 : width * height }
 }
 
+enum RecordingPreviewResolutionDecision: Equatable {
+    case saveAndContinue
+    case discardAndContinue
+    case cancel
+}
+
+@MainActor
+enum RecordingPreviewResolutionPrompt {
+    static func makeAlert() -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = L.text("还有一段未保存的录制")
+        alert.informativeText = L.text("开始新录制前，请先保存或丢弃当前视频/GIF。")
+        alert.addButton(withTitle: L.text("保存并继续录制"))
+        alert.addButton(withTitle: L.text("丢弃并继续录制"))
+        alert.addButton(withTitle: L.text("取消"))
+        return alert
+    }
+
+    static func decision(for response: NSApplication.ModalResponse) -> RecordingPreviewResolutionDecision {
+        switch response {
+        case .alertFirstButtonReturn: .saveAndContinue
+        case .alertSecondButtonReturn: .discardAndContinue
+        default: .cancel
+        }
+    }
+}
+
 @MainActor
 final class CaptureController {
     private var overlayWindows: [SelectionOverlayWindow] = []
@@ -2240,6 +2268,7 @@ final class CaptureController {
     private var recordingPreview: RecordingPreviewWindowController?
     private var recordingExportProgress: RecordingExportProgressWindowController?
     private var isExportingRecording = false
+    private var isResolvingRecordingPreview = false
     private var selfTimerCountdown: SelfTimerCountdownController?
     private let textRecognizer: any TextRecognizing
     private var ocrResultWindowController: OCRResultWindowController?
@@ -2391,7 +2420,7 @@ final class CaptureController {
 
     private var canBeginCaptureFlow: Bool {
         overlayWindows.isEmpty && selfTimerCountdown == nil &&
-            recordingSession == nil && !isExportingRecording &&
+            recordingSession == nil && !isExportingRecording && !isResolvingRecordingPreview &&
             longCaptureSession == nil && !isPreparingLongCapture
     }
 
@@ -2466,6 +2495,87 @@ final class CaptureController {
     }
 
     func beginRecordingCapture() {
+        guard canBeginCaptureFlow else {
+            NSSound.beep()
+            return
+        }
+        resolveRecordingPreviewIfNeeded { [weak self] in
+            self?.beginRecordingCaptureAfterPreviewResolution()
+        }
+    }
+
+    private func resolveRecordingPreviewIfNeeded(
+        then continuation: @escaping @MainActor () -> Void
+    ) {
+        guard let preview = recordingPreview else {
+            continuation()
+            return
+        }
+        guard !preview.isPerformingFileOperation else {
+            NSSound.beep()
+            preview.window?.makeKeyAndOrderFront(nil)
+            return
+        }
+        isResolvingRecordingPreview = true
+        preview.pauseForPendingRecording()
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = RecordingPreviewResolutionPrompt.makeAlert()
+        let hostWindow = overlayWindows.first(where: \.isKeyWindow)
+            ?? overlayWindows.first
+            ?? preview.window
+        if let hostWindow, hostWindow.isVisible {
+            alert.beginSheetModal(for: hostWindow) { [weak self, weak preview] response in
+                guard let self, let preview else { return }
+                self.resolveRecordingPreview(
+                    RecordingPreviewResolutionPrompt.decision(for: response),
+                    preview: preview,
+                    continuation: continuation
+                )
+            }
+        } else {
+            resolveRecordingPreview(
+                RecordingPreviewResolutionPrompt.decision(for: alert.runModal()),
+                preview: preview,
+                continuation: continuation
+            )
+        }
+    }
+
+    private func resolveRecordingPreview(
+        _ decision: RecordingPreviewResolutionDecision,
+        preview: RecordingPreviewWindowController,
+        continuation: @escaping @MainActor () -> Void
+    ) {
+        switch decision {
+        case .saveAndContinue:
+            preview.saveAndCloseForNewRecording { [weak self, weak preview] succeeded in
+                guard let self else { return }
+                self.isResolvingRecordingPreview = false
+                if succeeded {
+                    continuation()
+                } else {
+                    self.closeOverlays()
+                    preview?.window?.makeKeyAndOrderFront(nil)
+                }
+            }
+        case .discardAndContinue:
+            preview.discardAndCloseForNewRecording { [weak self] in
+                guard let self else { return }
+                self.isResolvingRecordingPreview = false
+                continuation()
+            }
+        case .cancel:
+            isResolvingRecordingPreview = false
+            if let overlay = overlayWindows.first {
+                overlayWindows.forEach { $0.orderFrontRegardless() }
+                overlay.makeKeyAndOrderFront(nil)
+            } else {
+                preview.window?.makeKeyAndOrderFront(nil)
+            }
+        }
+    }
+
+    private func beginRecordingCaptureAfterPreviewResolution() {
         guard canBeginCaptureFlow else {
             NSSound.beep()
             return
@@ -2768,7 +2878,20 @@ final class CaptureController {
         microphoneDeviceID: String?,
         watermarkConfiguration: WatermarkConfiguration?
     ) {
-        guard recordingSession == nil, !isExportingRecording else { return }
+        guard recordingSession == nil, !isExportingRecording, !isResolvingRecordingPreview else { return }
+        if recordingPreview != nil {
+            resolveRecordingPreviewIfNeeded { [weak self] in
+                self?.startRecording(
+                    globalRect: globalRect,
+                    format: format,
+                    systemAudio: systemAudio,
+                    microphone: microphone,
+                    microphoneDeviceID: microphoneDeviceID,
+                    watermarkConfiguration: watermarkConfiguration
+                )
+            }
+            return
+        }
         closeOverlays()
         Task { [weak self] in
             guard let self else { return }

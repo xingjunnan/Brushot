@@ -185,6 +185,25 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         finishClosing()
     }
 
+    var isPerformingFileOperation: Bool { isBusy }
+
+    func pauseForPendingRecording() {
+        player?.pause()
+        player?.isMuted = false
+        updatePlaybackButton()
+    }
+
+    func saveAndCloseForNewRecording(completion: @escaping (Bool) -> Void) {
+        if isGIFSelectionMode { cancelGIFSelection() }
+        saveRecording(revealInFinder: false, completion: completion)
+    }
+
+    func discardAndCloseForNewRecording(completion: @escaping () -> Void) {
+        pauseForPendingRecording()
+        close()
+        completion()
+    }
+
     static func cleanupExpiredClipboardFiles(now: Date = Date()) {
         cleanupAbandonedTemporaryFiles()
         let directory = clipboardDirectory
@@ -936,10 +955,22 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
     }
 
     @objc private func saveAction() {
-        guard !isBusy else { return }
+        saveRecording(revealInFinder: true, completion: nil)
+    }
+
+    private func saveRecording(revealInFinder: Bool, completion: ((Bool) -> Void)?) {
+        guard !isBusy else {
+            completion?(false)
+            return
+        }
         let destination = AppPreferences.saveLocation.appendingPathComponent(Self.outputFileName(format: format))
         if format == .video, editPlan.hasEdits {
-            exportEditedVideo(to: destination, forCopy: false)
+            exportEditedVideo(
+                to: destination,
+                forCopy: false,
+                revealInFinder: revealInFinder,
+                completion: completion
+            )
             return
         }
         do {
@@ -950,10 +981,12 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
             try FileManager.default.moveItem(at: fileURL, to: destination)
             ownsFile = false
             FeedbackSound.playSaveCompleted()
-            NSWorkspace.shared.activateFileViewerSelecting([destination])
+            if revealInFinder { NSWorkspace.shared.activateFileViewerSelecting([destination]) }
             close()
+            completion?(true)
         } catch {
             showError(error.localizedDescription)
+            completion?(false)
         }
     }
 
@@ -962,7 +995,12 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         if format == .video, editPlan.hasEdits {
             let directory = Self.clipboardDirectory
             let cached = directory.appendingPathComponent(Self.outputFileName(format: .video))
-            exportEditedVideo(to: cached, forCopy: true)
+            exportEditedVideo(
+                to: cached,
+                forCopy: true,
+                revealInFinder: false,
+                completion: nil
+            )
             return
         }
         let pasteboard = NSPasteboard.general
@@ -991,7 +1029,12 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
 
     @objc private func discardAction() { close() }
 
-    private func exportEditedVideo(to destination: URL, forCopy: Bool) {
+    private func exportEditedVideo(
+        to destination: URL,
+        forCopy: Bool,
+        revealInFinder: Bool,
+        completion: ((Bool) -> Void)?
+    ) {
         let source = fileURL
         let plan = editPlan
         setBusy(true)
@@ -1009,17 +1052,20 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
                     }
                     FeedbackSound.playCopyCompleted()
                     self.setBusy(false)
+                    completion?(true)
                 } else {
                     self.ownsFile = false
                     try? FileManager.default.removeItem(at: source)
                     FeedbackSound.playSaveCompleted()
-                    NSWorkspace.shared.activateFileViewerSelecting([destination])
+                    if revealInFinder { NSWorkspace.shared.activateFileViewerSelecting([destination]) }
                     self.close()
+                    completion?(true)
                 }
             } catch {
                 try? FileManager.default.removeItem(at: destination)
                 self.setBusy(false)
                 self.showError(error.localizedDescription)
+                completion?(false)
             }
         }
     }
