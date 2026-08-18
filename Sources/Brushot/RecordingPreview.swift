@@ -60,6 +60,9 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
     private let imageView = NSImageView()
     private let playerView = RecordingPlayerView()
     private var previewHeightConstraint: NSLayoutConstraint?
+    private var previewAspectRatioConstraint: NSLayoutConstraint?
+    private var gifPreviewFixedHeightConstraint: NSLayoutConstraint?
+    private let gifModeSpacer = NSView()
     private var player: AVPlayer?
     private var timeObserver: Any?
     private var duration: TimeInterval = 0
@@ -240,6 +243,7 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         ))
         metadata.alignment = .center
         metadata.textColor = .secondaryLabelColor
+        metadata.identifier = NSUserInterfaceItemIdentifier("recordingMetadata")
 
         let discard = NSButton(title: L.text("丢弃"), target: self, action: #selector(discardAction))
         discard.identifier = NSUserInterfaceItemIdentifier("discardRecordingAction")
@@ -252,7 +256,16 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         let buttons = NSStackView(views: [discard, copy, save])
         buttons.orientation = .horizontal
         buttons.spacing = 8
-        standardActionButtonsView = buttons
+        buttons.setHuggingPriority(.required, for: .horizontal)
+
+        metadata.alignment = .left
+        metadata.lineBreakMode = .byTruncatingMiddle
+        let fileActions = NSStackView(views: [metadata, NSView(), buttons])
+        fileActions.identifier = NSUserInterfaceItemIdentifier("recordingFileActions")
+        fileActions.orientation = .horizontal
+        fileActions.alignment = .centerY
+        fileActions.spacing = 12
+        standardActionButtonsView = fileActions
 
         let preview = format == .video ? playerView : imageView
         let stackViews: [NSView]
@@ -261,11 +274,14 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
             let gifControls = makeGIFSelectionControls()
             editingControls.isHidden = false
             gifControls.isHidden = true
+            gifModeSpacer.isHidden = true
+            gifModeSpacer.setContentHuggingPriority(.defaultLow, for: .vertical)
+            gifModeSpacer.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
             standardEditingControlsView = editingControls
             gifSelectionControlsView = gifControls
-            stackViews = [preview, makePlaybackControls(), editingControls, gifControls, metadata, buttons]
+            stackViews = [preview, makePlaybackControls(), editingControls, gifModeSpacer, gifControls, fileActions]
         } else {
-            stackViews = [preview, metadata, buttons]
+            stackViews = [preview, fileActions]
         }
         let stack = NSStackView(views: stackViews)
         stack.orientation = .vertical
@@ -279,7 +295,7 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
             stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -14),
             preview.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            buttons.trailingAnchor.constraint(equalTo: stack.trailingAnchor)
+            fileActions.widthAnchor.constraint(equalTo: stack.widthAnchor)
         ])
         let previewHeight = format == .video
             ? preview.heightAnchor.constraint(greaterThanOrEqualToConstant: 310)
@@ -288,6 +304,9 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         previewHeight.isActive = true
         previewHeightConstraint = previewHeight
         if format == .video {
+            let gifPreviewHeight = preview.heightAnchor.constraint(equalToConstant: 240)
+            gifPreviewHeight.isActive = false
+            gifPreviewFixedHeightConstraint = gifPreviewHeight
             preview.setContentHuggingPriority(.defaultLow, for: .vertical)
             preview.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
             if pixelSize.width > 0, pixelSize.height > 0 {
@@ -297,6 +316,7 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
                 )
                 aspect.priority = .defaultHigh
                 aspect.isActive = true
+                previewAspectRatioConstraint = aspect
             }
         }
     }
@@ -378,16 +398,22 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         editStatusLabel.identifier = NSUserInterfaceItemIdentifier("recordingEditStatus")
         editStatusLabel.textColor = .secondaryLabelColor
         editStatusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        editStatusLabel.alignment = .center
+        editStatusLabel.alignment = .right
+        editStatusLabel.lineBreakMode = .byTruncatingMiddle
         updateEditStatus()
 
-        let stack = NSStackView(views: [timelineView, actionRow, editStatusLabel])
+        let footer = NSStackView(views: [actionRow, NSView(), editStatusLabel])
+        footer.orientation = .horizontal
+        footer.alignment = .centerY
+        footer.spacing = 10
+        actionRow.setHuggingPriority(.required, for: .horizontal)
+        editStatusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let stack = NSStackView(views: [timelineView, footer])
         stack.identifier = NSUserInterfaceItemIdentifier("recordingEditingControls")
         stack.orientation = .vertical
         stack.alignment = .width
         stack.spacing = 7
-        actionRow.setHuggingPriority(.defaultHigh, for: .horizontal)
-        actionRow.alignment = .centerY
         return stack
     }
 
@@ -446,20 +472,23 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         settings.spacing = 8
         (settings.arrangedSubviews.last as? NSTextField)?.textColor = .secondaryLabelColor
 
-        let actions = NSStackView(views: [gifPreviewButton, gifCancelButton, gifExportButton])
+        gifExportButton.keyEquivalent = "\r"
+        let actions = NSStackView(views: [gifCancelButton, gifPreviewButton, gifExportButton])
         actions.orientation = .horizontal
         actions.alignment = .centerY
         actions.spacing = 8
+        actions.setHuggingPriority(.required, for: .horizontal)
 
         gifStatusLabel.identifier = NSUserInterfaceItemIdentifier("recordingGIFSelectionStatus")
         gifStatusLabel.maximumNumberOfLines = 2
         gifStatusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        gifStatusLabel.alignment = .center
+        gifStatusLabel.alignment = .left
+        gifStatusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let footer = NSStackView(views: [settings, NSView(), actions])
-        footer.orientation = .horizontal
-        footer.alignment = .centerY
-        footer.spacing = 8
+        let actionFooter = NSStackView(views: [gifStatusLabel, NSView(), actions])
+        actionFooter.orientation = .horizontal
+        actionFooter.alignment = .centerY
+        actionFooter.spacing = 12
 
         let callout = makeGIFSelectionCallout()
         let stack = NSStackView(views: [
@@ -468,13 +497,15 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
             gifOverviewTimeline,
             detailTitle,
             gifDetailTimeline,
-            footer,
-            gifStatusLabel
+            settings,
+            actionFooter
         ])
         stack.identifier = NSUserInterfaceItemIdentifier("recordingGIFSelectionControls")
         stack.orientation = .vertical
         stack.alignment = .width
         stack.spacing = 5
+        stack.setContentHuggingPriority(.required, for: .vertical)
+        stack.setContentCompressionResistancePriority(.required, for: .vertical)
         stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 620).isActive = true
         callout.heightAnchor.constraint(equalToConstant: 46).isActive = true
         return stack
@@ -731,21 +762,16 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         gifSelectionRange = range
         isGIFSelectionMode = true
         isPreviewingGIFSelection = false
+        previewHeightConstraint?.isActive = false
+        previewAspectRatioConstraint?.isActive = false
+        gifPreviewFixedHeightConstraint?.isActive = true
         standardEditingControlsView?.isHidden = true
         standardActionButtonsView?.isHidden = true
+        gifModeSpacer.isHidden = false
         gifSelectionControlsView?.isHidden = false
         window.title = L.text("MP4 转 GIF")
         frameBeforeGIFSelection = window.frame
-        if let screen = window.screen {
-            let desiredHeight = min(window.frame.height + 150, screen.visibleFrame.height - 30)
-            if desiredHeight > window.frame.height {
-                var expanded = window.frame
-                expanded.origin.y = max(screen.visibleFrame.minY, expanded.maxY - desiredHeight)
-                expanded.size.height = desiredHeight
-                window.setFrame(expanded, display: true, animate: true)
-                didExpandForGIFSelection = true
-            }
-        }
+        resizeWindowForGIFSelection(window)
         syncGIFSelectionTimelines(updateDetailViewport: true)
         seek(to: range.lowerBound)
         window.contentView?.layoutSubtreeIfNeeded()
@@ -758,17 +784,39 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         isPreviewingGIFSelection = false
         isGIFSelectionMode = false
         gifSelectionRange = nil
+        gifPreviewFixedHeightConstraint?.isActive = false
+        previewHeightConstraint?.isActive = true
+        previewAspectRatioConstraint?.isActive = true
         gifSelectionControlsView?.isHidden = true
+        gifModeSpacer.isHidden = true
         standardEditingControlsView?.isHidden = false
         standardActionButtonsView?.isHidden = false
         window?.title = L.text("录制完成")
         gifPreviewButton.title = L.text("播放选区")
+        window?.minSize = CGSize(width: 680, height: 570)
         if didExpandForGIFSelection, let original = frameBeforeGIFSelection {
             window?.setFrame(original, display: true, animate: true)
         }
         didExpandForGIFSelection = false
         frameBeforeGIFSelection = nil
         window?.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    private func resizeWindowForGIFSelection(_ window: NSWindow) {
+        guard let screen = window.screen ?? NSScreen.main else { return }
+        let visible = screen.visibleFrame.insetBy(dx: 12, dy: 12)
+        let maximumHeight = max(1, visible.height)
+        let minimumEditorHeight = min(700, maximumHeight)
+        window.minSize = CGSize(width: 680, height: minimumEditorHeight)
+
+        let desiredHeight = min(780, maximumHeight)
+        guard abs(desiredHeight - window.frame.height) > 0.5 else { return }
+        let previousTop = min(window.frame.maxY, visible.maxY)
+        var resized = window.frame
+        resized.size.height = desiredHeight
+        resized.origin.y = max(visible.minY, previousTop - desiredHeight)
+        window.setFrame(resized, display: true, animate: true)
+        didExpandForGIFSelection = true
     }
 
     @objc private func previewGIFSelection() {

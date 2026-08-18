@@ -828,6 +828,8 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingDeleteStart" })
         XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingExtractFrame" })
         XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingConvertGIF" })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingFileActions" })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingMetadata" })
 
         controller.close()
     }
@@ -854,8 +856,17 @@ final class RecordingInteractionTests: XCTestCase {
         let standardEditing = try XCTUnwrap(views.first {
             $0.identifier?.rawValue == "recordingEditingControls"
         })
+        let playerView = try XCTUnwrap(views.first {
+            $0.identifier?.rawValue == "recordingPreviewPlayer"
+        })
+        let standardFileActions = try XCTUnwrap(views.first {
+            $0.identifier?.rawValue == "recordingFileActions"
+        })
         let gifControls = try XCTUnwrap(views.first {
             $0.identifier?.rawValue == "recordingGIFSelectionControls"
+        })
+        let gifExport = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "recordingGIFExportSelection"
         })
         let overview = try XCTUnwrap(views.compactMap { $0 as? RecordingTimelineView }.first {
             $0.identifier?.rawValue == "recordingGIFOverviewTimeline"
@@ -872,11 +883,32 @@ final class RecordingInteractionTests: XCTestCase {
         content.layoutSubtreeIfNeeded()
 
         XCTAssertTrue(standardEditing.isHidden)
+        XCTAssertTrue(standardFileActions.isHidden)
         XCTAssertFalse(gifControls.isHidden)
         XCTAssertEqual(controller.window?.title, "MP4 转 GIF")
         XCTAssertGreaterThan(overview.bounds.width, 0)
         XCTAssertGreaterThan(detail.bounds.width, 0)
         XCTAssertTrue(status.stringValue.contains("00:15.0"))
+        let gifControlsFrame = gifControls.convert(gifControls.bounds, to: content)
+        let exportFrame = gifExport.convert(gifExport.bounds, to: content)
+        let playerFrame = playerView.convert(playerView.bounds, to: content)
+        XCTAssertGreaterThanOrEqual(gifControlsFrame.minY, content.bounds.minY - 1)
+        XCTAssertLessThanOrEqual(gifControlsFrame.maxY, content.bounds.maxY + 1)
+        XCTAssertGreaterThanOrEqual(exportFrame.minY, content.bounds.minY - 1)
+        XCTAssertLessThanOrEqual(exportFrame.maxY, content.bounds.maxY + 1)
+        XCTAssertFalse(playerFrame.intersects(gifControlsFrame))
+        XCTAssertEqual(playerFrame.height, 240, accuracy: 1)
+
+        controller.window?.setContentSize(CGSize(width: 1_200, height: 900))
+        content.layoutSubtreeIfNeeded()
+        let enlargedGIFFrame = gifControls.convert(gifControls.bounds, to: content)
+        let enlargedPlayerFrame = playerView.convert(playerView.bounds, to: content)
+        let enlargedExportFrame = gifExport.convert(gifExport.bounds, to: content)
+        XCTAssertFalse(enlargedPlayerFrame.intersects(enlargedGIFFrame))
+        XCTAssertEqual(enlargedPlayerFrame.height, 240, accuracy: 1)
+        XCTAssertEqual(enlargedGIFFrame.height, gifControlsFrame.height, accuracy: 1)
+        XCTAssertGreaterThanOrEqual(enlargedExportFrame.minY, content.bounds.minY - 1)
+        XCTAssertLessThanOrEqual(enlargedExportFrame.maxY, content.bounds.maxY + 1)
 
         overview.beginInteraction(atX: overview.bounds.maxX - 16)
         overview.endInteraction()
@@ -896,6 +928,7 @@ final class RecordingInteractionTests: XCTestCase {
         })
         cancel.performClick(nil)
         XCTAssertFalse(standardEditing.isHidden)
+        XCTAssertFalse(standardFileActions.isHidden)
         XCTAssertTrue(gifControls.isHidden)
         XCTAssertEqual(controller.window?.title, "录制完成")
 
