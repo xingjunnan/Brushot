@@ -77,6 +77,22 @@ final class RecordingCoreTests: XCTestCase {
         XCTAssertEqual(options.framesPerSecond, 30)
     }
 
+    func testGIFConversionLimitsDurationFramesAndDefaultSelection() {
+        XCTAssertEqual(RecordingGIFLimits.maximumDuration, 60)
+        XCTAssertEqual(RecordingGIFLimits.maximumFrameRate(for: 20), 30)
+        XCTAssertEqual(RecordingGIFLimits.maximumFrameRate(for: 40), 15)
+        XCTAssertEqual(RecordingGIFLimits.maximumFrameRate(for: 60), 10)
+        XCTAssertEqual(RecordingGIFLimits.estimatedFrameCount(duration: 60, framesPerSecond: 10), 600)
+        XCTAssertEqual(
+            RecordingGIFLimits.defaultRange(playhead: 3, trimStart: 2, trimEnd: 100),
+            3...18
+        )
+        XCTAssertEqual(
+            RecordingGIFLimits.defaultRange(playhead: 99.99, trimStart: 2, trimEnd: 100),
+            2...17
+        )
+    }
+
     func testRecoveryStoreKeepsRecentRecordingsAndExpiresOldFiles() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("Brushot-RecoveryTests-\(UUID().uuidString)", isDirectory: true)
@@ -121,6 +137,29 @@ final class RecordingCoreTests: XCTestCase {
 }
 
 final class RecordingExporterTests: XCTestCase {
+    func testGIFSegmentLongerThanSixtySecondsFailsBeforeDecoding() async throws {
+        let source = temporaryURL(extension: "mp4")
+        let destination = temporaryURL(extension: "gif")
+        try Data().write(to: source)
+        defer {
+            try? FileManager.default.removeItem(at: source)
+            try? FileManager.default.removeItem(at: destination)
+        }
+
+        do {
+            _ = try await RecordingExporter.exportGIFSegment(
+                source: source,
+                destination: destination,
+                options: RecordingGIFOptions(startTime: 0, endTime: 60.01)
+            )
+            XCTFail("Expected a duration limit error")
+        } catch let error as RecordingExportError {
+            guard case .gifDurationTooLong = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
     func testRecordingWriterAcceptsScreenCaptureStylePixelBuffers() async throws {
         let output = temporaryURL(extension: "mov")
         let mixedOutput = temporaryURL(extension: "mp4")
@@ -485,7 +524,7 @@ private final class TestAssetWriterBox: @unchecked Sendable {
 
 @MainActor
 final class RecordingInteractionTests: XCTestCase {
-    func testTimelineDirectlyTrimsSelectsAndFindsDeletedRanges() {
+    func testTimelineDirectlyTrimsAndSeeks() {
         let timeline = RecordingTimelineView(frame: CGRect(x: 0, y: 0, width: 640, height: 76))
         timeline.duration = 10
         timeline.trimStart = 0
@@ -504,19 +543,27 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertEqual(changedTrim?.1 ?? -1, 10, accuracy: 0.02)
         XCTAssertTrue(trimEnded)
 
-        timeline.isRangeSelectionEnabled = true
-        timeline.beginInteraction(atX: x(3))
-        timeline.continueInteraction(atX: x(5))
-        timeline.endInteraction()
-        XCTAssertEqual(timeline.pendingSelection?.lowerBound ?? -1, 3, accuracy: 0.02)
-        XCTAssertEqual(timeline.pendingSelection?.upperBound ?? -1, 5, accuracy: 0.02)
-
-        timeline.isRangeSelectionEnabled = false
-        timeline.deletedRanges = [6...7]
-        var selectedDeletedIndex: Int?
-        timeline.onDeletedRangeSelected = { selectedDeletedIndex = $0 }
+        var seekTime: TimeInterval?
+        timeline.onSeek = { seekTime = $0 }
         timeline.beginInteraction(atX: x(6.5))
-        XCTAssertEqual(selectedDeletedIndex, 0)
+        XCTAssertEqual(seekTime ?? -1, 6.5, accuracy: 0.02)
+    }
+
+    func testTimelineCanSelectWithinZoomedVisibleRange() {
+        let timeline = RecordingTimelineView(frame: CGRect(x: 0, y: 0, width: 640, height: 76))
+        timeline.duration = 7_200
+        timeline.visibleRange = 1_200...1_260
+        timeline.trimStart = 1_200
+        timeline.trimEnd = 1_215
+        timeline.movesNearestHandleOnTrackClick = true
+        var changedTrim: (TimeInterval, TimeInterval)?
+        timeline.onTrimChanged = { changedTrim = ($0, $1); _ = $2 }
+
+        timeline.beginInteraction(atX: 16 + 608 * 0.5)
+        timeline.endInteraction()
+
+        XCTAssertEqual(changedTrim?.0 ?? -1, 1_200, accuracy: 0.02)
+        XCTAssertEqual(changedTrim?.1 ?? -1, 1_230, accuracy: 0.02)
     }
 
     func testRecordingControlsStayAboveLiveAnnotationOverlay() {
@@ -710,11 +757,11 @@ final class RecordingInteractionTests: XCTestCase {
         })
         XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingEditingControls" })
         XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingTimeline" })
-        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingDeleteRange" })
-        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingDeleteConfirm" })
-        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingDeletePreview" })
-        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingDeleteCancel" })
-        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingDeleteRestore" })
+        XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingDeleteRange" })
+        XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingDeleteConfirm" })
+        XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingDeletePreview" })
+        XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingDeleteCancel" })
+        XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingDeleteRestore" })
         XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingEditUndo" })
         XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingEditRedo" })
         XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingTrimStart" })
@@ -722,33 +769,76 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingExtractFrame" })
         XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingConvertGIF" })
 
-        let timeline = try XCTUnwrap(views.first {
-            $0.identifier?.rawValue == "recordingTimeline"
-        } as? RecordingTimelineView)
-        let delete = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first {
-            $0.identifier?.rawValue == "recordingDeleteRange"
+        controller.close()
+    }
+
+    func testGIFConversionUsesInlineFullVideoAndDetailSelection() throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Brushot-PreviewTests-\(UUID().uuidString).mp4")
+        try Data().write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let controller = RecordingPreviewWindowController(
+            fileURL: file,
+            format: .video,
+            duration: 7_200,
+            pixelSize: CGSize(width: 320, height: 180),
+            onClose: {}
+        )
+        let content = try XCTUnwrap(controller.window?.contentView)
+        content.layoutSubtreeIfNeeded()
+        let views = descendants(of: content)
+        let convert = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "recordingConvertGIF"
         })
-        let confirm = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first {
-            $0.identifier?.rawValue == "recordingDeleteConfirm"
+        let standardEditing = try XCTUnwrap(views.first {
+            $0.identifier?.rawValue == "recordingEditingControls"
         })
-        let undo = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first {
-            $0.identifier?.rawValue == "recordingEditUndo"
+        let gifControls = try XCTUnwrap(views.first {
+            $0.identifier?.rawValue == "recordingGIFSelectionControls"
         })
-        controller.window?.contentView?.layoutSubtreeIfNeeded()
-        delete.performClick(nil)
-        XCTAssertTrue(timeline.isRangeSelectionEnabled)
-        let timelineX: (TimeInterval) -> CGFloat = { time in
-            16 + max(1, timeline.bounds.width - 32) * CGFloat(time / 12)
-        }
-        timeline.beginInteraction(atX: timelineX(3))
-        timeline.continueInteraction(atX: timelineX(5))
-        timeline.endInteraction()
-        XCTAssertFalse(confirm.isHidden)
-        confirm.performClick(nil)
-        XCTAssertEqual(timeline.deletedRanges.count, 1)
-        XCTAssertTrue(undo.isEnabled)
-        undo.performClick(nil)
-        XCTAssertTrue(timeline.deletedRanges.isEmpty)
+        let overview = try XCTUnwrap(views.compactMap { $0 as? RecordingTimelineView }.first {
+            $0.identifier?.rawValue == "recordingGIFOverviewTimeline"
+        })
+        let detail = try XCTUnwrap(views.compactMap { $0 as? RecordingTimelineView }.first {
+            $0.identifier?.rawValue == "recordingGIFDetailTimeline"
+        })
+        let status = try XCTUnwrap(views.compactMap { $0 as? NSTextField }.first {
+            $0.identifier?.rawValue == "recordingGIFSelectionStatus"
+        })
+
+        XCTAssertTrue(gifControls.isHidden)
+        convert.performClick(nil)
+        content.layoutSubtreeIfNeeded()
+
+        XCTAssertTrue(standardEditing.isHidden)
+        XCTAssertFalse(gifControls.isHidden)
+        XCTAssertEqual(controller.window?.title, "MP4 转 GIF")
+        XCTAssertGreaterThan(overview.bounds.width, 0)
+        XCTAssertGreaterThan(detail.bounds.width, 0)
+        XCTAssertTrue(status.stringValue.contains("00:15.0"))
+
+        overview.beginInteraction(atX: overview.bounds.maxX - 16)
+        overview.endInteraction()
+        XCTAssertTrue(status.stringValue.contains("120:00.0"))
+
+        detail.beginInteraction(atX: 16)
+        detail.endInteraction()
+        XCTAssertTrue(status.stringValue.contains("60.0 秒"))
+        let fps = try XCTUnwrap(views.compactMap { $0 as? NSPopUpButton }.first {
+            $0.identifier?.rawValue == "recordingGIFFPS"
+        })
+        XCTAssertEqual(fps.titleOfSelectedItem, "10")
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingGIFPreviewSelection" })
+
+        let cancel = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "recordingGIFCancelSelection"
+        })
+        cancel.performClick(nil)
+        XCTAssertFalse(standardEditing.isHidden)
+        XCTAssertTrue(gifControls.isHidden)
+        XCTAssertEqual(controller.window?.title, "录制完成")
+
         controller.close()
     }
 

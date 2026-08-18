@@ -7,34 +7,25 @@ final class RecordingTimelineView: NSView {
         case scrub
         case trimStart
         case trimEnd
-        case selectRange
     }
 
     var duration: TimeInterval = 0 { didSet { needsDisplay = true } }
     var trimStart: TimeInterval = 0 { didSet { needsDisplay = true } }
     var trimEnd: TimeInterval = 0 { didSet { needsDisplay = true } }
     var currentTime: TimeInterval = 0 { didSet { needsDisplay = true } }
-    var deletedRanges: [ClosedRange<TimeInterval>] = [] { didSet { needsDisplay = true } }
     var thumbnails: [NSImage] = [] { didSet { needsDisplay = true } }
     var isInteractionEnabled = true { didSet { window?.invalidateCursorRects(for: self) } }
-    var isRangeSelectionEnabled = false {
-        didSet {
-            if !isRangeSelectionEnabled { pendingSelection = nil }
-            needsDisplay = true
-            window?.invalidateCursorRects(for: self)
-        }
-    }
-    private(set) var pendingSelection: ClosedRange<TimeInterval>?
+    var visibleRange: ClosedRange<TimeInterval>? { didSet { needsDisplay = true } }
+    var movesNearestHandleOnTrackClick = false
+    var allowsTrimInteraction = true
+    var showsVisibleRangeLabels = false
 
     var onSeek: ((TimeInterval) -> Void)?
     var onTrimStarted: (() -> Void)?
     var onTrimChanged: ((TimeInterval, TimeInterval, TimeInterval) -> Void)?
     var onTrimEnded: (() -> Void)?
-    var onSelectionChanged: ((ClosedRange<TimeInterval>?) -> Void)?
-    var onDeletedRangeSelected: ((Int) -> Void)?
 
     private var interaction = Interaction.none
-    private var dragOriginTime: TimeInterval = 0
 
     override var intrinsicContentSize: NSSize { CGSize(width: NSView.noIntrinsicMetric, height: 76) }
 
@@ -47,8 +38,6 @@ final class RecordingTimelineView: NSView {
 
         drawThumbnails(in: track, clippedBy: path)
         drawTrimmedAreas(in: track)
-        drawDeletedRanges(in: track)
-        if let pendingSelection { drawRange(pendingSelection, in: track, color: .systemOrange, alpha: 0.68) }
         drawBorder(in: track)
         drawTrimHandle(at: x(for: trimStart), isStart: true, in: track)
         drawTrimHandle(at: x(for: trimEnd), isStart: false, in: track)
@@ -61,11 +50,7 @@ final class RecordingTimelineView: NSView {
             addCursorRect(bounds, cursor: .arrow)
             return
         }
-        if isRangeSelectionEnabled {
-            addCursorRect(bounds, cursor: .crosshair)
-        } else {
-            addCursorRect(bounds, cursor: .pointingHand)
-        }
+        addCursorRect(bounds, cursor: .pointingHand)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -87,11 +72,9 @@ final class RecordingTimelineView: NSView {
     func beginInteraction(atX xPosition: CGFloat) {
         guard isInteractionEnabled, duration > 0 else { return }
         let time = time(at: xPosition)
-        dragOriginTime = time
-        if isRangeSelectionEnabled {
-            interaction = .selectRange
-            pendingSelection = time...time
-            onSelectionChanged?(pendingSelection)
+        if !allowsTrimInteraction {
+            interaction = .scrub
+            onSeek?(time)
             return
         }
         let startDistance = abs(xPosition - x(for: trimStart))
@@ -102,9 +85,10 @@ final class RecordingTimelineView: NSView {
         } else if endDistance <= 13 {
             interaction = .trimEnd
             onTrimStarted?()
-        } else if let index = deletedRanges.firstIndex(where: { $0.contains(time) }) {
-            interaction = .none
-            onDeletedRangeSelected?(index)
+        } else if movesNearestHandleOnTrackClick {
+            interaction = abs(time - trimStart) <= abs(time - trimEnd) ? .trimStart : .trimEnd
+            onTrimStarted?()
+            updateActiveHandle(to: time)
         } else {
             interaction = .scrub
             onSeek?(time)
@@ -118,16 +102,9 @@ final class RecordingTimelineView: NSView {
         case .scrub:
             onSeek?(time)
         case .trimStart:
-            trimStart = min(max(0, time), trimEnd - 0.05)
-            onTrimChanged?(trimStart, trimEnd, trimStart)
+            updateActiveHandle(to: time)
         case .trimEnd:
-            trimEnd = max(trimStart + 0.05, min(duration, time))
-            onTrimChanged?(trimStart, trimEnd, trimEnd)
-        case .selectRange:
-            let lower = max(trimStart, min(dragOriginTime, time))
-            let upper = min(trimEnd, max(dragOriginTime, time))
-            pendingSelection = lower...upper
-            onSelectionChanged?(pendingSelection)
+            updateActiveHandle(to: time)
         case .none:
             break
         }
@@ -138,23 +115,40 @@ final class RecordingTimelineView: NSView {
         interaction = .none
     }
 
-    func clearPendingSelection() {
-        pendingSelection = nil
-        onSelectionChanged?(nil)
-        needsDisplay = true
-    }
-
     private var trackRect: CGRect {
         CGRect(x: 16, y: 18, width: max(1, bounds.width - 32), height: 44)
     }
 
     private func x(for time: TimeInterval) -> CGFloat {
-        trackRect.minX + trackRect.width * CGFloat(min(1, max(0, time / max(0.001, duration))))
+        let span = max(0.001, visibleEnd - visibleStart)
+        let fraction = (time - visibleStart) / span
+        return trackRect.minX + trackRect.width * CGFloat(min(1, max(0, fraction)))
     }
 
     private func time(at x: CGFloat) -> TimeInterval {
         let fraction = min(1, max(0, (x - trackRect.minX) / max(1, trackRect.width)))
-        return duration * TimeInterval(fraction)
+        return visibleStart + (visibleEnd - visibleStart) * TimeInterval(fraction)
+    }
+
+    private var visibleStart: TimeInterval {
+        min(duration, max(0, visibleRange?.lowerBound ?? 0))
+    }
+
+    private var visibleEnd: TimeInterval {
+        max(visibleStart, min(duration, visibleRange?.upperBound ?? duration))
+    }
+
+    private func updateActiveHandle(to time: TimeInterval) {
+        switch interaction {
+        case .trimStart:
+            trimStart = min(max(0, time), trimEnd - 0.05)
+            onTrimChanged?(trimStart, trimEnd, trimStart)
+        case .trimEnd:
+            trimEnd = max(trimStart + 0.05, min(duration, time))
+            onTrimChanged?(trimStart, trimEnd, trimEnd)
+        case .none, .scrub:
+            break
+        }
     }
 
     private func drawThumbnails(in track: CGRect, clippedBy path: NSBezierPath) {
@@ -186,38 +180,6 @@ final class RecordingTimelineView: NSView {
         NSColor.black.withAlphaComponent(0.72).setFill()
         CGRect(x: track.minX, y: track.minY, width: max(0, x(for: trimStart) - track.minX), height: track.height).fill()
         CGRect(x: x(for: trimEnd), y: track.minY, width: max(0, track.maxX - x(for: trimEnd)), height: track.height).fill()
-    }
-
-    private func drawDeletedRanges(in track: CGRect) {
-        for range in deletedRanges {
-            let rect = drawRange(range, in: track, color: .systemRed, alpha: 0.62)
-            NSGraphicsContext.saveGraphicsState()
-            NSBezierPath(rect: rect).addClip()
-            NSColor.white.withAlphaComponent(0.45).setStroke()
-            let lines = NSBezierPath()
-            var x = rect.minX - track.height
-            while x < rect.maxX {
-                lines.move(to: CGPoint(x: x, y: rect.minY))
-                lines.line(to: CGPoint(x: x + track.height, y: rect.maxY))
-                x += 9
-            }
-            lines.lineWidth = 1
-            lines.stroke()
-            NSGraphicsContext.restoreGraphicsState()
-        }
-    }
-
-    @discardableResult
-    private func drawRange(_ range: ClosedRange<TimeInterval>, in track: CGRect, color: NSColor, alpha: CGFloat) -> CGRect {
-        let rect = CGRect(
-            x: x(for: range.lowerBound),
-            y: track.minY,
-            width: max(1, x(for: range.upperBound) - x(for: range.lowerBound)),
-            height: track.height
-        )
-        color.withAlphaComponent(alpha).setFill()
-        rect.fill()
-        return rect
     }
 
     private func drawBorder(in track: CGRect) {
@@ -261,8 +223,10 @@ final class RecordingTimelineView: NSView {
             .font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .regular),
             .foregroundColor: NSColor.secondaryLabelColor
         ]
-        NSString(string: Self.formatTime(trimStart)).draw(at: CGPoint(x: track.minX, y: 2), withAttributes: attributes)
-        let end = NSString(string: Self.formatTime(trimEnd))
+        let leftTime = showsVisibleRangeLabels ? visibleStart : trimStart
+        let rightTime = showsVisibleRangeLabels ? visibleEnd : trimEnd
+        NSString(string: Self.formatTime(leftTime)).draw(at: CGPoint(x: track.minX, y: 2), withAttributes: attributes)
+        let end = NSString(string: Self.formatTime(rightTime))
         let size = end.size(withAttributes: attributes)
         end.draw(at: CGPoint(x: track.maxX - size.width, y: 2), withAttributes: attributes)
     }

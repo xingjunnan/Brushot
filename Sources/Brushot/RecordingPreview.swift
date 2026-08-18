@@ -66,36 +66,36 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
     private var isSeeking = false
     private var editPlan: RecordingEditPlan
     private let timelineView = RecordingTimelineView()
-    private var pendingDeleteSelection: ClosedRange<TimeInterval>?
-    private var selectedDeletedRangeIndex: Int?
+    private let gifOverviewTimeline = RecordingTimelineView()
+    private let gifDetailTimeline = RecordingTimelineView()
+    private let gifWidthPopup = NSPopUpButton()
+    private let gifFPSPopup = NSPopUpButton()
+    private let gifStatusLabel = NSTextField(wrappingLabelWithString: "")
+    private var standardEditingControlsView: NSView?
+    private var standardActionButtonsView: NSView?
+    private var gifSelectionControlsView: NSView?
+    private var gifSelectionRange: ClosedRange<TimeInterval>?
+    private var isGIFSelectionMode = false
+    private var isPreviewingGIFSelection = false
+    private var didExpandForGIFSelection = false
+    private var frameBeforeGIFSelection: NSRect?
     private var trimDragInitialPlan: RecordingEditPlan?
     private var undoPlans: [RecordingEditPlan] = []
     private var redoPlans: [RecordingEditPlan] = []
-    private var previewSelectionEnd: TimeInterval?
     private var isBusy = false
     private let editStatusLabel = NSTextField(labelWithString: "")
-    private lazy var deleteRangeButton: NSButton = {
-        makeEditButton(L.text("删除片段"), id: "recordingDeleteRange", action: #selector(beginDeleteRange))
+    private lazy var gifPreviewButton: NSButton = {
+        makeEditButton(L.text("播放选区"), id: "recordingGIFPreviewSelection", action: #selector(previewGIFSelection))
     }()
-    private lazy var confirmDeleteButton: NSButton = {
-        let button = makeEditButton(L.text("确认删除"), id: "recordingDeleteConfirm", action: #selector(confirmDeleteRange))
-        button.contentTintColor = .systemRed
-        button.isHidden = true
-        return button
+    private lazy var gifCancelButton: NSButton = {
+        makeEditButton(L.text("取消"), id: "recordingGIFCancelSelection", action: #selector(cancelGIFSelection))
     }()
-    private lazy var previewDeleteButton: NSButton = {
-        let button = makeEditButton(L.text("预览选区"), id: "recordingDeletePreview", action: #selector(previewDeleteRange))
-        button.isHidden = true
-        return button
-    }()
-    private lazy var cancelDeleteButton: NSButton = {
-        let button = makeEditButton(L.text("取消选择"), id: "recordingDeleteCancel", action: #selector(cancelDeleteRange))
-        button.isHidden = true
-        return button
-    }()
-    private lazy var restoreDeleteButton: NSButton = {
-        let button = makeEditButton(L.text("恢复此片段"), id: "recordingDeleteRestore", action: #selector(restoreDeletedRange))
-        button.isHidden = true
+    private lazy var gifExportButton: NSButton = {
+        let button = NSButton(title: L.text("导出 GIF"), target: self, action: #selector(exportSelectedGIF))
+        button.identifier = NSUserInterfaceItemIdentifier("recordingGIFExportSelection")
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.contentTintColor = .controlAccentColor
         return button
     }()
     private lazy var undoEditButton: NSButton = {
@@ -233,11 +233,21 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         let buttons = NSStackView(views: [discard, copy, save])
         buttons.orientation = .horizontal
         buttons.spacing = 8
+        standardActionButtonsView = buttons
 
         let preview = format == .video ? playerView : imageView
-        let stackViews = format == .video
-            ? [preview, makePlaybackControls(), makeEditingControls(), metadata, buttons]
-            : [preview, metadata, buttons]
+        let stackViews: [NSView]
+        if format == .video {
+            let editingControls = makeEditingControls()
+            let gifControls = makeGIFSelectionControls()
+            editingControls.isHidden = false
+            gifControls.isHidden = true
+            standardEditingControlsView = editingControls
+            gifSelectionControlsView = gifControls
+            stackViews = [preview, makePlaybackControls(), editingControls, gifControls, metadata, buttons]
+        } else {
+            stackViews = [preview, metadata, buttons]
+        }
         let stack = NSStackView(views: stackViews)
         stack.orientation = .vertical
         stack.alignment = .centerX
@@ -314,12 +324,10 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         timelineView.trimStart = editPlan.trimStart
         timelineView.trimEnd = editPlan.trimEnd
         timelineView.currentTime = 0
-        timelineView.deletedRanges = editPlan.deletedRanges
         timelineView.onSeek = { [weak self] time in self?.seek(to: time) }
         timelineView.onTrimStarted = { [weak self] in
             guard let self else { return }
             self.trimDragInitialPlan = self.editPlan
-            self.cancelDeleteRange()
         }
         timelineView.onTrimChanged = { [weak self] start, end, changedTime in
             guard let self else { return }
@@ -333,17 +341,6 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
             self.trimDragInitialPlan = nil
             if initial != self.editPlan { self.pushUndoPlan(initial) }
         }
-        timelineView.onSelectionChanged = { [weak self] range in
-            self?.pendingDeleteSelection = range
-            self?.updateDeleteSelectionControls()
-        }
-        timelineView.onDeletedRangeSelected = { [weak self] index in
-            guard let self else { return }
-            self.cancelDeleteRange()
-            self.selectedDeletedRangeIndex = index
-            self.restoreDeleteButton.isHidden = false
-            self.updateEditStatus()
-        }
         timelineView.heightAnchor.constraint(equalToConstant: 76).isActive = true
         timelineView.widthAnchor.constraint(greaterThanOrEqualToConstant: 620).isActive = true
 
@@ -352,11 +349,6 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         let actionRow = NSStackView(views: [
             undoEditButton,
             redoEditButton,
-            deleteRangeButton,
-            confirmDeleteButton,
-            previewDeleteButton,
-            cancelDeleteButton,
-            restoreDeleteButton,
             frame,
             gif
         ])
@@ -378,6 +370,125 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         actionRow.setHuggingPriority(.defaultHigh, for: .horizontal)
         actionRow.alignment = .centerY
         return stack
+    }
+
+    private func makeGIFSelectionControls() -> NSView {
+        gifOverviewTimeline.identifier = NSUserInterfaceItemIdentifier("recordingGIFOverviewTimeline")
+        gifOverviewTimeline.duration = duration
+        gifOverviewTimeline.allowsTrimInteraction = false
+        gifOverviewTimeline.showsVisibleRangeLabels = true
+        gifOverviewTimeline.onSeek = { [weak self] time in
+            self?.moveGIFSelection(to: time)
+        }
+        gifOverviewTimeline.heightAnchor.constraint(equalToConstant: 64).isActive = true
+
+        gifDetailTimeline.identifier = NSUserInterfaceItemIdentifier("recordingGIFDetailTimeline")
+        gifDetailTimeline.duration = duration
+        gifDetailTimeline.movesNearestHandleOnTrackClick = true
+        gifDetailTimeline.onTrimStarted = { [weak self] in
+            self?.stopGIFSelectionPreview()
+        }
+        gifDetailTimeline.onTrimChanged = { [weak self] start, end, changedTime in
+            guard let self else { return }
+            self.gifSelectionRange = start...end
+            self.syncGIFSelectionTimelines(updateDetailViewport: false)
+            self.seek(to: changedTime)
+        }
+        gifDetailTimeline.onTrimEnded = { [weak self] in
+            self?.syncGIFSelectionTimelines(updateDetailViewport: true)
+        }
+        gifDetailTimeline.heightAnchor.constraint(equalToConstant: 76).isActive = true
+
+        gifWidthPopup.addItems(withTitles: ["480", "720", "1080", "1440"])
+        gifWidthPopup.selectItem(withTitle: "720")
+        gifWidthPopup.identifier = NSUserInterfaceItemIdentifier("recordingGIFWidth")
+        gifWidthPopup.target = self
+        gifWidthPopup.action = #selector(gifSettingsChanged)
+        gifFPSPopup.addItems(withTitles: RecordingGIFLimits.supportedFrameRates.map { String(format: "%.0f", $0) })
+        gifFPSPopup.selectItem(withTitle: "15")
+        gifFPSPopup.identifier = NSUserInterfaceItemIdentifier("recordingGIFFPS")
+        gifFPSPopup.target = self
+        gifFPSPopup.action = #selector(gifSettingsChanged)
+
+        let overviewTitle = NSTextField(labelWithString: L.text("完整视频：点击或拖动以移动 GIF 选区"))
+        overviewTitle.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+        let detailTitle = NSTextField(labelWithString: L.text("精确选段：拖动黄色手柄，画面会同步预览"))
+        detailTitle.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+
+        let settings = NSStackView(views: [
+            NSTextField(labelWithString: L.text("最大宽度（像素）")),
+            gifWidthPopup,
+            NSTextField(labelWithString: L.text("帧率（FPS）")),
+            gifFPSPopup,
+            NSTextField(labelWithString: L.text("GIF 不包含声音"))
+        ])
+        settings.orientation = .horizontal
+        settings.alignment = .centerY
+        settings.spacing = 8
+        (settings.arrangedSubviews.last as? NSTextField)?.textColor = .secondaryLabelColor
+
+        let actions = NSStackView(views: [gifPreviewButton, gifCancelButton, gifExportButton])
+        actions.orientation = .horizontal
+        actions.alignment = .centerY
+        actions.spacing = 8
+
+        gifStatusLabel.identifier = NSUserInterfaceItemIdentifier("recordingGIFSelectionStatus")
+        gifStatusLabel.maximumNumberOfLines = 2
+        gifStatusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        gifStatusLabel.alignment = .center
+
+        let footer = NSStackView(views: [settings, NSView(), actions])
+        footer.orientation = .horizontal
+        footer.alignment = .centerY
+        footer.spacing = 8
+
+        let callout = makeGIFSelectionCallout()
+        let stack = NSStackView(views: [
+            callout,
+            overviewTitle,
+            gifOverviewTimeline,
+            detailTitle,
+            gifDetailTimeline,
+            footer,
+            gifStatusLabel
+        ])
+        stack.identifier = NSUserInterfaceItemIdentifier("recordingGIFSelectionControls")
+        stack.orientation = .vertical
+        stack.alignment = .width
+        stack.spacing = 5
+        stack.widthAnchor.constraint(greaterThanOrEqualToConstant: 620).isActive = true
+        callout.heightAnchor.constraint(equalToConstant: 46).isActive = true
+        return stack
+    }
+
+    private func makeGIFSelectionCallout() -> NSView {
+        let callout = NSView()
+        callout.wantsLayer = true
+        callout.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.16).cgColor
+        callout.layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.65).cgColor
+        callout.layer?.borderWidth = 1
+        callout.layer?.cornerRadius = 8
+        let icon = NSImageView(image: NSImage(
+            systemSymbolName: "film.stack",
+            accessibilityDescription: nil
+        ) ?? NSImage())
+        icon.contentTintColor = .controlAccentColor
+        let label = NSTextField(labelWithString: L.text("先在完整视频中定位，再精确调整；GIF 最长 60 秒"))
+        label.font = .systemFont(ofSize: 13, weight: .semibold)
+        let row = NSStackView(views: [icon, label])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 10
+        row.translatesAutoresizingMaskIntoConstraints = false
+        callout.addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: callout.leadingAnchor, constant: 12),
+            row.trailingAnchor.constraint(lessThanOrEqualTo: callout.trailingAnchor, constant: -12),
+            row.centerYAnchor.constraint(equalTo: callout.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 20),
+            icon.heightAnchor.constraint(equalToConstant: 20)
+        ])
+        return callout
     }
 
     private func makeEditButton(_ title: String, id: String, action: Selector) -> NSButton {
@@ -421,7 +532,9 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
                 }
             }.value
             guard let self else { return }
-            self.timelineView.thumbnails = images.map { NSImage(cgImage: $0, size: .zero) }
+            let thumbnails = images.map { NSImage(cgImage: $0, size: .zero) }
+            self.timelineView.thumbnails = thumbnails
+            self.gifOverviewTimeline.thumbnails = thumbnails
         }
     }
 
@@ -444,23 +557,25 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         let current = max(0, CMTimeGetSeconds(time))
         guard current.isFinite else { return }
         timelineView.currentTime = current
+        gifOverviewTimeline.currentTime = current
+        gifDetailTimeline.currentTime = current
         if !isSeeking {
             progressSlider.doubleValue = min(progressSlider.maxValue, current)
         }
-        if let previewSelectionEnd, current >= previewSelectionEnd - 0.015 {
-            player?.pause()
-            self.previewSelectionEnd = nil
-            seek(to: previewSelectionEnd)
-        } else if player?.timeControlStatus == .playing {
-            if current < editPlan.trimStart - 0.015 {
-                seek(to: editPlan.trimStart)
-            } else if current >= editPlan.trimEnd - 0.015 {
+        if player?.timeControlStatus == .playing {
+            let range = activePlaybackRange
+            if current < range.lowerBound - 0.015 {
+                seek(to: range.lowerBound)
+            } else if current >= range.upperBound - 0.015 {
                 player?.pause()
-                seek(to: editPlan.trimEnd)
-            } else if let deleted = editPlan.deletedRanges.first(where: {
-                current >= $0.lowerBound - 0.015 && current < $0.upperBound - 0.015
-            }) {
-                seek(to: min(editPlan.trimEnd, deleted.upperBound))
+                if isGIFSelectionMode {
+                    seek(to: range.lowerBound)
+                    player?.isMuted = false
+                    isPreviewingGIFSelection = false
+                    gifPreviewButton.title = L.text("播放选区")
+                } else {
+                    seek(to: range.upperBound)
+                }
             }
         }
         updateTimeLabel(current: current)
@@ -484,15 +599,23 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         guard let player else { return }
         if player.timeControlStatus == .playing {
             player.pause()
+            if isGIFSelectionMode {
+                player.isMuted = false
+                isPreviewingGIFSelection = false
+                gifPreviewButton.title = L.text("播放选区")
+            }
         } else {
+            let range = activePlaybackRange
             var start = currentPlaybackTime
-            if start < editPlan.trimStart || start >= editPlan.trimEnd - 0.05 {
-                start = editPlan.trimStart
+            if start < range.lowerBound || start >= range.upperBound - 0.05 {
+                start = range.lowerBound
             }
-            if let deleted = editPlan.deletedRanges.first(where: { $0.contains(start) }) {
-                start = deleted.upperBound
+            if isGIFSelectionMode {
+                player.isMuted = true
+                isPreviewingGIFSelection = true
+                gifPreviewButton.title = L.text("暂停预览")
             }
-            seek(to: min(start, editPlan.trimEnd))
+            seek(to: min(start, range.upperBound))
             player.play()
         }
         updatePlaybackButton()
@@ -507,73 +630,17 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
                 guard let self else { return }
                 self.isSeeking = false
                 self.timelineView.currentTime = self.progressSlider.doubleValue
+                self.gifOverviewTimeline.currentTime = self.progressSlider.doubleValue
+                self.gifDetailTimeline.currentTime = self.progressSlider.doubleValue
                 self.updateTimeLabel(current: self.progressSlider.doubleValue)
             }
         }
-    }
-
-    @objc private func beginDeleteRange() {
-        guard !isBusy else { return }
-        selectedDeletedRangeIndex = nil
-        restoreDeleteButton.isHidden = true
-        pendingDeleteSelection = nil
-        timelineView.clearPendingSelection()
-        timelineView.isRangeSelectionEnabled = true
-        deleteRangeButton.isHidden = true
-        cancelDeleteButton.isHidden = false
-        confirmDeleteButton.isHidden = true
-        previewDeleteButton.isHidden = true
-        updateEditStatus()
-    }
-
-    @objc private func confirmDeleteRange() {
-        guard let range = pendingDeleteSelection, range.upperBound - range.lowerBound >= 0.05 else { return }
-        let initial = editPlan
-        editPlan.addDeletedRange(from: range.lowerBound, to: range.upperBound)
-        pushUndoPlan(initial)
-        cancelDeleteRange()
-        applyEditPlanToTimeline()
-        seek(to: min(editPlan.trimEnd, range.lowerBound))
-    }
-
-    @objc private func previewDeleteRange() {
-        guard let range = pendingDeleteSelection, range.upperBound - range.lowerBound >= 0.05 else { return }
-        previewSelectionEnd = range.upperBound
-        seek(to: range.lowerBound)
-        player?.play()
-        updatePlaybackButton()
-    }
-
-    @objc private func cancelDeleteRange() {
-        previewSelectionEnd = nil
-        pendingDeleteSelection = nil
-        selectedDeletedRangeIndex = nil
-        timelineView.isRangeSelectionEnabled = false
-        timelineView.clearPendingSelection()
-        deleteRangeButton.isHidden = false
-        confirmDeleteButton.isHidden = true
-        previewDeleteButton.isHidden = true
-        cancelDeleteButton.isHidden = true
-        restoreDeleteButton.isHidden = true
-        updateEditStatus()
-    }
-
-    @objc private func restoreDeletedRange() {
-        guard let index = selectedDeletedRangeIndex, editPlan.deletedRanges.indices.contains(index) else { return }
-        let initial = editPlan
-        editPlan.deletedRanges.remove(at: index)
-        editPlan.normalize()
-        selectedDeletedRangeIndex = nil
-        restoreDeleteButton.isHidden = true
-        pushUndoPlan(initial)
-        applyEditPlanToTimeline()
     }
 
     @objc private func undoEdit() {
         guard let previous = undoPlans.popLast() else { return }
         redoPlans.append(editPlan)
         editPlan = previous
-        cancelDeleteRange()
         applyEditPlanToTimeline()
         updateUndoButtons()
     }
@@ -582,7 +649,6 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         guard let next = redoPlans.popLast() else { return }
         undoPlans.append(editPlan)
         editPlan = next
-        cancelDeleteRange()
         applyEditPlanToTimeline()
         updateUndoButtons()
     }
@@ -599,18 +665,9 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         redoEditButton.isEnabled = !redoPlans.isEmpty && !isBusy
     }
 
-    private func updateDeleteSelectionControls() {
-        let hasSelection = pendingDeleteSelection.map { $0.upperBound - $0.lowerBound >= 0.05 } ?? false
-        confirmDeleteButton.isHidden = !hasSelection
-        previewDeleteButton.isHidden = !hasSelection
-        cancelDeleteButton.isHidden = !timelineView.isRangeSelectionEnabled
-        updateEditStatus()
-    }
-
     private func applyEditPlanToTimeline() {
         timelineView.trimStart = editPlan.trimStart
         timelineView.trimEnd = editPlan.trimEnd
-        timelineView.deletedRanges = editPlan.deletedRanges
         updateEditStatus()
     }
 
@@ -645,47 +702,166 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
     }
 
     @objc private func convertToGIF() {
-        guard !isBusy, let window else { return }
-        let startField = NSTextField(string: String(format: "%.2f", editPlan.trimStart))
-        let endField = NSTextField(string: String(format: "%.2f", editPlan.trimEnd))
-        let widthPopup = NSPopUpButton()
-        widthPopup.addItems(withTitles: ["480", "720", "1080", "1440"])
-        widthPopup.selectItem(withTitle: "720")
-        let fpsPopup = NSPopUpButton()
-        fpsPopup.addItems(withTitles: ["8", "10", "15", "20", "30"])
-        fpsPopup.selectItem(withTitle: "15")
-        let grid = NSGridView(views: [
-            [NSTextField(labelWithString: L.text("开始时间（秒）")), startField],
-            [NSTextField(labelWithString: L.text("结束时间（秒）")), endField],
-            [NSTextField(labelWithString: L.text("最大宽度（像素）")), widthPopup],
-            [NSTextField(labelWithString: L.text("帧率（FPS）")), fpsPopup]
-        ])
-        grid.column(at: 0).xPlacement = .trailing
-        grid.rowSpacing = 8
-        grid.columnSpacing = 10
-        grid.frame.size = CGSize(width: 300, height: 120)
-        let alert = NSAlert()
-        alert.messageText = L.text("MP4 转 GIF")
-        alert.informativeText = L.text("选择要导出的片段、尺寸和帧率。GIF 最多 600 帧。")
-        alert.accessoryView = grid
-        alert.addButton(withTitle: L.text("导出 GIF"))
-        alert.addButton(withTitle: L.text("取消"))
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertFirstButtonReturn, let self else { return }
-            let start = startField.doubleValue
-            let end = endField.doubleValue
-            guard start >= 0, end > start, end <= self.duration + 0.01 else {
-                self.showError(L.text("GIF 时间范围无效。"))
-                return
+        guard !isBusy, !isGIFSelectionMode, let window else { return }
+        player?.pause()
+        let range = RecordingGIFLimits.defaultRange(
+            playhead: currentPlaybackTime,
+            trimStart: editPlan.trimStart,
+            trimEnd: editPlan.trimEnd
+        )
+        gifSelectionRange = range
+        isGIFSelectionMode = true
+        isPreviewingGIFSelection = false
+        standardEditingControlsView?.isHidden = true
+        standardActionButtonsView?.isHidden = true
+        gifSelectionControlsView?.isHidden = false
+        window.title = L.text("MP4 转 GIF")
+        frameBeforeGIFSelection = window.frame
+        if let screen = window.screen {
+            let desiredHeight = min(window.frame.height + 150, screen.visibleFrame.height - 30)
+            if desiredHeight > window.frame.height {
+                var expanded = window.frame
+                expanded.origin.y = max(screen.visibleFrame.minY, expanded.maxY - desiredHeight)
+                expanded.size.height = desiredHeight
+                window.setFrame(expanded, display: true, animate: true)
+                didExpandForGIFSelection = true
             }
-            let options = RecordingGIFOptions(
-                startTime: start,
-                endTime: end,
-                maxWidth: Int(widthPopup.titleOfSelectedItem ?? "720") ?? 720,
-                framesPerSecond: Double(fpsPopup.titleOfSelectedItem ?? "15") ?? 15
-            )
-            self.exportGIF(options: options)
         }
+        syncGIFSelectionTimelines(updateDetailViewport: true)
+        seek(to: range.lowerBound)
+        window.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    @objc private func cancelGIFSelection() {
+        guard isGIFSelectionMode else { return }
+        player?.pause()
+        player?.isMuted = false
+        isPreviewingGIFSelection = false
+        isGIFSelectionMode = false
+        gifSelectionRange = nil
+        gifSelectionControlsView?.isHidden = true
+        standardEditingControlsView?.isHidden = false
+        standardActionButtonsView?.isHidden = false
+        window?.title = L.text("录制完成")
+        gifPreviewButton.title = L.text("播放选区")
+        if didExpandForGIFSelection, let original = frameBeforeGIFSelection {
+            window?.setFrame(original, display: true, animate: true)
+        }
+        didExpandForGIFSelection = false
+        frameBeforeGIFSelection = nil
+        window?.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    @objc private func previewGIFSelection() {
+        guard isGIFSelectionMode, let range = gifSelectionRange, let player else { return }
+        if isPreviewingGIFSelection, player.timeControlStatus == .playing {
+            player.pause()
+            player.isMuted = false
+            isPreviewingGIFSelection = false
+            gifPreviewButton.title = L.text("播放选区")
+            updatePlaybackButton()
+            return
+        }
+        isPreviewingGIFSelection = true
+        gifPreviewButton.title = L.text("暂停预览")
+        player.isMuted = true
+        seek(to: range.lowerBound)
+        player.play()
+        updatePlaybackButton()
+    }
+
+    @objc private func exportSelectedGIF() {
+        guard isGIFSelectionMode, let range = gifSelectionRange else { return }
+        let options = RecordingGIFOptions(
+            startTime: range.lowerBound,
+            endTime: range.upperBound,
+            maxWidth: Int(gifWidthPopup.titleOfSelectedItem ?? "720") ?? 720,
+            framesPerSecond: selectedGIFFPS
+        )
+        exportGIF(options: options)
+    }
+
+    @objc private func gifSettingsChanged() {
+        updateGIFSelectionStatus()
+    }
+
+    private var selectedGIFFPS: Double {
+        Double(gifFPSPopup.titleOfSelectedItem ?? "15") ?? 15
+    }
+
+    private var gifSelectableBounds: ClosedRange<TimeInterval> {
+        editPlan.trimStart...editPlan.trimEnd
+    }
+
+    private func moveGIFSelection(to startTime: TimeInterval) {
+        guard let current = gifSelectionRange else { return }
+        stopGIFSelectionPreview()
+        let bounds = gifSelectableBounds
+        let length = min(current.upperBound - current.lowerBound, bounds.upperBound - bounds.lowerBound)
+        let start = min(max(bounds.lowerBound, startTime), max(bounds.lowerBound, bounds.upperBound - length))
+        gifSelectionRange = start...(start + length)
+        syncGIFSelectionTimelines(updateDetailViewport: true)
+        seek(to: start)
+    }
+
+    private func stopGIFSelectionPreview() {
+        player?.pause()
+        player?.isMuted = false
+        isPreviewingGIFSelection = false
+        gifPreviewButton.title = L.text("播放选区")
+        updatePlaybackButton()
+    }
+
+    private func syncGIFSelectionTimelines(updateDetailViewport: Bool) {
+        guard let range = gifSelectionRange else { return }
+        gifOverviewTimeline.trimStart = range.lowerBound
+        gifOverviewTimeline.trimEnd = range.upperBound
+        gifOverviewTimeline.currentTime = currentPlaybackTime
+        gifDetailTimeline.trimStart = range.lowerBound
+        gifDetailTimeline.trimEnd = range.upperBound
+        gifDetailTimeline.currentTime = currentPlaybackTime
+        if updateDetailViewport {
+            gifDetailTimeline.visibleRange = gifDetailViewport(around: range)
+        }
+        updateGIFSelectionStatus()
+    }
+
+    private func gifDetailViewport(around range: ClosedRange<TimeInterval>) -> ClosedRange<TimeInterval> {
+        let bounds = gifSelectableBounds
+        let available = max(0, bounds.upperBound - bounds.lowerBound)
+        let span = min(RecordingGIFLimits.maximumDuration, available)
+        guard span > 0 else { return bounds.lowerBound...bounds.lowerBound }
+        let center = (range.lowerBound + range.upperBound) / 2
+        let maximumStart = bounds.upperBound - span
+        let start = min(max(bounds.lowerBound, center - span / 2), maximumStart)
+        return start...(start + span)
+    }
+
+    private func updateGIFSelectionStatus() {
+        guard let range = gifSelectionRange else { return }
+        let selectionDuration = range.upperBound - range.lowerBound
+        let maximumFPS = RecordingGIFLimits.maximumFrameRate(for: selectionDuration)
+        gifFPSPopup.itemArray.forEach { item in
+            item.isEnabled = (Double(item.title) ?? 0) <= maximumFPS
+        }
+        if selectedGIFFPS > maximumFPS {
+            gifFPSPopup.selectItem(withTitle: String(format: "%.0f", maximumFPS))
+        }
+        let frames = RecordingGIFLimits.estimatedFrameCount(
+            duration: selectionDuration,
+            framesPerSecond: selectedGIFFPS
+        )
+        let selection = "\(Self.formatPreciseTime(range.lowerBound))–\(Self.formatPreciseTime(range.upperBound))"
+        gifStatusLabel.stringValue = L.format(
+            "选区 %@ · %.1f 秒 · 预计 %d 帧 · %.0f FPS",
+            selection,
+            selectionDuration,
+            frames,
+            selectedGIFFPS
+        )
+        gifStatusLabel.textColor = selectionDuration > RecordingGIFLimits.recommendedDuration
+            ? .systemOrange
+            : .secondaryLabelColor
     }
 
     private func exportGIF(options: RecordingGIFOptions) {
@@ -694,17 +870,25 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         setBusy(true)
         Task { [weak self] in
             guard let self else { return }
+            var exported = false
             do {
                 try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
                 _ = try await RecordingExporter.exportGIFSegment(source: source, destination: destination, options: options)
                 FeedbackSound.playSaveCompleted()
                 NSWorkspace.shared.activateFileViewerSelecting([destination])
+                exported = true
             } catch {
                 try? FileManager.default.removeItem(at: destination)
                 self.showError(error.localizedDescription)
             }
             self.setBusy(false)
+            if exported { self.cancelGIFSelection() }
         }
+    }
+
+    private var activePlaybackRange: ClosedRange<TimeInterval> {
+        if isGIFSelectionMode, let gifSelectionRange { return gifSelectionRange }
+        return editPlan.trimStart...editPlan.trimEnd
     }
 
     private var currentPlaybackTime: TimeInterval {
@@ -715,6 +899,8 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
     private func seek(to seconds: TimeInterval) {
         progressSlider.doubleValue = seconds
         timelineView.currentTime = seconds
+        gifOverviewTimeline.currentTime = seconds
+        gifDetailTimeline.currentTime = seconds
         player?.seek(
             to: CMTime(seconds: seconds, preferredTimescale: 600),
             toleranceBefore: .zero,
@@ -725,32 +911,11 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
 
     private func updateEditStatus() {
         let trim = "\(Self.formatTime(editPlan.trimStart))–\(Self.formatTime(editPlan.trimEnd))"
-        if timelineView.isRangeSelectionEnabled {
-            if let range = pendingDeleteSelection, range.upperBound - range.lowerBound >= 0.05 {
-                editStatusLabel.stringValue = L.format(
-                    "将删除 %@–%@（%@）",
-                    Self.formatTime(range.lowerBound),
-                    Self.formatTime(range.upperBound),
-                    Self.formatTime(range.upperBound - range.lowerBound)
-                )
-            } else {
-                editStatusLabel.stringValue = L.text("在时间线上拖动，选择要删除的内容")
-            }
-        } else if let index = selectedDeletedRangeIndex, editPlan.deletedRanges.indices.contains(index) {
-            let range = editPlan.deletedRanges[index]
-            editStatusLabel.stringValue = L.format(
-                "已选择删除片段 %@–%@，可恢复此片段",
-                Self.formatTime(range.lowerBound),
-                Self.formatTime(range.upperBound)
-            )
-        } else {
-            editStatusLabel.stringValue = L.format(
-                "选中 %@；已删除 %d 段；导出时长 %@",
-                trim,
-                editPlan.deletedRanges.count,
-                Self.formatTime(editPlan.outputDuration)
-            )
-        }
+        editStatusLabel.stringValue = L.format(
+            "裁剪范围 %@；导出时长 %@",
+            trim,
+            Self.formatTime(editPlan.outputDuration)
+        )
     }
 
     @objc private func changeVolume() {
@@ -759,8 +924,14 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
 
     @objc private func playbackDidFinish() {
         player?.pause()
-        progressSlider.doubleValue = editPlan.trimEnd
-        timelineView.currentTime = editPlan.trimEnd
+        let destination = isGIFSelectionMode ? activePlaybackRange.lowerBound : activePlaybackRange.upperBound
+        player?.isMuted = false
+        isPreviewingGIFSelection = false
+        gifPreviewButton.title = L.text("播放选区")
+        progressSlider.doubleValue = destination
+        timelineView.currentTime = destination
+        gifOverviewTimeline.currentTime = destination
+        gifDetailTimeline.currentTime = destination
         updatePlaybackButton()
     }
 
@@ -857,7 +1028,15 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         isBusy = busy
         player?.pause()
         timelineView.isInteractionEnabled = !busy
-        window?.title = busy ? L.text("正在导出…") : L.text("录制完成")
+        gifOverviewTimeline.isInteractionEnabled = !busy
+        gifDetailTimeline.isInteractionEnabled = !busy
+        window?.title = if busy {
+            L.text("正在导出…")
+        } else if isGIFSelectionMode {
+            L.text("MP4 转 GIF")
+        } else {
+            L.text("录制完成")
+        }
         if let content = window?.contentView {
             setControlsEnabled(!busy, in: content)
         }
@@ -922,6 +1101,11 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         guard seconds.isFinite, seconds > 0 else { return "00:00" }
         let rounded = Int(seconds.rounded(.down))
         return String(format: "%02d:%02d", rounded / 60, rounded % 60)
+    }
+
+    private static func formatPreciseTime(_ seconds: TimeInterval) -> String {
+        let value = max(0, seconds)
+        return String(format: "%02d:%04.1f", Int(value) / 60, value.truncatingRemainder(dividingBy: 60))
     }
 
 }

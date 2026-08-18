@@ -20,6 +20,7 @@ enum RecordingExportError: LocalizedError {
     case missingVideoTrack
     case exportFailed(String)
     case gifCreationFailed
+    case gifDurationTooLong
 
     var errorDescription: String? {
         switch self {
@@ -27,6 +28,7 @@ enum RecordingExportError: LocalizedError {
         case .missingVideoTrack: L.text("录制文件中没有有效视频轨道。")
         case .exportFailed(let reason): L.format("导出失败：%@", reason)
         case .gifCreationFailed: L.text("GIF 编码失败。")
+        case .gifDurationTooLong: L.text("GIF 片段最长为 60 秒，请缩短选区。")
         }
     }
 }
@@ -139,6 +141,9 @@ enum RecordingExporter {
     ) async throws -> URL {
         guard FileManager.default.fileExists(atPath: source.path) else {
             throw RecordingExportError.missingSource
+        }
+        guard options.endTime - options.startTime <= RecordingGIFLimits.maximumDuration + 0.001 else {
+            throw RecordingExportError.gifDurationTooLong
         }
         try? FileManager.default.removeItem(at: destination)
         return try await exportGIF(
@@ -313,6 +318,9 @@ enum RecordingExporter {
             let end = max(start, min(assetSeconds, requestedRange?.upperBound ?? assetSeconds))
             let seconds = end - start
             guard seconds > 0.001 else { throw RecordingExportError.gifCreationFailed }
+            if requestedRange != nil, seconds > RecordingGIFLimits.maximumDuration + 0.001 {
+                throw RecordingExportError.gifDurationTooLong
+            }
             let targetFPS = min(requestedFPS ?? gifTargetFPS(duration: seconds), 600 / seconds)
             let targetInterval = 1.0 / max(0.1, targetFPS)
             let estimatedFrames = max(1, min(600, Int(ceil(seconds * targetFPS))))

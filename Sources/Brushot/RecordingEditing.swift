@@ -105,3 +105,36 @@ struct RecordingGIFOptions: Equatable, Sendable {
         self.framesPerSecond = min(30, max(1, framesPerSecond))
     }
 }
+
+enum RecordingGIFLimits {
+    static let maximumDuration: TimeInterval = 60
+    static let recommendedDuration: TimeInterval = 30
+    static let defaultDuration: TimeInterval = 15
+    static let maximumFrameCount = 600
+    static let supportedFrameRates: [Double] = [8, 10, 15, 20, 30]
+
+    static func maximumFrameRate(for duration: TimeInterval) -> Double {
+        guard duration > 0 else { return supportedFrameRates.last ?? 15 }
+        let frameBudget = Double(maximumFrameCount) / duration
+        return supportedFrameRates.last(where: { $0 <= frameBudget }) ?? supportedFrameRates[0]
+    }
+
+    static func estimatedFrameCount(duration: TimeInterval, framesPerSecond: Double) -> Int {
+        guard duration.isFinite, duration > 0, framesPerSecond.isFinite, framesPerSecond > 0 else { return 0 }
+        return Int(ceil(duration * framesPerSecond))
+    }
+
+    static func defaultRange(
+        playhead: TimeInterval,
+        trimStart: TimeInterval,
+        trimEnd: TimeInterval
+    ) -> ClosedRange<TimeInterval> {
+        let lowerBound = max(0, trimStart)
+        let upperBound = max(lowerBound, trimEnd)
+        var start = min(max(playhead, lowerBound), upperBound)
+        if upperBound - start < 0.05 {
+            start = lowerBound
+        }
+        return start...min(upperBound, start + defaultDuration)
+    }
+}
