@@ -49,7 +49,8 @@ enum L {
     private static let english: [String: String] = [
         "区域截图": "Capture Region",
         "长截图": "Scrolling Capture",
-        "录屏…": "Record Screen...",
+        "区域录屏": "Record Region",
+        "全屏录屏": "Record Full Screen",
         "录屏": "Record",
         "全屏截图": "Full Screen Capture",
         "延时截图…": "Delayed Capture...",
@@ -356,6 +357,7 @@ enum L {
         "截图失败": "Capture Failed",
         "macOS 未授予屏幕录制权限。": "macOS has not granted Screen Recording permission.",
         "未找到鼠标所在的显示器，无法进行全屏截图。": "Unable to find the display containing the pointer, so full screen capture cannot continue.",
+        "未找到鼠标所在的显示器，无法进行全屏录屏。": "Unable to find the display containing the pointer, so full screen recording cannot continue.",
         "所选区域所在的显示器已断开，请重新截图。": "The display containing the selected region has been disconnected. Capture again.",
         "延时截图区域已失效，可能是显示器配置发生了变化。": "The delayed capture region is no longer valid. The display configuration may have changed.",
         "延时截图区域无效，请重新选择。": "The delayed capture region is invalid. Select it again.",
@@ -449,7 +451,8 @@ enum L {
     private static let japanese: [String: String] = [
         "区域截图": "範囲を撮影",
         "长截图": "スクロール撮影",
-        "录屏…": "画面収録...",
+        "区域录屏": "範囲を収録",
+        "全屏录屏": "画面全体を収録",
         "录屏": "収録",
         "全屏截图": "画面全体を撮影",
         "延时截图…": "タイマー撮影...",
@@ -709,7 +712,8 @@ enum L {
     private static let korean: [String: String] = [
         "区域截图": "영역 캡처",
         "长截图": "스크롤 캡처",
-        "录屏…": "화면 녹화...",
+        "区域录屏": "영역 녹화",
+        "全屏录屏": "전체 화면 녹화",
         "录屏": "녹화",
         "全屏截图": "전체 화면 캡처",
         "延时截图…": "타이머 캡처...",

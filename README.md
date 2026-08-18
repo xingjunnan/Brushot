@@ -51,8 +51,8 @@ Sequence annotations are numeric badges only and increment automatically. Add ex
 
 ## Recording Workflow
 
-1. Choose `录屏…` from the menu bar or press its configurable shortcut (default `Option + R`).
-2. Select an area, then choose `录制视频` or `录制 GIF`. Video can capture system audio, a selected built-in/USB/Bluetooth microphone, or both; GIF is always silent. The `水印` checkbox uses the shared watermark settings and is applied during export before the preview appears, not while recording.
+1. Choose `区域录屏` from the menu bar or press its configurable shortcut (default `Option + R`). To record the entire display containing the pointer, choose `全屏录屏` instead.
+2. Confirm the area or full display, then choose `录制视频` or `录制 GIF`. Video can capture system audio, a selected built-in/USB/Bluetooth microphone, or both; GIF is always silent. The `水印` checkbox uses the shared watermark settings and is applied during export before the preview appears, not while recording.
 3. During recording, use the floating controls to pause, resume, stop, or cancel. The real-time annotation bar follows the screenshot toolbar style and provides select, rectangle, arrow, pen, color, stroke width, undo, and redo controls; annotations enter both video and GIF output while the red border and controls stay excluded.
 4. After export, preview the result and save it to the configured location, copy it to the clipboard, or discard it.
 

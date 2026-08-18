@@ -153,7 +153,7 @@ enum ShortcutAction: UInt32, CaseIterable, Hashable {
         switch self {
         case .capture: L.text("区域截图")
         case .longCapture: L.text("长截图")
-        case .recording: L.text("录屏…")
+        case .recording: L.text("区域录屏")
         case .fullscreenCapture: L.text("全屏截图")
         case .delayedCapture: L.text("延时截图…")
         case .pinClipboard: L.text("从剪贴板贴图")
@@ -638,13 +638,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             selector: #selector(captureLongScreenshot)
         )
         menu.addItem(longCapture)
+        menu.addItem(NSMenuItem.separator())
 
         let recording = makeShortcutMenuItem(
             action: .recording,
-            title: L.text("录屏…"),
+            title: L.text("区域录屏"),
             selector: #selector(captureRecording)
         )
         menu.addItem(recording)
+
+        let fullscreenRecording = NSMenuItem(
+            title: L.text("全屏录屏"),
+            action: #selector(captureFullscreenRecording),
+            keyEquivalent: ""
+        )
+        fullscreenRecording.target = self
+        fullscreenRecording.keyEquivalentModifierMask = []
+        menu.addItem(fullscreenRecording)
+        menu.addItem(NSMenuItem.separator())
 
         let pinItem = NSMenuItem(title: L.text("贴图"), action: nil, keyEquivalent: "")
         let pinMenu = NSMenu(title: L.text("贴图"))
@@ -939,6 +950,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func captureRecording() {
         captureController.beginRecordingCapture()
+    }
+
+    @objc private func captureFullscreenRecording() {
+        captureController.beginFullscreenRecordingCapture()
     }
 
     @objc private func showSettings() {
@@ -2504,6 +2519,16 @@ final class CaptureController {
         }
     }
 
+    func beginFullscreenRecordingCapture() {
+        guard canBeginCaptureFlow else {
+            NSSound.beep()
+            return
+        }
+        resolveRecordingPreviewIfNeeded { [weak self] in
+            self?.beginFullscreenRecordingCaptureAfterPreviewResolution()
+        }
+    }
+
     private func resolveRecordingPreviewIfNeeded(
         then continuation: @escaping @MainActor () -> Void
     ) {
@@ -2582,6 +2607,16 @@ final class CaptureController {
         }
         requestScreenCapturePermission { [weak self] in
             self?.presentRecordingCaptureOverlays()
+        }
+    }
+
+    private func beginFullscreenRecordingCaptureAfterPreviewResolution() {
+        guard canBeginCaptureFlow else {
+            NSSound.beep()
+            return
+        }
+        requestScreenCapturePermission { [weak self] in
+            self?.presentFullscreenRecordingOverlay()
         }
     }
 
@@ -2802,19 +2837,7 @@ final class CaptureController {
         closeOverlays()
         overlayWindows = NSScreen.screens.map { screen in
             let window = SelectionOverlayWindow(screen: screen, purpose: .recording)
-            window.onSelectionCancelled = { [weak self] in
-                self?.closeOverlays()
-            }
-            window.onRecordingRequested = { [weak self] rect, format, systemAudio, microphone, deviceID, watermark in
-                self?.startRecording(
-                    globalRect: rect,
-                    format: format,
-                    systemAudio: systemAudio,
-                    microphone: microphone,
-                    microphoneDeviceID: deviceID,
-                    watermarkConfiguration: watermark
-                )
-            }
+            configureRecordingCallbacks(for: window)
             return window
         }
         overlayWindows.forEach { $0.orderFrontRegardless() }
@@ -2827,6 +2850,42 @@ final class CaptureController {
             }
         }
         overlayWindows.forEach { $0.refreshCursorAfterPresentation() }
+    }
+
+    private func presentFullscreenRecordingOverlay() {
+        closeOverlays()
+        guard let screen = CaptureScreenGeometry.targetScreen(
+            at: NSEvent.mouseLocation,
+            screens: NSScreen.screens,
+            fallback: NSScreen.main
+        ) else {
+            showFailureAlert(message: L.text("未找到鼠标所在的显示器，无法进行全屏录屏。"))
+            return
+        }
+
+        let window = SelectionOverlayWindow(screen: screen, purpose: .recording)
+        configureRecordingCallbacks(for: window)
+        window.presetSelection(CGRect(origin: .zero, size: screen.frame.size))
+        overlayWindows = [window]
+        window.orderFrontRegardless()
+        window.makeKeyAndOrderFront(nil)
+        window.refreshCursorAfterPresentation()
+    }
+
+    private func configureRecordingCallbacks(for window: SelectionOverlayWindow) {
+        window.onSelectionCancelled = { [weak self] in
+            self?.closeOverlays()
+        }
+        window.onRecordingRequested = { [weak self] rect, format, systemAudio, microphone, deviceID, watermark in
+            self?.startRecording(
+                globalRect: rect,
+                format: format,
+                systemAudio: systemAudio,
+                microphone: microphone,
+                microphoneDeviceID: deviceID,
+                watermarkConfiguration: watermark
+            )
+        }
     }
 
     private func startLongCapture(globalRect: CGRect) {

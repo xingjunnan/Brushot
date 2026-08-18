@@ -123,9 +123,11 @@ final class ShortcutTests: XCTestCase {
 
     func testStatusMenuGroupsPinActionsAndQuitHasNoShortcut() throws {
         let menu = AppDelegate().makeStatusMenu()
-        XCTAssertEqual(Array(menu.items.prefix(5).map(\.title)), [
-            "区域截图", "全屏截图", "延时截图…", "长截图", "录屏…"
+        XCTAssertEqual(Array(menu.items.prefix(8).map(\.title)), [
+            "区域截图", "全屏截图", "延时截图…", "长截图", "", "区域录屏", "全屏录屏", ""
         ])
+        XCTAssertTrue(menu.items[4].isSeparatorItem)
+        XCTAssertTrue(menu.items[7].isSeparatorItem)
         let fullscreen = try XCTUnwrap(menu.items.first { $0.title == "全屏截图" })
         XCTAssertEqual(fullscreen.keyEquivalent, "f")
         XCTAssertEqual(fullscreen.keyEquivalentModifierMask, [.control, .option])
@@ -135,9 +137,12 @@ final class ShortcutTests: XCTestCase {
         let longCapture = try XCTUnwrap(menu.items.first { $0.title == "长截图" })
         XCTAssertEqual(longCapture.keyEquivalent, "l")
         XCTAssertEqual(longCapture.keyEquivalentModifierMask, [.control, .option])
-        let recording = try XCTUnwrap(menu.items.first { $0.title == "录屏…" })
+        let recording = try XCTUnwrap(menu.items.first { $0.title == "区域录屏" })
         XCTAssertEqual(recording.keyEquivalent, "r")
         XCTAssertEqual(recording.keyEquivalentModifierMask, [.option])
+        let fullscreenRecording = try XCTUnwrap(menu.items.first { $0.title == "全屏录屏" })
+        XCTAssertEqual(fullscreenRecording.keyEquivalent, "")
+        XCTAssertTrue(fullscreenRecording.keyEquivalentModifierMask.isEmpty)
         let pinItem = try XCTUnwrap(menu.items.first { $0.title == "贴图" })
         let pinMenu = try XCTUnwrap(pinItem.submenu)
 
