@@ -73,6 +73,86 @@ enum RecordingExporter {
 
     static func needsAudioMix(trackCount: Int) -> Bool { trackCount > 1 }
 
+    static func exportEditedMP4(
+        source: URL,
+        destination: URL,
+        plan: RecordingEditPlan,
+        progress: Progress? = nil
+    ) async throws -> URL {
+        guard FileManager.default.fileExists(atPath: source.path) else {
+            throw RecordingExportError.missingSource
+        }
+        let ranges = plan.retainedRanges
+        guard !ranges.isEmpty else {
+            throw RecordingExportError.exportFailed(L.text("剪辑后没有可导出的内容。"))
+        }
+        progress?(.preparing, 0)
+        try? FileManager.default.removeItem(at: destination)
+        let asset = AVURLAsset(url: source)
+        let composition = AVMutableComposition()
+        let sourceVideos = try await asset.loadTracks(withMediaType: .video)
+        guard let sourceVideo = sourceVideos.first else { throw RecordingExportError.missingVideoTrack }
+        var insertionTime = CMTime.zero
+        for range in ranges {
+            let timeRange = CMTimeRange(
+                start: CMTime(seconds: range.lowerBound, preferredTimescale: 600),
+                end: CMTime(seconds: range.upperBound, preferredTimescale: 600)
+            )
+            try await composition.insertTimeRange(timeRange, of: asset, at: insertionTime)
+            insertionTime = CMTimeAdd(insertionTime, timeRange.duration)
+        }
+        let preferredTransform = try await sourceVideo.load(.preferredTransform)
+        composition.tracks(withMediaType: .video).forEach { $0.preferredTransform = preferredTransform }
+        guard let session = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHighestQuality) else {
+            throw RecordingExportError.exportFailed(L.text("无法创建 MP4 导出器。"))
+        }
+        session.outputURL = destination
+        session.outputFileType = .mp4
+        session.shouldOptimizeForNetworkUse = true
+        progress?(.encoding, 0.1)
+        try await runExportSession(session)
+        progress?(.finalizing, 1)
+        return destination
+    }
+
+    static func extractFrame(source: URL, at seconds: TimeInterval) async throws -> CGImage {
+        guard FileManager.default.fileExists(atPath: source.path) else {
+            throw RecordingExportError.missingSource
+        }
+        return try await Task.detached(priority: .userInitiated) {
+            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: source))
+            generator.appliesPreferredTrackTransform = true
+            generator.requestedTimeToleranceBefore = .zero
+            generator.requestedTimeToleranceAfter = .zero
+            return try generator.copyCGImage(
+                at: CMTime(seconds: max(0, seconds), preferredTimescale: 600),
+                actualTime: nil
+            )
+        }.value
+    }
+
+    static func exportGIFSegment(
+        source: URL,
+        destination: URL,
+        options: RecordingGIFOptions,
+        progress: Progress? = nil
+    ) async throws -> URL {
+        guard FileManager.default.fileExists(atPath: source.path) else {
+            throw RecordingExportError.missingSource
+        }
+        try? FileManager.default.removeItem(at: destination)
+        return try await exportGIF(
+            source: source,
+            destination: destination,
+            watermarkConfiguration: nil,
+            watermarkContext: WatermarkContext(capturedAt: Date()),
+            requestedRange: options.startTime...options.endTime,
+            maxWidth: options.maxWidth,
+            requestedFPS: options.framesPerSecond,
+            progress: progress
+        )
+    }
+
     private static func exportMP4(
         source: URL,
         destination: URL,
@@ -115,19 +195,7 @@ enum RecordingExporter {
         session.audioMix = audioMix
         session.videoComposition = videoComposition
         progress?(.encoding, 0.1)
-        let sessionBox = SendableExportSession(session)
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            session.exportAsynchronously {
-                switch sessionBox.value.status {
-                case .completed: continuation.resume()
-                case .cancelled: continuation.resume(throwing: CancellationError())
-                default:
-                    continuation.resume(throwing: RecordingExportError.exportFailed(
-                        sessionBox.value.error?.localizedDescription ?? L.text("未知错误。")
-                    ))
-                }
-            }
-        }
+        try await runExportSession(session)
         progress?(.finalizing, 1)
         return destination
     }
@@ -227,18 +295,25 @@ enum RecordingExporter {
         destination: URL,
         watermarkConfiguration: WatermarkConfiguration?,
         watermarkContext: WatermarkContext,
+        requestedRange: ClosedRange<TimeInterval>? = nil,
+        maxWidth: Int = 720,
+        requestedFPS: Double? = nil,
         progress: Progress?
     ) async throws -> URL {
         try await Task.detached(priority: .userInitiated) {
             progress?(.preparing, 0)
             let asset = AVURLAsset(url: source)
             let duration = try await asset.load(.duration)
-            let seconds = CMTimeGetSeconds(duration)
-            guard seconds.isFinite, seconds > 0 else { throw RecordingExportError.missingVideoTrack }
+            let assetSeconds = CMTimeGetSeconds(duration)
+            guard assetSeconds.isFinite, assetSeconds > 0 else { throw RecordingExportError.missingVideoTrack }
             let tracks = try await asset.loadTracks(withMediaType: .video)
             guard let track = tracks.first else { throw RecordingExportError.missingVideoTrack }
 
-            let targetFPS = gifTargetFPS(duration: seconds)
+            let start = max(0, min(assetSeconds, requestedRange?.lowerBound ?? 0))
+            let end = max(start, min(assetSeconds, requestedRange?.upperBound ?? assetSeconds))
+            let seconds = end - start
+            guard seconds > 0.001 else { throw RecordingExportError.gifCreationFailed }
+            let targetFPS = min(requestedFPS ?? gifTargetFPS(duration: seconds), 600 / seconds)
             let targetInterval = 1.0 / max(0.1, targetFPS)
             let estimatedFrames = max(1, min(600, Int(ceil(seconds * targetFPS))))
             guard let destinationRef = CGImageDestinationCreateWithURL(
@@ -258,11 +333,15 @@ enum RecordingExporter {
             output.alwaysCopiesSampleData = true
             guard reader.canAdd(output) else { throw RecordingExportError.missingVideoTrack }
             reader.add(output)
+            reader.timeRange = CMTimeRange(
+                start: CMTime(seconds: start, preferredTimescale: 600),
+                duration: CMTime(seconds: seconds, preferredTimescale: 600)
+            )
             guard reader.startReading() else {
                 throw RecordingExportError.exportFailed(reader.error?.localizedDescription ?? L.text("无法读取视频。"))
             }
 
-            var nextTime = 0.0
+            var nextTime = start
             var pending: (image: CGImage, time: Double)?
             var emitted = 0
             while reader.status == .reading, emitted < 600 {
@@ -272,14 +351,14 @@ enum RecordingExporter {
                       let pixelBuffer = CMSampleBufferGetImageBuffer(sample),
                       let image = makeGIFImage(
                         from: pixelBuffer,
-                        maxWidth: 720,
+                        maxWidth: maxWidth,
                         watermarkConfiguration: watermarkConfiguration,
                         watermarkContext: watermarkContext
                       ) else { continue }
                 if let previous = pending {
                     addGIFFrame(previous.image, to: destinationRef, delay: max(0.02, pts - previous.time))
                     emitted += 1
-                    progress?(.encoding, min(0.98, pts / seconds))
+                    progress?(.encoding, min(0.98, (pts - start) / seconds))
                 }
                 pending = (image, pts)
                 nextTime = pts + targetInterval
@@ -288,7 +367,7 @@ enum RecordingExporter {
                 throw RecordingExportError.exportFailed(reader.error?.localizedDescription ?? L.text("GIF 读取失败。"))
             }
             if let pending, emitted < 600 {
-                let finalDelay = max(0.02, max(seconds - pending.time, targetInterval))
+                let finalDelay = max(0.02, max(end - pending.time, targetInterval))
                 addGIFFrame(
                     pending.image,
                     to: destinationRef,
@@ -302,6 +381,22 @@ enum RecordingExporter {
             progress?(.finalizing, 1)
             return destination
         }.value
+    }
+
+    private static func runExportSession(_ session: AVAssetExportSession) async throws {
+        let sessionBox = SendableExportSession(session)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            session.exportAsynchronously {
+                switch sessionBox.value.status {
+                case .completed: continuation.resume()
+                case .cancelled: continuation.resume(throwing: CancellationError())
+                default:
+                    continuation.resume(throwing: RecordingExportError.exportFailed(
+                        sessionBox.value.error?.localizedDescription ?? L.text("未知错误。")
+                    ))
+                }
+            }
+        }
     }
 
     private static func addGIFFrame(_ image: CGImage, to destination: CGImageDestination, delay: Double) {

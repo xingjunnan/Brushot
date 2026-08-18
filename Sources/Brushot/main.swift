@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Carbon
 import CoreGraphics
 import Darwin
@@ -522,6 +523,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registerInitialHotKeys()
         AppPreferences.syncLaunchAtLogin()
         RecordingPreviewWindowController.cleanupExpiredClipboardFiles()
+        DispatchQueue.main.async { [weak self] in
+            self?.captureController.offerRecordingRecoveryIfNeeded()
+        }
     }
 
     /// Accessory applications do not get the standard application menu that
@@ -2294,6 +2298,97 @@ final class CaptureController {
         closeOverlays()
     }
 
+    func offerRecordingRecoveryIfNeeded() {
+        guard recordingSession == nil, recordingPreview == nil, !isExportingRecording,
+              let file = RecordingRecoveryStore.recoverableFiles().first else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            let ext = file.pathExtension.lowercased()
+            if ext == "gif" {
+                let imageSize = NSImage(contentsOf: file)?.size ?? CGSize(width: 640, height: 360)
+                guard self.confirmRecovery(file: file) else { return }
+                self.showRecoveredPreview(file: file, format: .gif, duration: 0, pixelSize: imageSize)
+                return
+            }
+            do {
+                let asset = AVURLAsset(url: file)
+                guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+                    try? FileManager.default.removeItem(at: file)
+                    self.offerRecordingRecoveryIfNeeded()
+                    return
+                }
+                let duration = CMTimeGetSeconds(try await asset.load(.duration))
+                guard duration.isFinite, duration > 0 else {
+                    try? FileManager.default.removeItem(at: file)
+                    self.offerRecordingRecoveryIfNeeded()
+                    return
+                }
+                let naturalSize = try await track.load(.naturalSize)
+                let transform = try await track.load(.preferredTransform)
+                let transformed = CGRect(origin: .zero, size: naturalSize).applying(transform)
+                let pixelSize = CGSize(width: abs(transformed.width), height: abs(transformed.height))
+                guard self.confirmRecovery(file: file) else { return }
+                if ext == "mp4" {
+                    self.showRecoveredPreview(file: file, format: .video, duration: duration, pixelSize: pixelSize)
+                } else {
+                    self.finishRecording(RecordingResult(
+                        sourceURL: file,
+                        duration: duration,
+                        format: .video,
+                        pixelSize: pixelSize,
+                        capturedAt: Date(),
+                        watermarkConfiguration: nil
+                    ))
+                }
+            } catch {
+                try? FileManager.default.removeItem(at: file)
+                self.offerRecordingRecoveryIfNeeded()
+            }
+        }
+    }
+
+    private func confirmRecovery(file: URL) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = L.text("发现未保存的录制")
+        alert.informativeText = L.text("Brushot 找到上次未保存的录制文件。要现在恢复并打开预览吗？")
+        alert.addButton(withTitle: L.text("恢复"))
+        alert.addButton(withTitle: L.text("丢弃"))
+        alert.addButton(withTitle: L.text("稍后"))
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return true
+        case .alertSecondButtonReturn:
+            try? FileManager.default.removeItem(at: file)
+            DispatchQueue.main.async { [weak self] in self?.offerRecordingRecoveryIfNeeded() }
+            return false
+        default:
+            return false
+        }
+    }
+
+    private func showRecoveredPreview(
+        file: URL,
+        format: RecordingFormat,
+        duration: TimeInterval,
+        pixelSize: CGSize
+    ) {
+        let preview = RecordingPreviewWindowController(
+            fileURL: file,
+            format: format,
+            duration: duration,
+            pixelSize: pixelSize,
+            onClose: { [weak self] in
+                self?.recordingPreview = nil
+                DispatchQueue.main.async { [weak self] in self?.offerRecordingRecoveryIfNeeded() }
+            }
+        )
+        recordingPreview = preview
+        preview.showWindow(nil)
+        preview.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     private var canBeginCaptureFlow: Bool {
         overlayWindows.isEmpty && selfTimerCountdown == nil &&
             recordingSession == nil && !isExportingRecording &&
@@ -2729,9 +2824,10 @@ final class CaptureController {
         recordingExportProgress = progressWindow
         progressWindow.showWindow(nil)
         progressWindow.window?.makeKeyAndOrderFront(nil)
-        let exportedURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("Brushot-Export-\(UUID().uuidString)")
-            .appendingPathExtension(result.format.fileExtension)
+        let exportedURL = RecordingRecoveryStore.makeURL(
+            prefix: "Export",
+            extension: result.format.fileExtension
+        )
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -2765,7 +2861,6 @@ final class CaptureController {
                 self.isExportingRecording = false
                 progressWindow.close()
                 self.recordingExportProgress = nil
-                try? FileManager.default.removeItem(at: result.sourceURL)
                 try? FileManager.default.removeItem(at: exportedURL)
                 self.showFailureAlert(message: error.localizedDescription)
             }

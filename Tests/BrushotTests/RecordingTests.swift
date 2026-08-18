@@ -55,6 +55,52 @@ final class RecordingCoreTests: XCTestCase {
         XCTAssertTrue(RecordingExporter.needsAudioMix(trackCount: 2))
     }
 
+    func testRecordingEditPlanTrimsMergesDeletionsAndBuildsRetainedRanges() {
+        var plan = RecordingEditPlan(duration: 20, trimStart: 2, trimEnd: 18)
+        plan.addDeletedRange(from: 5, to: 8)
+        plan.addDeletedRange(from: 7, to: 10)
+
+        XCTAssertEqual(plan.deletedRanges, [5...10])
+        XCTAssertEqual(plan.retainedRanges, [2...5, 10...18])
+        XCTAssertEqual(plan.outputDuration, 11, accuracy: 0.001)
+        XCTAssertTrue(plan.hasEdits)
+
+        plan.removeLastDeletedRange()
+        XCTAssertEqual(plan.retainedRanges, [2...18])
+    }
+
+    func testGIFOptionsClampUnsafeValues() {
+        let options = RecordingGIFOptions(startTime: -2, endTime: 4, maxWidth: 20, framesPerSecond: 120)
+        XCTAssertEqual(options.startTime, 0)
+        XCTAssertEqual(options.endTime, 4)
+        XCTAssertEqual(options.maxWidth, 160)
+        XCTAssertEqual(options.framesPerSecond, 30)
+    }
+
+    func testRecoveryStoreKeepsRecentRecordingsAndExpiresOldFiles() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Brushot-RecoveryTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let recent = directory.appendingPathComponent("recent.mp4")
+        let expired = directory.appendingPathComponent("expired.mov")
+        let empty = directory.appendingPathComponent("empty.gif")
+        try Data([1, 2, 3]).write(to: recent)
+        try Data([4]).write(to: expired)
+        try Data().write(to: empty)
+        let now = Date()
+        try FileManager.default.setAttributes(
+            [.modificationDate: now.addingTimeInterval(-8 * 24 * 60 * 60)],
+            ofItemAtPath: expired.path
+        )
+
+        let recovered = RecordingRecoveryStore.recoverableFiles(in: directory, now: now)
+        XCTAssertEqual(recovered.count, 1)
+        XCTAssertEqual(recovered.first?.resolvingSymlinksInPath(), recent.resolvingSymlinksInPath())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: expired.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: empty.path))
+    }
+
     func testKnownVirtualMicrophonesAreHidden() {
         XCTAssertFalse(RecordingMicrophones.shouldShowDevice(named: "iFlyrecAudioDevice"))
         XCTAssertFalse(RecordingMicrophones.shouldShowDevice(named: "IdeaShare 2ch"))
@@ -78,9 +124,11 @@ final class RecordingExporterTests: XCTestCase {
     func testRecordingWriterAcceptsScreenCaptureStylePixelBuffers() async throws {
         let output = temporaryURL(extension: "mov")
         let mixedOutput = temporaryURL(extension: "mp4")
+        let editedOutput = temporaryURL(extension: "mp4")
         defer {
             try? FileManager.default.removeItem(at: output)
             try? FileManager.default.removeItem(at: mixedOutput)
+            try? FileManager.default.removeItem(at: editedOutput)
         }
         let writer = try RecordingWriter(
             outputURL: output,
@@ -111,6 +159,14 @@ final class RecordingExporterTests: XCTestCase {
         XCTAssertEqual(tracks.count, 1)
         let sourceAudioTracks = try await AVURLAsset(url: output).loadTracks(withMediaType: .audio)
         XCTAssertEqual(sourceAudioTracks.count, 2)
+
+        _ = try await RecordingExporter.exportEditedMP4(
+            source: output,
+            destination: editedOutput,
+            plan: RecordingEditPlan(duration: duration, trimStart: 0.1, trimEnd: duration)
+        )
+        let editedAudioTracks = try await AVURLAsset(url: editedOutput).loadTracks(withMediaType: .audio)
+        XCTAssertEqual(editedAudioTracks.count, 2)
 
         _ = try await RecordingExporter.export(source: output, format: .video, destination: mixedOutput)
         let mixedAudioTracks = try await AVURLAsset(url: mixedOutput).loadTracks(withMediaType: .audio)
@@ -166,6 +222,38 @@ final class RecordingExporterTests: XCTestCase {
         let plainFrame = try firstGIFFrame(from: plain)
         let watermarkedFrame = try firstGIFFrame(from: watermarked)
         XCTAssertGreaterThan(try changedPixelCount(between: plainFrame, and: watermarkedFrame), 0)
+    }
+
+    func testEditedMP4FrameExtractionAndConfiguredGIFExport() async throws {
+        let source = try await makeSyntheticMOV(width: 320, height: 180, frameCount: 30, fps: 10)
+        let edited = temporaryURL(extension: "mp4")
+        let gif = temporaryURL(extension: "gif")
+        defer {
+            try? FileManager.default.removeItem(at: source)
+            try? FileManager.default.removeItem(at: edited)
+            try? FileManager.default.removeItem(at: gif)
+        }
+
+        var plan = RecordingEditPlan(duration: 3, trimStart: 0.5, trimEnd: 2.5)
+        plan.addDeletedRange(from: 1, to: 1.5)
+        _ = try await RecordingExporter.exportEditedMP4(source: source, destination: edited, plan: plan)
+        let editedDuration = CMTimeGetSeconds(try await AVURLAsset(url: edited).load(.duration))
+        XCTAssertEqual(editedDuration, 1.5, accuracy: 0.15)
+
+        let frame = try await RecordingExporter.extractFrame(source: edited, at: 0.2)
+        XCTAssertEqual(frame.width, 320)
+        XCTAssertEqual(frame.height, 180)
+
+        _ = try await RecordingExporter.exportGIFSegment(
+            source: source,
+            destination: gif,
+            options: RecordingGIFOptions(startTime: 1, endTime: 2, maxWidth: 160, framesPerSecond: 8)
+        )
+        let imageSource = try XCTUnwrap(CGImageSourceCreateWithURL(gif as CFURL, nil))
+        XCTAssertLessThanOrEqual(CGImageSourceGetCount(imageSource), 8)
+        let properties = try XCTUnwrap(CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any])
+        XCTAssertEqual(properties[kCGImagePropertyPixelWidth] as? Int, 160)
+        XCTAssertEqual(properties[kCGImagePropertyPixelHeight] as? Int, 90)
     }
 
     private func makeSyntheticMOV(
@@ -397,6 +485,40 @@ private final class TestAssetWriterBox: @unchecked Sendable {
 
 @MainActor
 final class RecordingInteractionTests: XCTestCase {
+    func testTimelineDirectlyTrimsSelectsAndFindsDeletedRanges() {
+        let timeline = RecordingTimelineView(frame: CGRect(x: 0, y: 0, width: 640, height: 76))
+        timeline.duration = 10
+        timeline.trimStart = 0
+        timeline.trimEnd = 10
+        var changedTrim: (TimeInterval, TimeInterval)?
+        var trimEnded = false
+        timeline.onTrimChanged = { changedTrim = ($0, $1); _ = $2 }
+        timeline.onTrimEnded = { trimEnded = true }
+        let x: (TimeInterval) -> CGFloat = { 16 + 608 * CGFloat($0 / 10) }
+
+        timeline.beginInteraction(atX: x(0))
+        timeline.continueInteraction(atX: x(2))
+        timeline.endInteraction()
+
+        XCTAssertEqual(changedTrim?.0 ?? -1, 2, accuracy: 0.02)
+        XCTAssertEqual(changedTrim?.1 ?? -1, 10, accuracy: 0.02)
+        XCTAssertTrue(trimEnded)
+
+        timeline.isRangeSelectionEnabled = true
+        timeline.beginInteraction(atX: x(3))
+        timeline.continueInteraction(atX: x(5))
+        timeline.endInteraction()
+        XCTAssertEqual(timeline.pendingSelection?.lowerBound ?? -1, 3, accuracy: 0.02)
+        XCTAssertEqual(timeline.pendingSelection?.upperBound ?? -1, 5, accuracy: 0.02)
+
+        timeline.isRangeSelectionEnabled = false
+        timeline.deletedRanges = [6...7]
+        var selectedDeletedIndex: Int?
+        timeline.onDeletedRangeSelected = { selectedDeletedIndex = $0 }
+        timeline.beginInteraction(atX: x(6.5))
+        XCTAssertEqual(selectedDeletedIndex, 0)
+    }
+
     func testRecordingControlsStayAboveLiveAnnotationOverlay() {
         XCTAssertGreaterThan(
             RecordingSessionController.controlWindowLevel.rawValue,
@@ -586,6 +708,47 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertNotNil(views.compactMap { $0 as? NSSlider }.first {
             $0.identifier?.rawValue == "recordingPreviewVolume"
         })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingEditingControls" })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingTimeline" })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingDeleteRange" })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingDeleteConfirm" })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingDeletePreview" })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingDeleteCancel" })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingDeleteRestore" })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingEditUndo" })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingEditRedo" })
+        XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingTrimStart" })
+        XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingDeleteStart" })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingExtractFrame" })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingConvertGIF" })
+
+        let timeline = try XCTUnwrap(views.first {
+            $0.identifier?.rawValue == "recordingTimeline"
+        } as? RecordingTimelineView)
+        let delete = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "recordingDeleteRange"
+        })
+        let confirm = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "recordingDeleteConfirm"
+        })
+        let undo = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "recordingEditUndo"
+        })
+        controller.window?.contentView?.layoutSubtreeIfNeeded()
+        delete.performClick(nil)
+        XCTAssertTrue(timeline.isRangeSelectionEnabled)
+        let timelineX: (TimeInterval) -> CGFloat = { time in
+            16 + max(1, timeline.bounds.width - 32) * CGFloat(time / 12)
+        }
+        timeline.beginInteraction(atX: timelineX(3))
+        timeline.continueInteraction(atX: timelineX(5))
+        timeline.endInteraction()
+        XCTAssertFalse(confirm.isHidden)
+        confirm.performClick(nil)
+        XCTAssertEqual(timeline.deletedRanges.count, 1)
+        XCTAssertTrue(undo.isEnabled)
+        undo.performClick(nil)
+        XCTAssertTrue(timeline.deletedRanges.isEmpty)
         controller.close()
     }
 
@@ -616,6 +779,7 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertNil(views.compactMap { $0 as? NSSlider }.first {
             $0.identifier?.rawValue == "recordingPreviewVolume"
         })
+        XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingEditingControls" })
         controller.close()
     }
 

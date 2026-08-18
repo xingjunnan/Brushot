@@ -434,7 +434,6 @@ final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate {
             }
         } catch {
             reset()
-            try? FileManager.default.removeItem(at: sourceURL)
             throw error
         }
         guard duration > 0 else {
@@ -489,11 +488,11 @@ final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate {
         Task { @MainActor [weak self] in
             guard let self, self.state != .stopping else { return }
             self.stopElapsedTimer()
-            let url = self.sourceURL
             let writer = self.writer
             await self.microphoneCapture?.stop()
-            self.sampleQueue.async { writer?.cancel() }
-            if let url { try? FileManager.default.removeItem(at: url) }
+            self.sampleQueue.async {
+                writer?.finish { _ in }
+            }
             self.reset()
             self.onUnexpectedStop?(error)
         }
@@ -505,9 +504,7 @@ final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 
     private static func temporaryURL(extension pathExtension: String) -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("Brushot-Recording-\(UUID().uuidString)")
-            .appendingPathExtension(pathExtension)
+        RecordingRecoveryStore.makeURL(prefix: "Recording", extension: pathExtension)
     }
 
     private func startElapsedTimer() {
@@ -575,6 +572,7 @@ final class RecordingWriter: @unchecked Sendable {
     ) throws {
         try? FileManager.default.removeItem(at: outputURL)
         assetWriter = try AVAssetWriter(outputURL: outputURL, fileType: .mov)
+        assetWriter.movieFragmentInterval = CMTime(seconds: 2, preferredTimescale: 600)
         let bitsPerSecond = min(20_000_000, max(2_000_000, width * height * max(1, fps) / 10))
         let videoSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264,
