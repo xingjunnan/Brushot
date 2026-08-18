@@ -22,26 +22,26 @@ It supports macOS 13 or later on both Apple Silicon and Intel Macs through a Uni
 - right-click or double-click secondary annotation for pinned images
 - on-device Chinese and English text recognition using macOS Vision, with editable result preview
 - on-device English-to-Simplified-Chinese translation on macOS 15 or later using Apple Translation
-- unified MP4 video and adaptive GIF area recording with optional system audio, selectable built-in/external microphone, cursor capture, pause/resume, and live annotations
+- unified MP4 video and adaptive GIF area recording with a 3–2–1 start countdown, optional system audio, selectable built-in/external microphone, cursor capture, pause/resume, and live annotations
 - recording preview with save, clipboard copy, and discard actions
 - screen, system audio, and microphone recording permission prompts
 
 ## Capture Workflow
 
-1. Press the configured shortcut or choose `区域截图` from the menu bar.
+1. Press the configured shortcut or choose `Capture Region` from the menu bar.
 2. Drag to select an area.
 3. Move the selection or drag any edge/corner handle to resize it, then choose an annotation tool to freeze the selected image and enter editing mode.
 4. Add and edit annotations, then recognize the original image text, copy the flattened result to the clipboard, or save it to Downloads. Newly created annotations remain selected and can be moved or resized without switching away from the active drawing tool.
 
-The `text.viewfinder` button runs OCR entirely on the Mac and opens an editable result window. On macOS 15 or later, the compact side-by-side result window can translate the currently edited English text into Simplified Chinese using Apple's on-device Translation framework; use the menu bar's `启用 OCR 英译中` check item to turn this feature on or off. On macOS 13 and 14 the menu shows a disabled compatibility note instead. macOS may ask to download the language models on first use. Copying either the original or translated text writes plain text to the clipboard. In annotation mode OCR always reads the frozen original screenshot, so arrows, text, mosaic, and other annotations are ignored.
+The `text.viewfinder` button runs OCR entirely on the Mac and opens an editable result window. On macOS 15 or later, the compact side-by-side result window can translate the currently edited English text into Simplified Chinese using Apple's on-device Translation framework; use the menu bar's `Enable OCR English to Chinese` check item to turn this feature on or off. On macOS 13 and 14 the menu shows a disabled compatibility note instead. macOS may ask to download the language models on first use. Copying either the original or translated text writes plain text to the clipboard. In annotation mode OCR always reads the frozen original screenshot, so arrows, text, mosaic, and other annotations are ignored.
 
-Use `Command + C` or `Command + S` while the selection is active for the copy and save actions. Global shortcuts can be changed from `快捷键设置…` in the menu bar.
+Use `Command + C` or `Command + S` while the selection is active for the copy and save actions. Global shortcuts can be changed in `Preferences...` from the menu bar.
 
-Choose `全屏截图` or press `Control + Option + F` to freeze the display under the mouse and preselect its entire area. The normal Brushot action and annotation controls remain available, so the selection can still be adjusted before output.
+Choose `Full Screen Capture` or press `Control + Option + F` to freeze the display under the mouse and preselect its entire area. The normal Brushot action and annotation controls remain available, so the selection can still be adjusted before output.
 
-Choose `延时截图…` or press `Control + Option + D` to select an area first, then start the countdown. Brushot restores the live desktop during the countdown and captures the current pixels when time expires; its border and countdown HUD are hidden before capture. The delay defaults to 5 seconds and can be set from 1 to 60 seconds in Preferences, together with the countdown sound option.
+Choose `Delayed Capture...` or press `Control + Option + D` to select an area first, then start the countdown. Brushot restores the live desktop during the countdown and captures the current pixels when time expires; its border and countdown HUD are hidden before capture. The delay defaults to 5 seconds and can be set from 1 to 60 seconds in Preferences, together with the countdown sound option.
 
-Watermarks can be configured from the menu bar via `水印设置…`, below `偏好设置…`. Brushot supports text, Logo images, or both together, plus position, opacity, size, margin, and text color. Screenshot and recording watermarks can be enabled independently while sharing the same visual style. Recording watermarks are burned into video/GIF pixels using the recording start time for `{date}`, `{time}`, and `{datetime}`. OCR reads the original image.
+Watermarks can be configured from the menu bar via `Watermark Settings...`, below `Preferences...`. Brushot supports text, Logo images, or both together, plus position, opacity, size, margin, and text color. Screenshot and recording watermarks can be enabled independently while sharing the same visual style. Recording watermarks are burned into video/GIF pixels using the recording start time for `{date}`, `{time}`, and `{datetime}`. OCR reads the original image.
 
 Annotation tool shortcuts are `V/R/O/L/A/P/T/N/M/H`. Use `Command + Z` and `Shift + Command + Z` for undo and redo, and Delete to remove the selected annotation. While editing text, `Command + Return` commits and Escape cancels the text edit.
 
@@ -51,9 +51,9 @@ Sequence annotations are numeric badges only and increment automatically. Add ex
 
 ## Recording Workflow
 
-1. Choose `区域录屏` from the menu bar or press its configurable shortcut (default `Option + R`). To record the entire display containing the pointer, choose `全屏录屏` instead.
-2. Confirm the area or full display, then choose `录制视频` or `录制 GIF`. Video can capture system audio, a selected built-in/USB/Bluetooth microphone, or both; GIF is always silent. The `水印` checkbox uses the shared watermark settings and is applied during export before the preview appears, not while recording.
-3. During recording, use the floating controls to pause, resume, stop, or cancel. The real-time annotation bar follows the screenshot toolbar style and provides select, rectangle, arrow, pen, color, stroke width, undo, and redo controls; annotations enter both video and GIF output while the red border and controls stay excluded.
+1. Choose `Record Region` from the menu bar or press its configurable shortcut (default `Option + R`). To record the entire display containing the pointer, choose `Record Full Screen` instead.
+2. Confirm the area or full display, then choose `Start Recording Video` or `Start Recording GIF`. Video can capture system audio, a selected built-in/USB/Bluetooth microphone, or both; GIF is always silent. The `Watermark` checkbox uses the shared watermark settings and is applied during export before the preview appears, not while recording.
+3. A centered 3–2–1 countdown appears before capture starts and can be cancelled. During recording, use the compact floating controls to pause, resume, stop, cancel, or collapse/expand the annotation tools. Full-screen recordings start with the controls collapsed so less of the screen is covered. The real-time annotation bar provides select, rectangle, arrow, pen, color, stroke width, undo, and redo controls; annotations enter both video and GIF output while the countdown, red border, and controls stay excluded.
 4. After export, preview the result and save it to the configured location, copy it to the clipboard, or discard it.
 
 Video is captured at 30 FPS and exported as network-optimized H.264/AAC MP4. When system audio and microphone are both enabled, they are synchronized and mixed into the exported audio. GIF export defaults to 720 pixels wide and 15 FPS; long recordings automatically reduce sampling to keep the result at approximately 600 frames instead of imposing the previous 30-second limit.
@@ -63,13 +63,13 @@ GIF recording stops automatically at 3 minutes. Video recording stops automatica
 ## Pin Workflow
 
 - Click the pin button in the screenshot toolbar to float the selected or annotated result above other windows.
-- Open the menu bar's `贴图` submenu and choose `从剪贴板贴图` to pin PNG, TIFF, or other image content currently on the clipboard.
-- In the same submenu, choose `贴图库…` to reopen, delete, or clear persistent pin history. Identical image content is stored only once.
+- Open the menu bar's `Pins` submenu and choose `Pin from Clipboard` to pin PNG, TIFF, or other image content currently on the clipboard.
+- In the same submenu, choose `Pin Library...` to reopen, delete, or clear persistent pin history. Identical image content is stored only once.
 - Drag a pinned image to move it. After clicking it, use the arrow keys for one-pixel movement or Shift + arrow keys for ten pixels.
 - Right-click a pin to change opacity or corner radius, keep it on the current desktop or show it on every desktop, copy/save it, or annotate it again.
 - Double-clicking a pin opens the complete annotation toolset; completing the edit updates the pin and adds the edited result to history.
-- Use `隐藏全部贴图` / `显示全部贴图` from the menu bar to temporarily toggle every open pin.
-- Choose `快捷键设置…` to customize all global actions. Brushot rejects duplicate combinations and shortcuts already reserved by macOS or other applications.
+- Use `Hide All Pins` / `Show All Pins` from the menu bar to temporarily toggle every open pin.
+- Open `Preferences...` to customize all global actions. Brushot rejects duplicate combinations and shortcuts already reserved by macOS or other applications.
 
 ## Run From Source
 

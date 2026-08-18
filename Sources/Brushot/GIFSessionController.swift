@@ -189,6 +189,11 @@ final class RecordingAnnotationToolbarView: NSView {
     var onStyleChanged: ((NSColor, CGFloat) -> Void)?
     var onUndo: (() -> Void)?
     var onRedo: (() -> Void)?
+    var onPreferredSizeChanged: ((CGSize) -> Void)?
+
+    static let selectionPreferredSize = CGSize(width: 210, height: 40)
+    static let drawingPreferredSize = CGSize(width: 280, height: 72)
+    private(set) var currentPreferredSize = selectionPreferredSize
 
     private let supportedTools: [(AnnotationTool, String)] = [
         (.select, "cursorarrow"),
@@ -249,6 +254,11 @@ final class RecordingAnnotationToolbarView: NSView {
     func setHistory(canUndo: Bool, canRedo: Bool) {
         undoButton.isEnabled = canUndo
         redoButton.isEnabled = canRedo
+    }
+
+    func deactivateTool() {
+        updateToolSelection(.select)
+        onToolSelected?(.select)
     }
 
     private func configureLayout() {
@@ -376,6 +386,11 @@ final class RecordingAnnotationToolbarView: NSView {
             button.contentTintColor = candidate == tool ? .systemBlue : .labelColor
         }
         styleRow.isHidden = tool == .select
+        let preferredSize = tool == .select ? Self.selectionPreferredSize : Self.drawingPreferredSize
+        if currentPreferredSize != preferredSize {
+            currentPreferredSize = preferredSize
+            onPreferredSizeChanged?(preferredSize)
+        }
     }
 
     private func notifyStyleChanged() {
@@ -450,6 +465,10 @@ private final class GIFBorderView: NSView {
 /// Owns the video/GIF recording phase after the capture rectangle has been
 /// chosen. Both formats share the same streaming recorder and live annotation
 /// overlay; format-specific export happens after the recording stops.
+enum RecordingCountdown {
+    static let seconds = [3, 2, 1]
+}
+
 @MainActor
 final class RecordingSessionController: NSObject {
     private let selectionRect: CGRect
@@ -468,15 +487,27 @@ final class RecordingSessionController: NSObject {
     private let pauseButton = NSButton(title: L.text("暂停"), target: nil, action: nil)
     private let finishButton = NSButton(title: L.text("停止"), target: nil, action: nil)
     private let cancelButton = NSButton(title: L.text("取消"), target: nil, action: nil)
+    private let collapseButton = NSButton()
+    private let countdownLabel = NSTextField(labelWithString: "")
     private let annotationToolbar = RecordingAnnotationToolbarView(
-        frame: CGRect(x: 0, y: 0, width: 340, height: 72)
+        frame: CGRect(origin: .zero, size: RecordingAnnotationToolbarView.selectionPreferredSize)
     )
 
     private var timer: Timer?
+    private var startTask: Task<Void, Never>?
+    private weak var annotationSeparator: NSView?
+    private var annotationSeparatorHeightConstraint: NSLayoutConstraint?
+    private var annotationToolbarWidthConstraint: NSLayoutConstraint?
+    private var annotationToolbarHeightConstraint: NSLayoutConstraint?
+    private var collapseButtonWidthConstraint: NSLayoutConstraint?
+    private var isControlPanelCollapsed = false
     private var isFinished = false
     private var lastDiskCheckAt = Date.distantPast
 
     nonisolated static let borderExpansion: CGFloat = 3
+    nonisolated static let expandedControlSize = CGSize(width: 550, height: 48)
+    nonisolated static let drawingControlSize = CGSize(width: 620, height: 84)
+    nonisolated static let collapsedControlSize = CGSize(width: 360, height: 48)
     static let annotationWindowLevel = NSWindow.Level.screenSaver
     static let controlWindowLevel = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
 
@@ -512,7 +543,7 @@ final class RecordingSessionController: NSObject {
         borderWindow.isReleasedWhenClosed = false
 
         controlWindow = GIFOverlayPanel(
-            contentRect: CGRect(x: 0, y: 0, width: 760, height: 84),
+            contentRect: CGRect(origin: .zero, size: Self.expandedControlSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -536,6 +567,21 @@ final class RecordingSessionController: NSObject {
         annotationWindow.contentView = annotationView
 
         super.init()
+        countdownLabel.font = .monospacedDigitSystemFont(ofSize: 48, weight: .bold)
+        countdownLabel.textColor = .white
+        countdownLabel.alignment = .center
+        countdownLabel.wantsLayer = true
+        countdownLabel.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.68).cgColor
+        countdownLabel.layer?.cornerRadius = 18
+        countdownLabel.translatesAutoresizingMaskIntoConstraints = false
+        countdownLabel.isHidden = true
+        annotationView.addSubview(countdownLabel)
+        NSLayoutConstraint.activate([
+            countdownLabel.widthAnchor.constraint(equalToConstant: 72),
+            countdownLabel.heightAnchor.constraint(equalToConstant: 72),
+            countdownLabel.centerXAnchor.constraint(equalTo: annotationView.centerXAnchor),
+            countdownLabel.centerYAnchor.constraint(equalTo: annotationView.centerYAnchor)
+        ])
         engine.onUnexpectedStop = { [weak self] error in
             guard let self, !self.isFinished else { return }
             self.cleanup()
@@ -546,24 +592,47 @@ final class RecordingSessionController: NSObject {
 
     func start() {
         guard !isFinished else { return }
+        let screen = NSScreen.screens.first { $0.frame.intersects(selectionRect) } ?? NSScreen.main
+        setControlPanelCollapsed(
+            Self.shouldStartWithCollapsedControls(
+                selectionRect: selectionRect,
+                screenFrame: screen?.frame ?? selectionRect
+            ),
+            reposition: false
+        )
         positionControlPanel()
         annotationWindow.orderFrontRegardless()
         borderWindow.orderFrontRegardless()
         controlWindow.orderFrontRegardless()
         capturer.exceptedWindowIDs.insert(CGWindowID(annotationWindow.windowNumber))
         updateStatus(elapsed: 0)
+        pauseButton.isEnabled = false
+        finishButton.isEnabled = false
 
-        Task { [weak self] in
+        startTask = Task { [weak self] in
             guard let self else { return }
             // Rebuild the filter now that Brushot's border/control windows
             // are on screen, so they are excluded from every recorded frame.
             await self.capturer.prepareForOverlayExclusion()
             do {
+                for second in RecordingCountdown.seconds {
+                    try Task.checkCancellation()
+                    guard !self.isFinished else { return }
+                    self.countdownLabel.stringValue = "\(second)"
+                    self.countdownLabel.isHidden = false
+                    self.statusLabel.stringValue = L.format("录制将在 %d 秒后开始", second)
+                    try await Task.sleep(for: .seconds(1))
+                }
+                guard !self.isFinished else { return }
+                self.countdownLabel.isHidden = true
                 try await self.engine.start(
                     capturer: self.capturer,
                     configuration: self.configuration
                 )
+                self.pauseButton.isEnabled = true
+                self.finishButton.isEnabled = true
             } catch {
+                if error is CancellationError { return }
                 self.cleanup()
                 self.onError(error)
                 return
@@ -583,16 +652,20 @@ final class RecordingSessionController: NSObject {
     @objc private func pauseAction() {
         if engine.state == .recording {
             engine.pause()
-            pauseButton.title = L.text("继续")
+            updatePauseButton(paused: true)
             updateStatus(elapsed: engine.elapsedTime)
         } else if engine.state == .paused {
             engine.resume()
-            pauseButton.title = L.text("暂停")
+            updatePauseButton(paused: false)
         }
     }
 
     @objc private func cancelAction() {
         cancel()
+    }
+
+    @objc private func toggleControlPanel() {
+        setControlPanelCollapsed(!isControlPanelCollapsed, reposition: true)
     }
 
     func finish() {
@@ -671,6 +744,8 @@ final class RecordingSessionController: NSObject {
 
     private func cleanup() {
         isFinished = true
+        startTask?.cancel()
+        startTask = nil
         timer?.invalidate()
         timer = nil
         annotationWindow.orderOut(nil)
@@ -713,21 +788,29 @@ final class RecordingSessionController: NSObject {
         dotContainer.addSubview(dot)
         dotContainer.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
+            dotContainer.widthAnchor.constraint(equalToConstant: 8),
+            dotContainer.heightAnchor.constraint(equalToConstant: 8),
             dot.widthAnchor.constraint(equalToConstant: 8),
             dot.heightAnchor.constraint(equalToConstant: 8),
             dot.centerXAnchor.constraint(equalTo: dotContainer.centerXAnchor),
             dot.centerYAnchor.constraint(equalTo: dotContainer.centerYAnchor)
         ])
 
+        configureControlButton(finishButton, symbol: "stop.fill", title: L.text("停止"), tint: .systemRed)
         finishButton.target = self
         finishButton.action = #selector(finishAction)
         finishButton.keyEquivalent = "\r"
-        finishButton.bezelColor = NSColor.systemRed
+        configureControlButton(pauseButton, symbol: "pause.fill", title: L.text("暂停"))
         pauseButton.target = self
         pauseButton.action = #selector(pauseAction)
+        configureControlButton(cancelButton, symbol: "xmark", title: L.text("取消"))
         cancelButton.target = self
         cancelButton.action = #selector(cancelAction)
         cancelButton.keyEquivalent = "\u{1b}"
+        configureControlButton(collapseButton, symbol: "chevron.left", title: L.text("收起录制工具栏"))
+        collapseButton.target = self
+        collapseButton.action = #selector(toggleControlPanel)
+        collapseButton.identifier = NSUserInterfaceItemIdentifier("recordingControlsCollapse")
 
         annotationToolbar.onToolSelected = { [weak self] tool in
             self?.selectRecordingAnnotationTool(tool)
@@ -737,6 +820,9 @@ final class RecordingSessionController: NSObject {
         }
         annotationToolbar.onUndo = { [weak self] in self?.annotationView.undoLast() }
         annotationToolbar.onRedo = { [weak self] in self?.annotationView.redoLast() }
+        annotationToolbar.onPreferredSizeChanged = { [weak self] size in
+            self?.updateAnnotationToolbarSize(size)
+        }
         annotationView.onHistoryChanged = { [weak self] canUndo, canRedo in
             self?.annotationToolbar.setHistory(canUndo: canUndo, canRedo: canRedo)
         }
@@ -746,30 +832,121 @@ final class RecordingSessionController: NSObject {
         statusRow.orientation = .horizontal
         statusRow.alignment = .centerY
         statusRow.spacing = 7
-        let actionRow = NSStackView(views: [pauseButton, cancelButton, finishButton])
-        actionRow.orientation = .horizontal
-        actionRow.alignment = .centerY
-        actionRow.spacing = 8
-        let recordingControls = NSStackView(views: [statusRow, actionRow])
-        recordingControls.orientation = .vertical
-        recordingControls.alignment = .trailing
-        recordingControls.spacing = 8
+        let recordingControls = NSStackView(views: [
+            statusRow, pauseButton, cancelButton, finishButton, collapseButton
+        ])
+        recordingControls.orientation = .horizontal
+        recordingControls.alignment = .centerY
+        recordingControls.spacing = 6
 
         annotationToolbar.translatesAutoresizingMaskIntoConstraints = false
-        let stack = NSStackView(views: [annotationToolbar, makeSeparator(height: 56), recordingControls])
+        let separator = makeSeparator(height: 28)
+        annotationSeparator = separator
+        annotationSeparatorHeightConstraint = separator.constraints.first {
+            $0.firstAttribute == .height
+        }
+        let stack = NSStackView(views: [annotationToolbar, separator, recordingControls])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         background.addSubview(stack)
+        let toolbarWidth = annotationToolbar.widthAnchor.constraint(
+            equalToConstant: RecordingAnnotationToolbarView.selectionPreferredSize.width
+        )
+        let toolbarHeight = annotationToolbar.heightAnchor.constraint(
+            equalToConstant: RecordingAnnotationToolbarView.selectionPreferredSize.height
+        )
+        annotationToolbarWidthConstraint = toolbarWidth
+        annotationToolbarHeightConstraint = toolbarHeight
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 12),
             stack.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -10),
             stack.centerYAnchor.constraint(equalTo: background.centerYAnchor),
-            annotationToolbar.widthAnchor.constraint(equalToConstant: 340),
-            annotationToolbar.heightAnchor.constraint(equalToConstant: 72),
-            statusLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 220)
+            toolbarWidth,
+            toolbarHeight,
+            statusLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 130)
         ])
+    }
+
+    nonisolated static func shouldStartWithCollapsedControls(
+        selectionRect: CGRect,
+        screenFrame: CGRect
+    ) -> Bool {
+        abs(selectionRect.minX - screenFrame.minX) <= 2
+            && abs(selectionRect.minY - screenFrame.minY) <= 2
+            && abs(selectionRect.width - screenFrame.width) <= 2
+            && abs(selectionRect.height - screenFrame.height) <= 2
+    }
+
+    private func setControlPanelCollapsed(_ collapsed: Bool, reposition: Bool) {
+        isControlPanelCollapsed = collapsed
+        annotationToolbar.isHidden = collapsed
+        annotationSeparator?.isHidden = collapsed
+        if collapsed { annotationToolbar.deactivateTool() }
+        let title = collapsed ? L.text("展开录制工具栏") : L.text("收起录制工具栏")
+        collapseButtonWidthConstraint?.constant = collapsed ? 72 : 30
+        collapseButton.title = collapsed ? L.text("标注") : ""
+        collapseButton.image = NSImage(
+            systemSymbolName: collapsed ? "pencil.tip" : "chevron.left",
+            accessibilityDescription: title
+        )?.withSymbolConfiguration(.init(pointSize: 13, weight: .semibold))
+        collapseButton.imagePosition = collapsed ? .imageLeading : .imageOnly
+        collapseButton.isBordered = collapsed
+        collapseButton.bezelStyle = .rounded
+        collapseButton.toolTip = title
+        collapseButton.setAccessibilityLabel(title)
+        let size = collapsed
+            ? Self.collapsedControlSize
+            : expandedControlSize(for: annotationToolbar.currentPreferredSize)
+        controlWindow.setContentSize(size)
+        if reposition { positionControlPanel() }
+    }
+
+    private func updateAnnotationToolbarSize(_ size: CGSize) {
+        annotationToolbarWidthConstraint?.constant = size.width
+        annotationToolbarHeightConstraint?.constant = size.height
+        annotationSeparatorHeightConstraint?.constant = size.height
+            > RecordingAnnotationToolbarView.selectionPreferredSize.height ? 56 : 28
+        guard !isControlPanelCollapsed else { return }
+        controlWindow.setContentSize(expandedControlSize(for: size))
+        positionControlPanel()
+    }
+
+    private func expandedControlSize(for toolbarSize: CGSize) -> CGSize {
+        toolbarSize.height > RecordingAnnotationToolbarView.selectionPreferredSize.height
+            ? Self.drawingControlSize
+            : Self.expandedControlSize
+    }
+
+    private func configureControlButton(
+        _ button: NSButton,
+        symbol: String,
+        title: String,
+        tint: NSColor = .labelColor
+    ) {
+        button.title = ""
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .semibold))
+        button.imagePosition = .imageOnly
+        button.isBordered = false
+        button.contentTintColor = tint
+        button.toolTip = title
+        button.setAccessibilityLabel(title)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        let widthConstraint = button.widthAnchor.constraint(equalToConstant: 30)
+        widthConstraint.isActive = true
+        if button === collapseButton { collapseButtonWidthConstraint = widthConstraint }
+        button.heightAnchor.constraint(equalToConstant: 28).isActive = true
+    }
+
+    private func updatePauseButton(paused: Bool) {
+        let symbol = paused ? "play.fill" : "pause.fill"
+        let title = L.text(paused ? "继续" : "暂停")
+        pauseButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .semibold))
+        pauseButton.toolTip = title
+        pauseButton.setAccessibilityLabel(title)
     }
 
     private func positionControlPanel() {

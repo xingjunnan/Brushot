@@ -55,6 +55,10 @@ final class RecordingCoreTests: XCTestCase {
         XCTAssertTrue(RecordingExporter.needsAudioMix(trackCount: 2))
     }
 
+    func testRecordingCountdownUsesThreeTwoOne() {
+        XCTAssertEqual(RecordingCountdown.seconds, [3, 2, 1])
+    }
+
     func testRecordingEditPlanTrimsMergesDeletionsAndBuildsRetainedRanges() {
         var plan = RecordingEditPlan(duration: 20, trimStart: 2, trimEnd: 18)
         plan.addDeletedRange(from: 5, to: 8)
@@ -597,6 +601,30 @@ final class RecordingInteractionTests: XCTestCase {
         )
     }
 
+    func testFullscreenRecordingStartsWithCompactControls() {
+        let screen = CGRect(x: 0, y: 0, width: 1_920, height: 1_080)
+        XCTAssertTrue(RecordingSessionController.shouldStartWithCollapsedControls(
+            selectionRect: screen,
+            screenFrame: screen
+        ))
+        XCTAssertFalse(RecordingSessionController.shouldStartWithCollapsedControls(
+            selectionRect: CGRect(x: 100, y: 100, width: 1_200, height: 700),
+            screenFrame: screen
+        ))
+        XCTAssertLessThan(
+            RecordingSessionController.collapsedControlSize.width,
+            RecordingSessionController.expandedControlSize.width
+        )
+        XCTAssertLessThan(
+            RecordingSessionController.collapsedControlSize.height,
+            RecordingSessionController.drawingControlSize.height
+        )
+        XCTAssertLessThan(
+            RecordingSessionController.expandedControlSize.width,
+            RecordingSessionController.drawingControlSize.width
+        )
+    }
+
     func testFormatChooserOffersVideoGIFAndPersistedAudioToggle() throws {
         let originalAudioPreference = RecordingPreferences.systemAudioEnabled()
         let originalMicrophonePreference = RecordingPreferences.microphoneEnabled()
@@ -624,6 +652,9 @@ final class RecordingInteractionTests: XCTestCase {
         let microphone = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingMicrophone" })
         let microphonePopup = try XCTUnwrap(descendants(of: bar).compactMap { $0 as? NSPopUpButton }.first {
             $0.identifier?.rawValue == "recordingMicrophoneDevice"
+        })
+        XCTAssertNil(descendants(of: bar).first {
+            $0.identifier?.rawValue == "recordingMicrophoneVolume"
         })
         let watermarkButton = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingWatermark" })
         let watermarkInfo = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingWatermarkInfo" })
@@ -702,10 +733,13 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertEqual((rectangle as? AnnotationHoverButton)?.hoverTitle, "矩形")
 
         var selectedTool: AnnotationTool?
+        var preferredSize: CGSize?
         toolbar.onToolSelected = { selectedTool = $0 }
+        toolbar.onPreferredSizeChanged = { preferredSize = $0 }
         rectangle.performClick(nil)
         XCTAssertEqual(selectedTool, .rectangle)
         XCTAssertEqual(rectangle.state, .on)
+        XCTAssertEqual(preferredSize, RecordingAnnotationToolbarView.drawingPreferredSize)
 
         var selectedColor: NSColor?
         toolbar.onStyleChanged = { color, _ in selectedColor = color }
@@ -728,6 +762,12 @@ final class RecordingInteractionTests: XCTestCase {
         toolbar.setHistory(canUndo: true, canRedo: false)
         XCTAssertTrue(undo.isEnabled)
         XCTAssertFalse(redo.isEnabled)
+
+        let select = try XCTUnwrap(buttons.first {
+            $0.identifier?.rawValue == "recordingAnnotation.select"
+        })
+        select.performClick(nil)
+        XCTAssertEqual(preferredSize, RecordingAnnotationToolbarView.selectionPreferredSize)
     }
 
     func testRecordingPreviewOffersSaveCopyDiscardAndDiscardDeletesTempFile() throws {
