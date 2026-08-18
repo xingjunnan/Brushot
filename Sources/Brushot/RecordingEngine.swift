@@ -180,7 +180,7 @@ enum RecordingState: String, Sendable {
 }
 
 enum RecordingLimits {
-    static let gifMaximumDuration: TimeInterval = 3 * 60
+    static let gifMaximumDuration: TimeInterval = 60
     static let videoMaximumDuration: TimeInterval = 2 * 60 * 60
     static let videoCountdownStart: TimeInterval = 60 * 60
 
@@ -189,6 +189,9 @@ enum RecordingLimits {
     }
 
     static func remainingTime(for format: RecordingFormat, elapsed: TimeInterval) -> TimeInterval? {
+        if format == .gif {
+            return max(0, gifMaximumDuration - elapsed)
+        }
         guard format == .video, elapsed >= videoCountdownStart else { return nil }
         return max(0, videoMaximumDuration - elapsed)
     }

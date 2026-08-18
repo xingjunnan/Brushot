@@ -125,10 +125,12 @@ final class RecordingCoreTests: XCTestCase {
         XCTAssertTrue(RecordingMicrophones.shouldShowDevice(named: "外置麦克风"))
     }
 
-    func testRecordingDurationLimitsAndVideoCountdown() {
-        XCTAssertEqual(RecordingLimits.maximumDuration(for: .gif), 180)
+    func testRecordingDurationLimitsAndCountdowns() {
+        XCTAssertEqual(RecordingLimits.maximumDuration(for: .gif), 60)
         XCTAssertEqual(RecordingLimits.maximumDuration(for: .video), 7_200)
-        XCTAssertNil(RecordingLimits.remainingTime(for: .gif, elapsed: 120))
+        XCTAssertEqual(RecordingLimits.remainingTime(for: .gif, elapsed: 0), 60)
+        XCTAssertEqual(RecordingLimits.remainingTime(for: .gif, elapsed: 30), 30)
+        XCTAssertEqual(RecordingLimits.remainingTime(for: .gif, elapsed: 60), 0)
         XCTAssertNil(RecordingLimits.remainingTime(for: .video, elapsed: 3_599))
         XCTAssertEqual(RecordingLimits.remainingTime(for: .video, elapsed: 3_600), 3_600)
         XCTAssertEqual(RecordingLimits.remainingTime(for: .video, elapsed: 7_200), 0)
@@ -633,7 +635,9 @@ final class RecordingInteractionTests: XCTestCase {
         })
         let labels = descendants(of: bar).compactMap { $0 as? NSTextField }
         let audioLabel = try XCTUnwrap(labels.first { $0.stringValue == "视频音频" })
-        let silentHint = try XCTUnwrap(labels.first { $0.stringValue == "录制 GIF 时静音" })
+        let silentHint = try XCTUnwrap(labels.first {
+            $0.stringValue == "GIF 最长 60 秒，建议 30 秒内 · 无声音"
+        })
         var received: [(RecordingFormat, Bool, Bool)] = []
         var receivedWatermarks: [WatermarkConfiguration?] = []
         bar.onStart = { format, systemAudio, microphone, _, watermark in

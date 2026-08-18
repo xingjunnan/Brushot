@@ -863,7 +863,7 @@ final class RecordingStartBar: NSVisualEffectView {
         button.bezelStyle = .circular
         return button
     }()
-    private let silentHint = NSTextField(labelWithString: L.text("录制 GIF 时静音"))
+    private let silentHint = NSTextField(labelWithString: L.text("GIF 最长 60 秒，建议 30 秒内 · 无声音"))
     private var hasMicrophones = false
     private var canUseMicrophonePermission = true
     private var watermarkSetupPopover: WatermarkQuickSetupPopover?
