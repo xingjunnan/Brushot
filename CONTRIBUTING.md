@@ -1,6 +1,6 @@
 # Contributing to Brushot
 
-English | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [繁體中文](README.zh-TW.md)
+This guide is English-only. Read the project README in your language: [English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [繁體中文](README.zh-TW.md)
 
 Thanks for taking the time to improve Brushot. This guide keeps the project predictable for both maintainers and contributors.
 
