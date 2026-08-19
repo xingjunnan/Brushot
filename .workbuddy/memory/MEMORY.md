@@ -24,3 +24,13 @@
 ## 文件结构
 - `main.swift`：AppDelegate、CaptureController、PreCaptureStore、TooltipPreCaptureEventTap、快捷键/偏好/overlay/OCR 等几乎所有逻辑。
 - 其他 Source 文件：Annotation*、GIF*、LongCapture、OCR、Pinning、ScreenRegionCapturer、StreamScreenshotCapturer。
+
+## GitHub 开源化（2026-08-19）
+- 仓库：`xingjunnan/Brushot`。
+- App 本地化：`Resources/{en,zh-Hans,zh-Hant,ja,ko}.lproj/InfoPlist.strings`。
+- README 多语言：根目录放 `README.md`（默认）+ `README.<bcp47>.md`，**GitHub 原生识别**，零依赖。
+  - 仓库 README 用 `zh-CN` / `zh-TW` 命名最稳；`zh-Hans` / `zh-Hant` 用于 App 内部 Localization，别混用。
+  - 已落地 5 版本（en/zh-CN/zh-TW/ja/ko），各 115 行，结构对齐。
+- 顶部 Tab 命中规则：`README.md` + `CONTRIBUTING.md` + `LICENSE` 文件名直接出现对应 Tab。
+- License: MIT（2026 xingjunnan）。
+- 维护：手动同步为主；将来考虑 GitHub Action 自动翻译。

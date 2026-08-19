@@ -1,3 +1,7 @@
+**[English]** | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [繁體中文](README.zh-TW.md)
+
+---
+
 # Brushot
 
 Brushot is a lightweight native macOS screenshot app for fast capture, annotation, OCR, pinning, and screen recording. The current build includes the complete capture and inline annotation loop:
