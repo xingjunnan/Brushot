@@ -3,6 +3,7 @@ import AppKit
 enum WatermarkQuickSetupContext {
     case screenshot
     case recording
+    case export
 
     var actionTitle: String {
         switch self {
@@ -10,6 +11,8 @@ enum WatermarkQuickSetupContext {
             L.text("应用到本次截图")
         case .recording:
             L.text("应用并开启录制水印")
+        case .export:
+            L.text("应用到本次导出")
         }
     }
 
@@ -19,6 +22,8 @@ enum WatermarkQuickSetupContext {
             L.text("添加文字或 Logo，应用到当前截图")
         case .recording:
             L.text("添加文字或 Logo，用于导出的视频或 GIF")
+        case .export:
+            L.text("添加文字或 Logo，用于本次导出")
         }
     }
 }

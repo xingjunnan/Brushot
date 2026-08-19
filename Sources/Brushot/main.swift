@@ -3001,6 +3001,27 @@ final class CaptureController {
     }
 
     private func finishRecording(_ result: RecordingResult) {
+        if result.format == .video {
+            let savedWatermark = result.watermarkConfiguration ?? WatermarkPreferences.load()
+            let availableWatermark = savedWatermark.hasRenderableContent ? savedWatermark : nil
+            let preview = RecordingPreviewWindowController(
+                fileURL: result.sourceURL,
+                format: result.format,
+                duration: result.duration,
+                pixelSize: result.pixelSize,
+                watermarkConfiguration: availableWatermark,
+                watermarkEnabled: result.watermarkConfiguration != nil,
+                capturedAt: result.capturedAt,
+                onClose: { [weak self] in self?.recordingPreview = nil }
+            )
+            recordingPreview?.close()
+            recordingPreview = preview
+            isExportingRecording = false
+            preview.showWindow(nil)
+            preview.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
         isExportingRecording = true
         let progressWindow = RecordingExportProgressWindowController(format: result.format)
         recordingExportProgress = progressWindow

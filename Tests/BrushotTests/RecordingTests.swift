@@ -281,7 +281,16 @@ final class RecordingExporterTests: XCTestCase {
 
         var plan = RecordingEditPlan(duration: 3, trimStart: 0.5, trimEnd: 2.5)
         plan.addDeletedRange(from: 1, to: 1.5)
-        _ = try await RecordingExporter.exportEditedMP4(source: source, destination: edited, plan: plan)
+        var watermark = WatermarkConfiguration.default
+        watermark.isEnabled = true
+        watermark.text = "Brushot"
+        _ = try await RecordingExporter.exportEditedMP4(
+            source: source,
+            destination: edited,
+            plan: plan,
+            watermarkConfiguration: watermark,
+            watermarkContext: WatermarkContext(capturedAt: Date(timeIntervalSince1970: 0))
+        )
         let editedDuration = CMTimeGetSeconds(try await AVURLAsset(url: edited).load(.duration))
         XCTAssertEqual(editedDuration, 1.5, accuracy: 0.15)
 
@@ -870,7 +879,43 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingConvertGIF" })
         XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingFileActions" })
         XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingMetadata" })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingWatermarkControls" })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingExportWatermarkSettings" })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingExportProgressControls" })
+        let watermark = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "recordingExportWatermark"
+        })
+        XCTAssertEqual(watermark.state, .off)
 
+        controller.close()
+    }
+
+    func testVideoRecordingPreviewKeepsPreRecordingWatermarkAsExportDefault() throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Brushot-PreviewTests-\(UUID().uuidString).mov")
+        try Data().write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        var configuration = WatermarkConfiguration.default
+        configuration.text = "Brushot"
+
+        let controller = RecordingPreviewWindowController(
+            fileURL: file,
+            format: .video,
+            duration: 12,
+            pixelSize: CGSize(width: 320, height: 180),
+            watermarkConfiguration: configuration,
+            watermarkEnabled: true,
+            onClose: {}
+        )
+        let watermark = try XCTUnwrap(
+            descendants(of: try XCTUnwrap(controller.window?.contentView))
+                .compactMap { $0 as? NSButton }
+                .first { $0.identifier?.rawValue == "recordingExportWatermark" }
+        )
+
+        XCTAssertEqual(watermark.state, .on)
+        watermark.performClick(nil)
+        XCTAssertEqual(watermark.state, .off)
         controller.close()
     }
 

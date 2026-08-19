@@ -79,6 +79,8 @@ enum RecordingExporter {
         source: URL,
         destination: URL,
         plan: RecordingEditPlan,
+        watermarkConfiguration: WatermarkConfiguration? = nil,
+        watermarkContext: WatermarkContext = WatermarkContext(capturedAt: Date()),
         progress: Progress? = nil
     ) async throws -> URL {
         guard FileManager.default.fileExists(atPath: source.path) else {
@@ -104,15 +106,24 @@ enum RecordingExporter {
             insertionTime = CMTimeAdd(insertionTime, timeRange.duration)
         }
         let preferredTransform = try await sourceVideo.load(.preferredTransform)
-        composition.tracks(withMediaType: .video).forEach { $0.preferredTransform = preferredTransform }
+        let compositionVideos = composition.tracks(withMediaType: .video)
+        compositionVideos.forEach { $0.preferredTransform = preferredTransform }
         guard let session = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHighestQuality) else {
             throw RecordingExportError.exportFailed(L.text("无法创建 MP4 导出器。"))
         }
         session.outputURL = destination
         session.outputFileType = .mp4
         session.shouldOptimizeForNetworkUse = true
+        if let watermarkConfiguration, let compositionVideo = compositionVideos.first {
+            session.videoComposition = try await makeWatermarkVideoComposition(
+                videoTrack: compositionVideo,
+                duration: insertionTime,
+                configuration: watermarkConfiguration,
+                context: watermarkContext
+            )
+        }
         progress?(.encoding, 0.1)
-        try await runExportSession(session)
+        try await runExportSession(session, progress: progress)
         progress?(.finalizing, 1)
         return destination
     }
@@ -200,7 +211,7 @@ enum RecordingExporter {
         session.audioMix = audioMix
         session.videoComposition = videoComposition
         progress?(.encoding, 0.1)
-        try await runExportSession(session)
+        try await runExportSession(session, progress: progress)
         progress?(.finalizing, 1)
         return destination
     }
@@ -391,19 +402,38 @@ enum RecordingExporter {
         }.value
     }
 
-    private static func runExportSession(_ session: AVAssetExportSession) async throws {
+    private static func runExportSession(
+        _ session: AVAssetExportSession,
+        progress: Progress? = nil
+    ) async throws {
         let sessionBox = SendableExportSession(session)
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            session.exportAsynchronously {
-                switch sessionBox.value.status {
-                case .completed: continuation.resume()
-                case .cancelled: continuation.resume(throwing: CancellationError())
-                default:
-                    continuation.resume(throwing: RecordingExportError.exportFailed(
-                        sessionBox.value.error?.localizedDescription ?? L.text("未知错误。")
-                    ))
+        let progressTask = Task.detached(priority: .utility) {
+            while !Task.isCancelled {
+                let status = sessionBox.value.status
+                if status == .completed || status == .cancelled || status == .failed { break }
+                if status == .exporting {
+                    let fraction = min(0.98, 0.1 + Double(sessionBox.value.progress) * 0.88)
+                    progress?(.encoding, fraction)
+                }
+                try? await Task.sleep(for: .milliseconds(150))
+            }
+        }
+        defer { progressTask.cancel() }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                session.exportAsynchronously {
+                    switch sessionBox.value.status {
+                    case .completed: continuation.resume()
+                    case .cancelled: continuation.resume(throwing: CancellationError())
+                    default:
+                        continuation.resume(throwing: RecordingExportError.exportFailed(
+                            sessionBox.value.error?.localizedDescription ?? L.text("未知错误。")
+                        ))
+                    }
                 }
             }
+        } onCancel: {
+            sessionBox.value.cancelExport()
         }
     }
 
