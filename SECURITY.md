@@ -1,7 +1,5 @@
 # Security Policy
 
-English | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [繁體中文](README.zh-TW.md)
-
 Brushot requests some of the most sensitive permissions on macOS — screen capture, system audio, microphone, and (optionally) accessibility. We take bugs that affect those surfaces seriously.
 
 ## Supported Versions
