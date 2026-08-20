@@ -11,6 +11,7 @@ It supports macOS 13 or later on both Apple Silicon and Intel Macs through a Uni
 - menu bar app
 - configurable global shortcuts for area, full-screen, delayed, and scrolling capture, recording, clipboard pinning, the pin library, and hiding/showing pins
 - drag-to-select capture overlay
+- smart detection of the topmost window under the pointer: click to select the window, or drag to draw a free-form region
 - single-display full-screen capture with automatic mouse-display targeting
 - 1–60 second delayed area capture with an optional countdown sound
 - selection action bar with cancel, local OCR, copy, and save actions
@@ -109,7 +110,6 @@ macOS screen recording permission is required on first use. For permission testi
 
 The first capture requires macOS screen recording permission. If permission is denied, enable Brushot in System Settings > Privacy & Security > Screen & System Audio Recording, then relaunch the app.
 
-## Next Core Features
+## Distribution TODO
 
-- capture active window
 - Developer ID signing and notarization
