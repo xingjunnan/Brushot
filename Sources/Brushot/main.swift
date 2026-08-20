@@ -312,6 +312,7 @@ enum TranslationPreferences {
 enum AppPreferences {
     private static let launchAtLoginKey = "launchAtLogin"
     private static let saveLocationKey = "saveLocation"
+    private static let saveLocationBookmarkKey = "saveLocationBookmark"
     private static let imageFormatKey = "imageFormat"
     private static let selectionMagnifierEnabledKey = "selectionMagnifierEnabled"
     private static let completionSoundEnabledKey = "completionSoundEnabled"
@@ -344,19 +345,59 @@ enum AppPreferences {
     // MARK: - Save location
 
     static var saveLocation: URL {
-        get {
-            if let path = UserDefaults.standard.string(forKey: saveLocationKey),
-               !path.isEmpty {
-                return URL(fileURLWithPath: path)
+        get { saveLocation(defaults: .standard) }
+        set {
+            // This setter remains non-throwing for tests and migration code.
+            // UI selections use `setSaveLocation` so bookmark failures can be
+            // surfaced instead of leaving an unusable path behind.
+            do {
+                try setSaveLocation(newValue, defaults: .standard)
+            } catch {
+                UserDefaults.standard.set(newValue.path, forKey: saveLocationKey)
+                UserDefaults.standard.removeObject(forKey: saveLocationBookmarkKey)
             }
-            return defaultSaveLocation
         }
-        set { UserDefaults.standard.set(newValue.path, forKey: saveLocationKey) }
+    }
+
+    static func saveLocation(defaults: UserDefaults) -> URL {
+        if let bookmark = defaults.data(forKey: saveLocationBookmarkKey),
+           let resolved = try? SandboxFileAccess.resolve(bookmark) {
+            if resolved.isStale,
+               let refreshed = try? SandboxFileAccess.bookmark(for: resolved.url) {
+                defaults.set(refreshed, forKey: saveLocationBookmarkKey)
+            }
+            return resolved.url
+        }
+
+        if let path = defaults.string(forKey: saveLocationKey), !path.isEmpty {
+            let legacyURL = URL(fileURLWithPath: path).standardizedFileURL
+            // Direct-distribution builds and unit tests may continue using a
+            // legacy path. A sandboxed build can safely retain only Downloads;
+            // arbitrary legacy paths have no persisted sandbox extension.
+            if !SandboxFileAccess.isSandboxed || isInsideDownloads(legacyURL) {
+                return legacyURL
+            }
+        }
+        return defaultSaveLocation
+    }
+
+    static func setSaveLocation(_ url: URL, defaults: UserDefaults = .standard) throws {
+        let standardizedURL = url.standardizedFileURL
+        let bookmark = try SandboxFileAccess.bookmark(for: standardizedURL)
+        SandboxFileAccess.retainAccess(to: standardizedURL)
+        defaults.set(standardizedURL.path, forKey: saveLocationKey)
+        defaults.set(bookmark, forKey: saveLocationBookmarkKey)
     }
 
     static var defaultSaveLocation: URL {
         FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser
+    }
+
+    private static func isInsideDownloads(_ url: URL) -> Bool {
+        let downloads = defaultSaveLocation.standardizedFileURL
+        let candidate = url.standardizedFileURL
+        return candidate == downloads || candidate.path.hasPrefix(downloads.path + "/")
     }
 
     // MARK: - Image format
@@ -1546,8 +1587,16 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         panel.allowsMultipleSelection = false
         panel.directoryURL = AppPreferences.saveLocation
         if panel.runModal() == .OK, let url = panel.url {
-            AppPreferences.saveLocation = url
-            saveLocationLabel.stringValue = url.path
+            do {
+                try AppPreferences.setSaveLocation(url)
+                saveLocationLabel.stringValue = url.path
+            } catch {
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = L.text("无法使用所选保存位置")
+                alert.informativeText = error.localizedDescription
+                alert.runModal()
+            }
         }
     }
 

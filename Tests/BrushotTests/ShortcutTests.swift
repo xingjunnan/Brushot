@@ -5,6 +5,24 @@ import XCTest
 
 @MainActor
 final class ShortcutTests: XCTestCase {
+    func testSaveLocationPersistsSecurityScopedBookmark() throws {
+        let suiteName = "Brushot.SaveLocation.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Brushot-Sandbox-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        try AppPreferences.setSaveLocation(directory, defaults: defaults)
+
+        XCTAssertEqual(
+            AppPreferences.saveLocation(defaults: defaults).standardizedFileURL,
+            directory.standardizedFileURL
+        )
+        XCTAssertNotNil(defaults.data(forKey: "saveLocationBookmark"))
+    }
+
     @MainActor
     func testApplicationEditMenuProvidesStandardTextResponderShortcuts() throws {
         let menu = AppDelegate().makeApplicationMenu()

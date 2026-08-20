@@ -66,6 +66,7 @@ lipo -create "${ARCH_BINARIES[@]}" -output "$MACOS_DIR/Brushot"
 
 cp "$RESOURCES_DIR/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$RESOURCES_DIR/AppIcon.icns" "$APP_RESOURCES_DIR/AppIcon.icns"
+cp "$RESOURCES_DIR/container-migration.plist" "$APP_RESOURCES_DIR/container-migration.plist"
 find "$RESOURCES_DIR" -name '*.lproj' -type d -maxdepth 1 -exec cp -R {} "$APP_RESOURCES_DIR/" \;
 
 PLIST_BUNDLE_IDENTIFIER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$CONTENTS_DIR/Info.plist")"
