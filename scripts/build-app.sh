@@ -78,10 +78,17 @@ fi
 # are sealed as part of the app. Prefer an explicitly configured identity, then
 # the identity already used by /Applications/Brushot.app, then a Developer ID
 # Application identity when available, then the first Apple Development identity
-# in the user's keychain.
+# in the user's keychain. A legacy explicit "-" no longer forces an ad-hoc
+# signature when a valid identity is available because doing so changes the app's
+# designated requirement and makes macOS request privacy permissions again.
 EXPLICIT_CODE_SIGN_IDENTITY=false
-if [[ -n "${BRUSHOT_CODESIGN_IDENTITY:-}" ]]; then
-    CODE_SIGN_IDENTITY="$BRUSHOT_CODESIGN_IDENTITY"
+REQUESTED_CODE_SIGN_IDENTITY="${BRUSHOT_CODESIGN_IDENTITY:-}"
+if [[ "$REQUESTED_CODE_SIGN_IDENTITY" == "-" && "${BRUSHOT_ALLOW_ADHOC_SIGNING:-0}" != "1" ]]; then
+    echo "Ignoring legacy ad-hoc signing request; selecting a stable installed identity."
+    REQUESTED_CODE_SIGN_IDENTITY=""
+fi
+if [[ -n "$REQUESTED_CODE_SIGN_IDENTITY" ]]; then
+    CODE_SIGN_IDENTITY="$REQUESTED_CODE_SIGN_IDENTITY"
     EXPLICIT_CODE_SIGN_IDENTITY=true
 elif CODE_SIGN_IDENTITY="$(installed_signing_identity)"; then
     :

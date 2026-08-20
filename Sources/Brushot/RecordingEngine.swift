@@ -338,7 +338,10 @@ final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate {
             streamConfiguration.microphoneCaptureDeviceID = configuration.microphoneDeviceID
         }
 
-        let url = Self.temporaryURL(extension: "mov")
+        let url = Self.temporaryURL(
+            prefix: configuration.format == .gif ? "RecordingGIF" : "Recording",
+            extension: "mov"
+        )
         let recordingWriter: RecordingWriter
         do {
             recordingWriter = try RecordingWriter(
@@ -506,8 +509,8 @@ final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate {
         return positive.isMultiple(of: 2) ? positive : positive - 1
     }
 
-    private static func temporaryURL(extension pathExtension: String) -> URL {
-        RecordingRecoveryStore.makeURL(prefix: "Recording", extension: pathExtension)
+    private static func temporaryURL(prefix: String, extension pathExtension: String) -> URL {
+        RecordingRecoveryStore.makeURL(prefix: prefix, extension: pathExtension)
     }
 
     private func startElapsedTimer() {

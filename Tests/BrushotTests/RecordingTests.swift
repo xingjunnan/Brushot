@@ -121,6 +121,14 @@ final class RecordingCoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: empty.path))
     }
 
+    func testRecoveryStorePreservesRawGIFRecordingIntent() {
+        let gifRecording = URL(fileURLWithPath: "/tmp/Brushot-RecordingGIF-123.mov")
+        let videoRecording = URL(fileURLWithPath: "/tmp/Brushot-Recording-123.mov")
+
+        XCTAssertEqual(RecordingRecoveryStore.intendedFormat(for: gifRecording), .gif)
+        XCTAssertEqual(RecordingRecoveryStore.intendedFormat(for: videoRecording), .video)
+    }
+
     func testKnownVirtualMicrophonesAreHidden() {
         XCTAssertFalse(RecordingMicrophones.shouldShowDevice(named: "iFlyrecAudioDevice"))
         XCTAssertFalse(RecordingMicrophones.shouldShowDevice(named: "IdeaShare 2ch"))
@@ -637,20 +645,12 @@ final class RecordingInteractionTests: XCTestCase {
     func testFormatChooserOffersVideoGIFAndPersistedAudioToggle() throws {
         let originalAudioPreference = RecordingPreferences.systemAudioEnabled()
         let originalMicrophonePreference = RecordingPreferences.microphoneEnabled()
-        let originalWatermarkPreference = WatermarkPreferences.recordingEnabled()
-        let originalWatermark = WatermarkPreferences.load()
         defer {
             RecordingPreferences.setSystemAudioEnabled(originalAudioPreference)
             RecordingPreferences.setMicrophoneEnabled(originalMicrophonePreference)
-            WatermarkPreferences.setRecordingEnabled(originalWatermarkPreference)
-            WatermarkPreferences.save(originalWatermark)
         }
         RecordingPreferences.setSystemAudioEnabled(false)
         RecordingPreferences.setMicrophoneEnabled(false)
-        var watermark = WatermarkConfiguration.default
-        watermark.text = "Brushot"
-        WatermarkPreferences.save(watermark)
-        WatermarkPreferences.setRecordingEnabled(false)
         let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 104))
         let buttons = descendants(of: bar).compactMap { $0 as? NSButton }
         let start = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "startRecordingAction" })
@@ -665,10 +665,8 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertNil(descendants(of: bar).first {
             $0.identifier?.rawValue == "recordingMicrophoneVolume"
         })
-        let watermarkButton = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingWatermark" })
-        let watermarkInfo = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingWatermarkInfo" })
-        XCTAssertTrue(watermarkButton.isEnabled)
-        XCTAssertEqual(watermarkInfo.toolTip, "导出时添加水印，不会出现在录制过程中")
+        XCTAssertNil(buttons.first { $0.identifier?.rawValue == "recordingWatermark" })
+        XCTAssertNil(buttons.first { $0.identifier?.rawValue == "recordingWatermarkInfo" })
         XCTAssertFalse(microphonePopup.isHidden)
         XCTAssertNotNil(microphonePopup.constraints.first {
             $0.firstAttribute == .width && $0.constant >= 170
@@ -686,7 +684,6 @@ final class RecordingInteractionTests: XCTestCase {
         }
 
         audio.performClick(nil)
-        watermarkButton.performClick(nil)
         start.performClick(nil)
         format.selectedSegment = 1
         format.performClick(nil)
@@ -695,41 +692,21 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertTrue(microphone.isHidden)
         XCTAssertTrue(microphonePopup.isHidden)
         XCTAssertFalse(silentHint.isHidden)
-        bar.layoutSubtreeIfNeeded()
-        XCTAssertGreaterThanOrEqual(watermarkButton.frame.minX - silentHint.frame.maxX, 24)
         XCTAssertEqual(start.title, "开始录制 GIF")
         start.performClick(nil)
 
         XCTAssertEqual(received.map(\.0), [.video, .gif])
         XCTAssertEqual(received.map(\.1), [true, false])
         XCTAssertEqual(received.map(\.2), [false, false])
-        XCTAssertEqual(receivedWatermarks.compactMap { $0?.text }, ["Brushot", "Brushot"])
+        XCTAssertTrue(receivedWatermarks.allSatisfy { $0 == nil })
         XCTAssertTrue(RecordingPreferences.systemAudioEnabled())
-        XCTAssertTrue(WatermarkPreferences.recordingEnabled())
     }
 
-    func testRecordingWatermarkCheckboxExplainsMissingContent() throws {
-        let originalWatermarkPreference = WatermarkPreferences.recordingEnabled()
-        let originalWatermark = WatermarkPreferences.load()
-        defer {
-            WatermarkPreferences.setRecordingEnabled(originalWatermarkPreference)
-            WatermarkPreferences.save(originalWatermark)
-        }
-        WatermarkPreferences.save(.default)
-        WatermarkPreferences.setRecordingEnabled(true)
-
+    func testRecordingFormatChooserDoesNotOfferWatermarkBeforeRecording() {
         let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 104))
         let buttons = descendants(of: bar).compactMap { $0 as? NSButton }
-        let watermarkButton = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingWatermark" })
-        let watermarkInfo = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingWatermarkInfo" })
-        let labels = descendants(of: bar).compactMap { $0 as? NSTextField }
-
-        XCTAssertTrue(watermarkButton.isEnabled)
-        XCTAssertEqual(watermarkButton.state, .off)
-        XCTAssertEqual(watermarkButton.toolTip, "设置水印")
-        XCTAssertEqual(watermarkInfo.toolTip, "导出时添加水印，不会出现在录制过程中")
-        XCTAssertFalse(WatermarkPreferences.recordingEnabled())
-        XCTAssertFalse(labels.contains { $0.stringValue.contains("录制水印会增加导出时间") })
+        XCTAssertNil(buttons.first { $0.identifier?.rawValue == "recordingWatermark" })
+        XCTAssertNil(buttons.first { $0.identifier?.rawValue == "recordingWatermarkInfo" })
     }
 
     func testRecordingAnnotationToolbarMatchesScreenshotToolbarStyle() throws {
@@ -851,7 +828,8 @@ final class RecordingInteractionTests: XCTestCase {
             pixelSize: CGSize(width: 320, height: 180),
             onClose: {}
         )
-        let views = descendants(of: try XCTUnwrap(controller.window?.contentView))
+        let content = try XCTUnwrap(controller.window?.contentView)
+        let views = descendants(of: content)
 
         XCTAssertTrue(try XCTUnwrap(controller.window).styleMask.contains(.resizable))
         XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingPreviewPlayer" })
@@ -871,8 +849,8 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingDeletePreview" })
         XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingDeleteCancel" })
         XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingDeleteRestore" })
-        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingEditUndo" })
-        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingEditRedo" })
+        XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingEditUndo" })
+        XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingEditRedo" })
         XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingTrimStart" })
         XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingDeleteStart" })
         XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingExtractFrame" })
@@ -880,12 +858,28 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingFileActions" })
         XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingMetadata" })
         XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingWatermarkControls" })
-        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingExportWatermarkSettings" })
+        let watermarkSettings = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "recordingExportWatermarkSettings"
+        })
+        XCTAssertEqual(watermarkSettings.title, "编辑水印…")
         XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingExportProgressControls" })
         let watermark = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first {
             $0.identifier?.rawValue == "recordingExportWatermark"
         })
         XCTAssertEqual(watermark.state, .off)
+        let watermarkStatus = try XCTUnwrap(views.compactMap { $0 as? NSTextField }.first {
+            $0.identifier?.rawValue == "recordingExportWatermarkHint"
+        })
+        XCTAssertTrue(watermarkStatus.isHidden)
+        XCTAssertEqual(watermarkStatus.stringValue, "")
+        let watermarkControls = try XCTUnwrap(views.first {
+            $0.identifier?.rawValue == "recordingWatermarkControls"
+        })
+        let playerView = try XCTUnwrap(views.first {
+            $0.identifier?.rawValue == "recordingPreviewPlayer"
+        })
+        controller.window?.contentView?.layoutSubtreeIfNeeded()
+        XCTAssertEqual(watermarkControls.frame.width, playerView.frame.width, accuracy: 1)
 
         controller.close()
     }
@@ -907,15 +901,20 @@ final class RecordingInteractionTests: XCTestCase {
             watermarkEnabled: true,
             onClose: {}
         )
-        let watermark = try XCTUnwrap(
-            descendants(of: try XCTUnwrap(controller.window?.contentView))
-                .compactMap { $0 as? NSButton }
-                .first { $0.identifier?.rawValue == "recordingExportWatermark" }
-        )
+        let views = descendants(of: try XCTUnwrap(controller.window?.contentView))
+        let watermark = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "recordingExportWatermark"
+        })
+        let status = try XCTUnwrap(views.compactMap { $0 as? NSTextField }.first {
+            $0.identifier?.rawValue == "recordingExportWatermarkHint"
+        })
 
         XCTAssertEqual(watermark.state, .on)
+        XCTAssertFalse(status.isHidden)
+        XCTAssertEqual(status.stringValue, "保存或复制时添加，导出时间可能稍长")
         watermark.performClick(nil)
         XCTAssertEqual(watermark.state, .off)
+        XCTAssertTrue(status.isHidden)
         controller.close()
     }
 
@@ -1020,7 +1019,7 @@ final class RecordingInteractionTests: XCTestCase {
         controller.close()
     }
 
-    func testGIFRecordingPreviewDoesNotShowPlaybackControls() throws {
+    func testExistingGIFFilePreviewDoesNotShowPlaybackControls() throws {
         let file = FileManager.default.temporaryDirectory
             .appendingPathComponent("Brushot-PreviewTests-\(UUID().uuidString).gif")
         let gif = try XCTUnwrap(Data(base64Encoded: "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="))
@@ -1034,7 +1033,9 @@ final class RecordingInteractionTests: XCTestCase {
             pixelSize: CGSize(width: 1, height: 1),
             onClose: {}
         )
-        let views = descendants(of: try XCTUnwrap(controller.window?.contentView))
+        let content = try XCTUnwrap(controller.window?.contentView)
+        content.layoutSubtreeIfNeeded()
+        let views = descendants(of: content)
 
         XCTAssertFalse(try XCTUnwrap(controller.window).styleMask.contains(.resizable))
         XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingPreviewPlayer" })
@@ -1049,6 +1050,86 @@ final class RecordingInteractionTests: XCTestCase {
         })
         XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingEditingControls" })
         controller.close()
+    }
+
+    func testRawGIFRecordingOpensVideoPreviewWithPostRecordingWatermarkControls() throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Brushot-PreviewTests-\(UUID().uuidString).mov")
+        try Data().write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let controller = RecordingPreviewWindowController(
+            fileURL: file,
+            format: .gif,
+            duration: 12,
+            pixelSize: CGSize(width: 320, height: 180),
+            onClose: {}
+        )
+        let content = try XCTUnwrap(controller.window?.contentView)
+        let views = descendants(of: content)
+
+        XCTAssertTrue(try XCTUnwrap(controller.window).styleMask.contains(.resizable))
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingPreviewPlayer" })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingPreviewControls" })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingWatermarkControls" })
+        XCTAssertNotNil(views.first { $0.identifier?.rawValue == "recordingExportProgressControls" })
+        XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingEditingControls" })
+        XCTAssertNil(views.first { $0.identifier?.rawValue == "recordingGIFSelectionControls" })
+        let fileActions = try XCTUnwrap(views.first { $0.identifier?.rawValue == "recordingFileActions" })
+        let watermarkControls = try XCTUnwrap(views.first {
+            $0.identifier?.rawValue == "recordingWatermarkControls"
+        })
+        let playerView = try XCTUnwrap(views.first { $0.identifier?.rawValue == "recordingPreviewPlayer" })
+        content.layoutSubtreeIfNeeded()
+        XCTAssertLessThanOrEqual(fileActions.frame.minY, 16)
+        XCTAssertEqual(watermarkControls.frame.width, playerView.frame.width, accuracy: 1)
+        XCTAssertLessThanOrEqual(content.frame.height, 450)
+        controller.close()
+    }
+
+    func testRecordingCopyCacheKeyReusesOnlyMatchingEditsAndWatermark() {
+        let plan = RecordingEditPlan(duration: 12)
+        var watermark = WatermarkConfiguration.default
+        watermark.text = "Brushot"
+
+        let original = RecordingCopyCacheKey.make(
+            format: .video,
+            editPlan: plan,
+            watermarkEnabled: true,
+            watermarkConfiguration: watermark
+        )
+        let same = RecordingCopyCacheKey.make(
+            format: .video,
+            editPlan: plan,
+            watermarkEnabled: true,
+            watermarkConfiguration: watermark
+        )
+        var trimmedPlan = plan
+        trimmedPlan.setTrimStart(1)
+        let trimmed = RecordingCopyCacheKey.make(
+            format: .video,
+            editPlan: trimmedPlan,
+            watermarkEnabled: true,
+            watermarkConfiguration: watermark
+        )
+        watermark.opacity = 0.4
+        let changedWatermark = RecordingCopyCacheKey.make(
+            format: .video,
+            editPlan: plan,
+            watermarkEnabled: true,
+            watermarkConfiguration: watermark
+        )
+        let watermarkDisabled = RecordingCopyCacheKey.make(
+            format: .video,
+            editPlan: plan,
+            watermarkEnabled: false,
+            watermarkConfiguration: watermark
+        )
+
+        XCTAssertEqual(original, same)
+        XCTAssertNotEqual(original, trimmed)
+        XCTAssertNotEqual(original, changedWatermark)
+        XCTAssertNotEqual(original, watermarkDisabled)
     }
 
     private func descendants(of view: NSView) -> [NSView] {

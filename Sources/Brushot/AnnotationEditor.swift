@@ -1637,7 +1637,7 @@ final class AnnotationToolbarView: NSVisualEffectView {
     var onCopy: (() -> Void)?
     var onSave: (() -> Void)?
     var onWatermarkToggle: ((Bool) -> Void)?
-    var onWatermarkSetup: ((WatermarkConfiguration) -> Void)?
+    var onWatermarkSetup: ((WatermarkConfiguration, Bool) -> Void)?
     var onPreferredSizeChanged: (() -> Void)?
 
     private var currentTool: AnnotationTool = .select
@@ -1689,7 +1689,11 @@ final class AnnotationToolbarView: NSVisualEffectView {
     private var isGIFAvailable = true
     private var hasWatermarkContent = false
     private var isWatermarkEnabled = false
+    private var watermarkConfiguration = WatermarkPreferences.load()
     private var watermarkSetupPopover: WatermarkQuickSetupPopover?
+    private weak var watermarkLogoPickerHostWindow: NSWindow?
+    private var watermarkLogoPickerHostIgnoredMouseEvents = false
+    private var watermarkLogoPickerHostAlpha: CGFloat = 1
     private var canUndo = false
     private var canRedo = false
     private var isPinEditingMode = false
@@ -1767,13 +1771,14 @@ final class AnnotationToolbarView: NSVisualEffectView {
         watermarkButton.isHidden = false
         watermarkButton.state = isWatermarkEnabled ? .on : .off
         watermarkButton.contentTintColor = isWatermarkEnabled ? .systemBlue : .labelColor
-        let watermarkHint: String
+        var watermarkHint: String
         if !hasContent {
             watermarkHint = L.text("设置水印")
         } else {
             watermarkHint = isWatermarkEnabled
                 ? L.text("关闭本次截图水印")
                 : L.text("开启本次截图水印")
+            watermarkHint += L.text("；右键编辑水印")
         }
         watermarkButton.toolTip = watermarkHint
         watermarkButton.hoverTitle = watermarkHint
@@ -1860,6 +1865,16 @@ final class AnnotationToolbarView: NSVisualEffectView {
         mainRow.addArrangedSubview(pinButton)
         watermarkButton.identifier = NSUserInterfaceItemIdentifier("watermarkAction")
         watermarkButton.setButtonType(.toggle)
+        let watermarkMenu = NSMenu()
+        watermarkMenu.autoenablesItems = false
+        let editWatermarkItem = NSMenuItem(
+            title: L.text("编辑水印…"),
+            action: #selector(showWatermarkQuickSetup),
+            keyEquivalent: ""
+        )
+        editWatermarkItem.target = self
+        watermarkMenu.addItem(editWatermarkItem)
+        watermarkButton.menu = watermarkMenu
         watermarkButton.isHidden = true
         mainRow.addArrangedSubview(watermarkButton)
         copyButton.identifier = NSUserInterfaceItemIdentifier("copyAction")
@@ -2180,20 +2195,43 @@ final class AnnotationToolbarView: NSVisualEffectView {
         onWatermarkToggle?(isWatermarkEnabled)
     }
 
-    private func showWatermarkQuickSetup() {
+    @objc private func showWatermarkQuickSetup() {
         guard watermarkSetupPopover == nil else { return }
         let setup = WatermarkQuickSetupPopover(
             context: .screenshot,
-            configuration: WatermarkPreferences.load(),
-            onApply: { [weak self] configuration in
-                self?.onWatermarkSetup?(configuration)
+            configuration: watermarkConfiguration,
+            onApply: { [weak self] configuration, saveAsDefault in
+                self?.watermarkConfiguration = configuration
+                self?.onWatermarkSetup?(configuration, saveAsDefault)
             },
             onClose: { [weak self] in
                 self?.watermarkSetupPopover = nil
+            },
+            onLogoPickerVisibilityChanged: { [weak self] isVisible in
+                self?.setWatermarkLogoPickerVisible(isVisible)
             }
         )
         watermarkSetupPopover = setup
         setup.show(relativeTo: watermarkButton)
+    }
+
+    private func setWatermarkLogoPickerVisible(_ isVisible: Bool) {
+        if isVisible {
+            guard let hostWindow = window else { return }
+            watermarkLogoPickerHostWindow = hostWindow
+            watermarkLogoPickerHostIgnoredMouseEvents = hostWindow.ignoresMouseEvents
+            watermarkLogoPickerHostAlpha = hostWindow.alphaValue
+            (hostWindow as? SelectionOverlayWindow)?.setExternalPanelPresented(true)
+            hostWindow.ignoresMouseEvents = true
+            hostWindow.alphaValue = 0
+            NSCursor.arrow.set()
+            return
+        }
+        guard let hostWindow = watermarkLogoPickerHostWindow else { return }
+        hostWindow.ignoresMouseEvents = watermarkLogoPickerHostIgnoredMouseEvents
+        hostWindow.alphaValue = watermarkLogoPickerHostAlpha
+        (hostWindow as? SelectionOverlayWindow)?.setExternalPanelPresented(false)
+        watermarkLogoPickerHostWindow = nil
     }
     @objc private func copyAction() { onCopy?() }
     @objc private func saveAction() { onSave?() }

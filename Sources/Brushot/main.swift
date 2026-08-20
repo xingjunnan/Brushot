@@ -1617,9 +1617,7 @@ private final class FlippedPreferencesView: NSView {
 
 final class WatermarkSettingsWindowController: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     private var watermarkCheckbox: NSButton!
-    private var recordingWatermarkCheckbox: NSButton!
     private var screenshotWatermarkInfoButton: NSButton!
-    private var recordingWatermarkInfoButton: NSButton!
     private var watermarkTextField: NSTextField!
     private var watermarkLogoLabel: NSTextField!
     private var watermarkRepeatModePopUp: NSPopUpButton!
@@ -1631,10 +1629,11 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
     private var watermarkMarginLabel: NSTextField!
     private var watermarkMarginStepper: NSStepper!
     private var watermarkColorWell: NSColorWell!
+    private let watermarkPreviewView = WatermarkEditorPreviewView()
 
     init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 540, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 540, height: 688),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -1657,23 +1656,17 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
     private func configureContentView() {
         guard let contentView = window?.contentView else { return }
         let watermarkConfig = WatermarkPreferences.load()
+        watermarkPreviewView.identifier = NSUserInterfaceItemIdentifier("watermarkSettings.preview")
+        watermarkPreviewView.configuration = watermarkConfig
+        watermarkPreviewView.heightAnchor.constraint(equalToConstant: 150).isActive = true
         watermarkCheckbox = makeCheckbox(
             title: L.text("启用截图水印"),
             action: #selector(toggleWatermarkEnabled)
         )
         watermarkCheckbox.state = watermarkConfig.isEnabled ? .on : .off
-        recordingWatermarkCheckbox = makeCheckbox(
-            title: L.text("应用到录制视频/GIF"),
-            action: #selector(toggleRecordingWatermarkEnabled)
-        )
-        recordingWatermarkCheckbox.state = WatermarkPreferences.recordingEnabled() ? .on : .off
         screenshotWatermarkInfoButton = makeInfoButton(
             identifier: "watermarkScreenshotInfo",
             action: #selector(showScreenshotWatermarkInfo)
-        )
-        recordingWatermarkInfoButton = makeInfoButton(
-            identifier: "watermarkRecordingInfo",
-            action: #selector(showRecordingWatermarkInfo)
         )
         updateWatermarkContentHint(for: watermarkConfig)
 
@@ -1684,7 +1677,11 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         watermarkTextField.delegate = self
         watermarkTextField.translatesAutoresizingMaskIntoConstraints = false
         watermarkTextField.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let textHelper = makeHelperLabel(L.text("可使用 {date}、{time}、{datetime}"))
+        watermarkTextField.toolTip = L.format("最多 %d 个字符", WatermarkConfiguration.maxTextLength)
+        let textHelper = makeHelperLabel(L.format(
+            "可使用 {date}、{time}、{datetime}；最多 %d 个字符",
+            WatermarkConfiguration.maxTextLength
+        ))
         let textGroup = makeFieldGroup(rows: [
             makeRow(label: L.text("文字"), trailingViews: [watermarkTextField]),
             makeIndentedView(textHelper)
@@ -1767,13 +1764,18 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         watermarkColorWell.color = watermarkConfig.textColor
         watermarkColorWell.target = self
         watermarkColorWell.action = #selector(changeWatermarkColor)
+        watermarkColorWell.identifier = NSUserInterfaceItemIdentifier("watermarkSettings.textColor")
+        watermarkColorWell.widthAnchor.constraint(equalToConstant: 54).isActive = true
+        watermarkColorWell.heightAnchor.constraint(equalToConstant: 24).isActive = true
+        watermarkColorWell.setContentHuggingPriority(.required, for: .horizontal)
         let colorRow = makeRow(label: L.text("文字颜色"), trailingViews: [watermarkColorWell])
 
         let section = makeSection(
             title: L.text("水印"),
             views: [
                 makeCheckboxInfoRow(watermarkCheckbox, infoButton: screenshotWatermarkInfoButton),
-                makeCheckboxInfoRow(recordingWatermarkCheckbox, infoButton: recordingWatermarkInfoButton),
+                makeHelperLabel(L.text("录制水印在录制完成后选择")),
+                watermarkPreviewView,
                 textGroup,
                 logoGroup,
                 repeatModeRow,
@@ -1916,28 +1918,13 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         _ = applyWatermarkEnabledState(watermarkCheckbox.state == .on)
     }
 
-    @objc private func toggleRecordingWatermarkEnabled() {
-        let enabled = recordingWatermarkCheckbox.state == .on
-        let config = currentWatermarkConfiguration()
-        if enabled, !config.hasRenderableContent {
-            recordingWatermarkCheckbox.state = .off
-            WatermarkPreferences.setRecordingEnabled(false)
-            updateWatermarkContentHint(for: config)
-            return
-        }
-        WatermarkPreferences.setRecordingEnabled(enabled)
-        updateWatermarkContentHint(for: config)
-    }
-
     @discardableResult
     func applyWatermarkEnabledState(_ enabled: Bool) -> Bool {
         var config = currentWatermarkConfiguration()
         if enabled, !config.hasRenderableContent {
             config.isEnabled = false
             watermarkCheckbox.state = .off
-            recordingWatermarkCheckbox.state = .off
             WatermarkPreferences.save(config)
-            WatermarkPreferences.setRecordingEnabled(false)
             updateWatermarkContentHint(for: config)
             return false
         }
@@ -1950,13 +1937,11 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
 
     @objc private func changeWatermarkText() {
         var config = currentWatermarkConfiguration()
-        config.text = watermarkTextField.stringValue
-        if !config.hasRenderableContent,
-           config.isEnabled || recordingWatermarkCheckbox.state == .on {
+        config.text = WatermarkConfiguration.limitedText(watermarkTextField.stringValue)
+        watermarkTextField.stringValue = config.text
+        if !config.hasRenderableContent, config.isEnabled {
             config.isEnabled = false
             watermarkCheckbox.state = .off
-            recordingWatermarkCheckbox.state = .off
-            WatermarkPreferences.setRecordingEnabled(false)
         }
         WatermarkPreferences.save(config)
         updateWatermarkContentHint(for: config)
@@ -1993,8 +1978,6 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         if !config.hasRenderableContent {
             config.isEnabled = false
             watermarkCheckbox.state = .off
-            recordingWatermarkCheckbox.state = .off
-            WatermarkPreferences.setRecordingEnabled(false)
         }
         WatermarkPreferences.save(config)
         watermarkLogoLabel.stringValue = L.text("未选择")
@@ -2007,12 +1990,14 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         var config = currentWatermarkConfiguration()
         config.position = position
         WatermarkPreferences.save(config)
+        watermarkPreviewView.configuration = config
     }
 
     @objc private func changeWatermarkRepeatMode() {
         let config = currentWatermarkConfiguration()
         watermarkPositionPopUp.isEnabled = config.repeatMode == .single
         WatermarkPreferences.save(config)
+        watermarkPreviewView.configuration = config
     }
 
     @objc private func changeWatermarkOpacity() {
@@ -2020,6 +2005,7 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         config.opacity = CGFloat(watermarkOpacitySlider.doubleValue)
         watermarkOpacityLabel.stringValue = "\(Int(config.opacity * 100))%"
         WatermarkPreferences.save(config)
+        watermarkPreviewView.configuration = config
     }
 
     @objc private func changeWatermarkScale() {
@@ -2027,6 +2013,7 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         config.scale = CGFloat(watermarkScaleSlider.doubleValue)
         watermarkScaleLabel.stringValue = "\(Int(config.scale * 100))%"
         WatermarkPreferences.save(config)
+        watermarkPreviewView.configuration = config
     }
 
     @objc private func changeWatermarkMargin() {
@@ -2034,18 +2021,20 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
         config.margin = CGFloat(watermarkMarginStepper.doubleValue)
         watermarkMarginLabel.stringValue = "\(Int(config.margin)) pt"
         WatermarkPreferences.save(config)
+        watermarkPreviewView.configuration = config
     }
 
     @objc private func changeWatermarkColor() {
         var config = currentWatermarkConfiguration()
         config.textColor = watermarkColorWell.color
         WatermarkPreferences.save(config)
+        watermarkPreviewView.configuration = config
     }
 
     private func currentWatermarkConfiguration() -> WatermarkConfiguration {
         var config = WatermarkPreferences.load()
         config.isEnabled = watermarkCheckbox.state == .on
-        config.text = watermarkTextField.stringValue
+        config.text = WatermarkConfiguration.limitedText(watermarkTextField.stringValue)
         if let rawValue = watermarkRepeatModePopUp.selectedItem?.representedObject as? String,
            let repeatMode = WatermarkConfiguration.RepeatMode(rawValue: rawValue) {
             config.repeatMode = repeatMode
@@ -2066,25 +2055,18 @@ final class WatermarkSettingsWindowController: NSWindowController, NSWindowDeleg
     }
 
     private func updateWatermarkContentHint(for config: WatermarkConfiguration) {
+        watermarkPreviewView.configuration = config
         if config.hasRenderableContent {
             watermarkCheckbox.toolTip = L.text("使用当前文字和 Logo 样式应用截图水印")
-            recordingWatermarkCheckbox.toolTip = L.text("导出时添加水印，不会在录制过程中显示")
             screenshotWatermarkInfoButton.toolTip = L.text("截图水印说明")
-            recordingWatermarkInfoButton.toolTip = L.text("录制水印说明")
         } else {
             watermarkCheckbox.toolTip = L.text("请先填写水印文字或选择 Logo")
-            recordingWatermarkCheckbox.toolTip = L.text("请先填写水印文字或选择 Logo")
             screenshotWatermarkInfoButton.toolTip = L.text("请先填写水印文字或选择 Logo")
-            recordingWatermarkInfoButton.toolTip = L.text("请先填写水印文字或选择 Logo")
         }
     }
 
     @objc private func showScreenshotWatermarkInfo() {
         showWatermarkInfo(scope: .screenshot, relativeTo: screenshotWatermarkInfoButton)
-    }
-
-    @objc private func showRecordingWatermarkInfo() {
-        showWatermarkInfo(scope: .recording, relativeTo: recordingWatermarkInfoButton)
     }
 
     private func showWatermarkInfo(scope: WatermarkInfoViewController.Scope, relativeTo button: NSButton) {
@@ -2281,7 +2263,6 @@ final class CaptureController {
     private var longCapturePreview: LongCapturePreviewWindowController?
     private var recordingSession: RecordingSessionController?
     private var recordingPreview: RecordingPreviewWindowController?
-    private var recordingExportProgress: RecordingExportProgressWindowController?
     private var isExportingRecording = false
     private var isResolvingRecordingPreview = false
     private var selfTimerCountdown: SelfTimerCountdownController?
@@ -2378,7 +2359,7 @@ final class CaptureController {
                     self.finishRecording(RecordingResult(
                         sourceURL: file,
                         duration: duration,
-                        format: .video,
+                        format: RecordingRecoveryStore.intendedFormat(for: file),
                         pixelSize: pixelSize,
                         capturedAt: Date(),
                         watermarkConfiguration: nil
@@ -3001,73 +2982,24 @@ final class CaptureController {
     }
 
     private func finishRecording(_ result: RecordingResult) {
-        if result.format == .video {
-            let savedWatermark = result.watermarkConfiguration ?? WatermarkPreferences.load()
-            let availableWatermark = savedWatermark.hasRenderableContent ? savedWatermark : nil
-            let preview = RecordingPreviewWindowController(
-                fileURL: result.sourceURL,
-                format: result.format,
-                duration: result.duration,
-                pixelSize: result.pixelSize,
-                watermarkConfiguration: availableWatermark,
-                watermarkEnabled: result.watermarkConfiguration != nil,
-                capturedAt: result.capturedAt,
-                onClose: { [weak self] in self?.recordingPreview = nil }
-            )
-            recordingPreview?.close()
-            recordingPreview = preview
-            isExportingRecording = false
-            preview.showWindow(nil)
-            preview.window?.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
-        }
-        isExportingRecording = true
-        let progressWindow = RecordingExportProgressWindowController(format: result.format)
-        recordingExportProgress = progressWindow
-        progressWindow.showWindow(nil)
-        progressWindow.window?.makeKeyAndOrderFront(nil)
-        let exportedURL = RecordingRecoveryStore.makeURL(
-            prefix: "Export",
-            extension: result.format.fileExtension
+        let savedWatermark = WatermarkPreferences.load()
+        let availableWatermark = savedWatermark.hasRenderableContent ? savedWatermark : nil
+        let preview = RecordingPreviewWindowController(
+            fileURL: result.sourceURL,
+            format: result.format,
+            duration: result.duration,
+            pixelSize: result.pixelSize,
+            watermarkConfiguration: availableWatermark,
+            watermarkEnabled: false,
+            capturedAt: result.capturedAt,
+            onClose: { [weak self] in self?.recordingPreview = nil }
         )
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let url = try await RecordingExporter.export(
-                    source: result.sourceURL,
-                    format: result.format,
-                    destination: exportedURL,
-                    watermarkConfiguration: result.watermarkConfiguration,
-                    watermarkContext: WatermarkContext(capturedAt: result.capturedAt),
-                    progress: { [weak progressWindow] stage, fraction in
-                        Task { @MainActor in progressWindow?.update(stage: stage, fraction: fraction) }
-                    }
-                )
-                try? FileManager.default.removeItem(at: result.sourceURL)
-                progressWindow.close()
-                self.recordingExportProgress = nil
-                let preview = RecordingPreviewWindowController(
-                    fileURL: url,
-                    format: result.format,
-                    duration: result.duration,
-                    pixelSize: result.pixelSize,
-                    onClose: { [weak self] in self?.recordingPreview = nil }
-                )
-                self.recordingPreview?.close()
-                self.recordingPreview = preview
-                self.isExportingRecording = false
-                preview.showWindow(nil)
-                preview.window?.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
-            } catch {
-                self.isExportingRecording = false
-                progressWindow.close()
-                self.recordingExportProgress = nil
-                try? FileManager.default.removeItem(at: exportedURL)
-                self.showFailureAlert(message: error.localizedDescription)
-            }
-        }
+        recordingPreview?.close()
+        recordingPreview = preview
+        isExportingRecording = false
+        preview.showWindow(nil)
+        preview.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func showRecordingError(_ error: Error) {
@@ -3477,6 +3409,10 @@ final class SelectionOverlayWindow: NSPanel {
             self?.overlayView?.refreshCursor()
         }
     }
+
+    func setExternalPanelPresented(_ presented: Bool) {
+        overlayView?.setExternalPanelPresented(presented)
+    }
 }
 
 final class SelectionOverlayView: NSView {
@@ -3535,6 +3471,7 @@ final class SelectionOverlayView: NSView {
     private var selectionWatermarkPreviewImage: CGImage?
     private var selectionWatermarkPreviewRect: CGRect?
     private var sessionWatermarkEnabled = WatermarkPreferences.load().isEnabled
+    private var sessionWatermarkConfiguration = WatermarkPreferences.load()
     private var frozenScreenImage: CGImage?
     private var activeAnnotationTool: AnnotationTool = .select
     private var annotationStyles: [AnnotationTool: AnnotationStyle] = Dictionary(
@@ -3597,6 +3534,7 @@ final class SelectionOverlayView: NSView {
     private var isDrawingSyntheticSelectionCursor = false
     private var syntheticSelectionCursorLocation: CGPoint?
     private var didHideSystemCursorForSelection = false
+    private var isExternalPanelPresented = false
     private static let invisibleSelectionCursor: NSCursor = {
         let image = NSImage(size: NSSize(width: 1, height: 1))
         return NSCursor(image: image, hotSpot: .zero)
@@ -3647,6 +3585,10 @@ final class SelectionOverlayView: NSView {
     }
 
     override func resetCursorRects() {
+        if isExternalPanelPresented {
+            addCursorRect(bounds, cursor: .arrow)
+            return
+        }
         addCursorRect(
             bounds,
             cursor: shouldUseSyntheticSelectionCursor ? Self.invisibleSelectionCursor : .crosshair
@@ -3720,6 +3662,11 @@ final class SelectionOverlayView: NSView {
     /// Timer-based fallback that polls ``NSEvent.mouseLocation`` so window
     /// detection works even when ``mouseMoved`` events are not delivered.
     private func pollMousePosition() {
+        guard !isExternalPanelPresented else {
+            restoreSystemCursorIfNeeded()
+            NSCursor.arrow.set()
+            return
+        }
         guard let window else { return }
 
         let mouseLocation = NSEvent.mouseLocation
@@ -3800,7 +3747,23 @@ final class SelectionOverlayView: NSView {
         updateCursorAtCurrentMouseLocation()
     }
 
+    func setExternalPanelPresented(_ presented: Bool) {
+        isExternalPanelPresented = presented
+        window?.invalidateCursorRects(for: self)
+        if presented {
+            restoreSystemCursorIfNeeded()
+            NSCursor.arrow.set()
+        } else {
+            updateCursorAtCurrentMouseLocation()
+        }
+    }
+
     private func updateCursorAtCurrentMouseLocation() {
+        guard !isExternalPanelPresented else {
+            restoreSystemCursorIfNeeded()
+            NSCursor.arrow.set()
+            return
+        }
         guard let window else {
             restoreSystemCursorIfNeeded()
             NSCursor.crosshair.set()
@@ -4529,7 +4492,7 @@ final class SelectionOverlayView: NSView {
     }
 
     private func currentOutputOptions() -> CaptureOutputOptions {
-        var configuration = WatermarkPreferences.load()
+        var configuration = sessionWatermarkConfiguration
         configuration.isEnabled = true
         return CaptureOutputOptions(
             watermarkConfiguration: sessionWatermarkEnabled && configuration.hasRenderableContent ? configuration : nil,
@@ -4670,7 +4633,7 @@ final class SelectionOverlayView: NSView {
     private func setSessionWatermarkEnabled(_ enabled: Bool) {
         sessionWatermarkEnabled = enabled
         actionBar.setWatermarkState(
-            hasContent: WatermarkPreferences.load().hasRenderableContent,
+            hasContent: sessionWatermarkConfiguration.hasRenderableContent,
             enabled: enabled
         )
         if let selection = currentSelection(), isSelectionFinalized {
@@ -4695,6 +4658,15 @@ final class SelectionOverlayView: NSView {
             }
         }
         needsDisplay = true
+    }
+
+    func applySessionWatermark(
+        _ configuration: WatermarkConfiguration,
+        saveAsDefault: Bool
+    ) {
+        sessionWatermarkConfiguration = configuration
+        if saveAsDefault { WatermarkPreferences.saveDefaultStyle(configuration) }
+        setSessionWatermarkEnabled(true)
     }
 
     private func logicalOrigin(for selection: CGRect) -> CGPoint {
@@ -4775,7 +4747,7 @@ final class SelectionOverlayView: NSView {
         let width = min(720, max(520, bounds.width - 16))
         let bar = AnnotationToolbarView(frame: NSRect(x: 0, y: 0, width: width, height: 82))
         bar.setWatermarkState(
-            hasContent: WatermarkPreferences.load().hasRenderableContent,
+            hasContent: sessionWatermarkConfiguration.hasRenderableContent,
             enabled: sessionWatermarkEnabled
         )
         bar.onToolSelected = { [weak self] tool in
@@ -4815,9 +4787,8 @@ final class SelectionOverlayView: NSView {
         bar.onWatermarkToggle = { [weak self] enabled in
             self?.setSessionWatermarkEnabled(enabled)
         }
-        bar.onWatermarkSetup = { [weak self] configuration in
-            WatermarkPreferences.save(configuration)
-            self?.setSessionWatermarkEnabled(true)
+        bar.onWatermarkSetup = { [weak self] configuration, saveAsDefault in
+            self?.applySessionWatermark(configuration, saveAsDefault: saveAsDefault)
         }
         bar.onPreferredSizeChanged = { [weak self] in
             guard let self, let selection = self.currentSelection() else { return }

@@ -1018,32 +1018,10 @@ final class RecordingStartBar: NSVisualEffectView {
         target: self,
         action: #selector(startAction)
     )
-    private let watermarkCheckbox = NSButton(
-        checkboxWithTitle: L.text("水印"),
-        target: nil,
-        action: nil
-    )
     private lazy var audioLabel = makeSectionLabel(L.text("视频音频"))
-    private lazy var watermarkInfoButton: NSButton = {
-        if #available(macOS 11.0, *) {
-            let button = NSButton(
-                image: NSImage(systemSymbolName: "info.circle", accessibilityDescription: L.text("录制水印说明"))
-                    ?? NSImage(size: CGSize(width: 14, height: 14)),
-                target: self,
-                action: #selector(showWatermarkInfo)
-            )
-            button.isBordered = false
-            button.imagePosition = .imageOnly
-            return button
-        }
-        let button = NSButton(title: "?", target: self, action: #selector(showWatermarkInfo))
-        button.bezelStyle = .circular
-        return button
-    }()
     private let silentHint = NSTextField(labelWithString: L.text("GIF 最长 60 秒，建议 30 秒内 · 无声音"))
     private var hasMicrophones = false
     private var canUseMicrophonePermission = true
-    private var watermarkSetupPopover: WatermarkQuickSetupPopover?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1061,9 +1039,6 @@ final class RecordingStartBar: NSVisualEffectView {
         audioCheckbox.target = self
         audioCheckbox.action = #selector(audioChanged)
         audioCheckbox.identifier = NSUserInterfaceItemIdentifier("recordingSystemAudio")
-        watermarkCheckbox.target = self
-        watermarkCheckbox.action = #selector(watermarkChanged)
-        watermarkCheckbox.identifier = NSUserInterfaceItemIdentifier("recordingWatermark")
         let devices = RecordingMicrophones.availableDevices()
         hasMicrophones = !devices.isEmpty
         canUseMicrophonePermission = RecordingMicrophones.canRequestOrUsePermission()
@@ -1112,25 +1087,16 @@ final class RecordingStartBar: NSVisualEffectView {
 
         silentHint.font = .systemFont(ofSize: 12)
         silentHint.textColor = .secondaryLabelColor
-        watermarkInfoButton.identifier = NSUserInterfaceItemIdentifier("recordingWatermarkInfo")
-        watermarkInfoButton.toolTip = L.text("导出时添加水印，不会出现在录制过程中")
-        watermarkInfoButton.widthAnchor.constraint(equalToConstant: 18).isActive = true
-        watermarkInfoButton.heightAnchor.constraint(equalToConstant: 18).isActive = true
         let audioRow = NSStackView(views: [
             audioLabel,
             audioCheckbox,
             microphoneCheckbox,
             microphonePopup,
-            silentHint,
-            watermarkCheckbox,
-            watermarkInfoButton
+            silentHint
         ])
         audioRow.orientation = .horizontal
         audioRow.alignment = .centerY
         audioRow.spacing = 10
-        // NSButton's alignment rect extends slightly beyond its visible frame, so 26
-        // points here yields a visually clear 24-point gap between the two groups.
-        audioRow.setCustomSpacing(26, after: silentHint)
 
         let stack = NSStackView(views: [formatRow, audioRow])
         stack.orientation = .vertical
@@ -1147,19 +1113,11 @@ final class RecordingStartBar: NSVisualEffectView {
             formatLabel.widthAnchor.constraint(equalToConstant: 58),
             audioLabel.widthAnchor.constraint(equalToConstant: 58)
         ])
-        updateWatermarkState()
         updateFormatState()
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    override func viewWillMove(toWindow newWindow: NSWindow?) {
-        if newWindow == nil {
-            watermarkSetupPopover?.close()
-        }
-        super.viewWillMove(toWindow: newWindow)
     }
 
     @objc private func audioChanged() {
@@ -1176,17 +1134,6 @@ final class RecordingStartBar: NSVisualEffectView {
         RecordingPreferences.setMicrophoneDeviceID(selectedMicrophoneID)
     }
 
-    @objc private func watermarkChanged() {
-        guard WatermarkPreferences.load().hasRenderableContent else {
-            watermarkCheckbox.state = .off
-            updateWatermarkState()
-            showWatermarkQuickSetup()
-            return
-        }
-        WatermarkPreferences.setRecordingEnabled(watermarkCheckbox.state == .on)
-        updateWatermarkState()
-    }
-
     private var selectedMicrophoneID: String? {
         microphonePopup.selectedItem?.representedObject as? String
     }
@@ -1194,16 +1141,15 @@ final class RecordingStartBar: NSVisualEffectView {
     @objc private func formatChanged() { updateFormatState() }
 
     @objc private func startAction() {
-        let watermarkConfiguration = WatermarkPreferences.currentRecordingConfiguration()
         if formatControl.selectedSegment == 1 {
-            onStart?(.gif, false, false, nil, watermarkConfiguration)
+            onStart?(.gif, false, false, nil, nil)
         } else {
             onStart?(
                 .video,
                 audioCheckbox.state == .on,
                 microphoneCheckbox.state == .on && microphoneCheckbox.isEnabled,
                 selectedMicrophoneID,
-                watermarkConfiguration
+                nil
             )
         }
     }
@@ -1221,55 +1167,7 @@ final class RecordingStartBar: NSVisualEffectView {
         startButton.title = isVideo ? L.text("开始录制视频") : L.text("开始录制 GIF")
     }
 
-    private func updateWatermarkState() {
-        let hasWatermarkContent = WatermarkPreferences.load().hasRenderableContent
-        if !hasWatermarkContent {
-            watermarkCheckbox.state = .off
-            WatermarkPreferences.setRecordingEnabled(false)
-        } else if WatermarkPreferences.recordingEnabled() {
-            watermarkCheckbox.state = .on
-        }
-        watermarkCheckbox.isEnabled = true
-        watermarkCheckbox.toolTip = hasWatermarkContent
-            ? L.text("导出时添加水印，不会在录制画面中显示")
-            : L.text("设置水印")
-        watermarkInfoButton.toolTip = L.text("导出时添加水印，不会出现在录制过程中")
-    }
-
-    private func showWatermarkQuickSetup() {
-        guard watermarkSetupPopover == nil else { return }
-        let setup = WatermarkQuickSetupPopover(
-            context: .recording,
-            configuration: WatermarkPreferences.load(),
-            onApply: { [weak self] configuration in
-                WatermarkPreferences.save(configuration)
-                WatermarkPreferences.setRecordingEnabled(true)
-                self?.updateWatermarkState()
-            },
-            onClose: { [weak self] in
-                self?.watermarkSetupPopover = nil
-            }
-        )
-        watermarkSetupPopover = setup
-        setup.show(relativeTo: watermarkCheckbox)
-    }
-
     @objc private func cancelAction() { onCancel?() }
-
-    @objc private func showWatermarkInfo() {
-        let popover = NSPopover()
-        popover.behavior = .transient
-        let hasContent = WatermarkPreferences.load().hasRenderableContent
-        popover.contentSize = WatermarkInfoViewController.preferredSize(
-            scope: .recording,
-            hasWatermarkContent: hasContent
-        )
-        popover.contentViewController = WatermarkInfoViewController(
-            scope: .recording,
-            hasWatermarkContent: hasContent
-        )
-        popover.show(relativeTo: watermarkInfoButton.bounds, of: watermarkInfoButton, preferredEdge: .maxY)
-    }
 
     private func makeSectionLabel(_ title: String) -> NSTextField {
         let label = NSTextField(labelWithString: title)

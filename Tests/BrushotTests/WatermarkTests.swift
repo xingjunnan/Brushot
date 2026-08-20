@@ -50,6 +50,38 @@ final class WatermarkTests: XCTestCase {
         XCTAssertFalse(WatermarkPreferences.recordingEnabled(defaults: defaults))
     }
 
+    func testWatermarkTextIsLimitedTo120CharactersWhenSavedAndLoaded() {
+        let defaults = UserDefaults(suiteName: "WatermarkTests.\(UUID().uuidString)")!
+        var config = WatermarkConfiguration.default
+        config.text = String(repeating: "水", count: 150)
+
+        WatermarkPreferences.save(config, defaults: defaults)
+
+        XCTAssertEqual(WatermarkPreferences.load(defaults: defaults).text.count, 120)
+        XCTAssertEqual(defaults.string(forKey: "watermark.text")?.count, 120)
+    }
+
+    func testSavingDefaultStylePreservesScreenshotWatermarkEnableState() {
+        let defaults = UserDefaults(suiteName: "WatermarkTests.\(UUID().uuidString)")!
+        var existing = WatermarkConfiguration.default
+        existing.isEnabled = true
+        existing.text = "旧水印"
+        WatermarkPreferences.save(existing, defaults: defaults)
+
+        var replacement = WatermarkConfiguration.default
+        replacement.isEnabled = false
+        replacement.text = "新水印"
+        replacement.opacity = 0.42
+        replacement.position = .topLeft
+        WatermarkPreferences.saveDefaultStyle(replacement, defaults: defaults)
+
+        let loaded = WatermarkPreferences.load(defaults: defaults)
+        XCTAssertTrue(loaded.isEnabled)
+        XCTAssertEqual(loaded.text, "新水印")
+        XCTAssertEqual(loaded.opacity, 0.42, accuracy: 0.001)
+        XCTAssertEqual(loaded.position, .topLeft)
+    }
+
     func testPreferencesPersistDiagonalTiledRepeatModeAndFallbackToDefault() {
         let defaults = UserDefaults(suiteName: "WatermarkTests.\(UUID().uuidString)")!
         var config = WatermarkConfiguration.default

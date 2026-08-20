@@ -3,52 +3,24 @@ import AVFoundation
 import ImageIO
 import UniformTypeIdentifiers
 
-@MainActor
-final class RecordingExportProgressWindowController: NSWindowController {
-    private let label = NSTextField(labelWithString: L.text("正在准备录制文件…"))
-    private let indicator = NSProgressIndicator()
+struct RecordingCopyCacheKey: Equatable {
+    let format: RecordingFormat
+    let editPlan: RecordingEditPlan
+    let watermarkConfiguration: WatermarkConfiguration?
 
-    init(format: RecordingFormat) {
-        let window = NSWindow(
-            contentRect: CGRect(x: 0, y: 0, width: 360, height: 110),
-            styleMask: [.titled],
-            backing: .buffered,
-            defer: false
+    static func make(
+        format: RecordingFormat,
+        editPlan: RecordingEditPlan,
+        watermarkEnabled: Bool,
+        watermarkConfiguration: WatermarkConfiguration?
+    ) -> Self {
+        var watermark = watermarkEnabled ? watermarkConfiguration : nil
+        watermark?.isEnabled = true
+        return Self(
+            format: format,
+            editPlan: editPlan,
+            watermarkConfiguration: watermark
         )
-        window.title = L.format("正在生成%@", format.displayName)
-        window.isReleasedWhenClosed = false
-        super.init(window: window)
-        guard let content = window.contentView else { return }
-        label.alignment = .center
-        indicator.isIndeterminate = false
-        indicator.minValue = 0
-        indicator.maxValue = 1
-        indicator.style = .bar
-        let stack = NSStackView(views: [label, indicator])
-        stack.orientation = .vertical
-        stack.spacing = 14
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 24),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -24),
-            stack.centerYAnchor.constraint(equalTo: content.centerYAnchor),
-            indicator.widthAnchor.constraint(equalTo: stack.widthAnchor)
-        ])
-        window.center()
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func update(stage: RecordingExportStage, fraction: Double) {
-        label.stringValue = switch stage {
-        case .preparing: L.text("正在准备…")
-        case .encoding: L.text("正在编码…")
-        case .finalizing: L.text("正在完成…")
-        }
-        indicator.doubleValue = min(1, max(0, fraction))
     }
 }
 
@@ -56,6 +28,7 @@ final class RecordingExportProgressWindowController: NSWindowController {
 final class RecordingPreviewWindowController: NSWindowController, NSWindowDelegate {
     private let fileURL: URL
     private let format: RecordingFormat
+    private let usesVideoPreview: Bool
     private let pixelSize: CGSize
     private let onClose: () -> Void
     private let imageView = NSImageView()
@@ -83,9 +56,6 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
     private var isPreviewingGIFSelection = false
     private var didExpandForGIFSelection = false
     private var frameBeforeGIFSelection: NSRect?
-    private var trimDragInitialPlan: RecordingEditPlan?
-    private var undoPlans: [RecordingEditPlan] = []
-    private var redoPlans: [RecordingEditPlan] = []
     private var isBusy = false
     private var activeExportTask: Task<Void, Never>?
     private var watermarkPreviewTask: Task<Void, Never>?
@@ -93,6 +63,8 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
     private var watermarkEnabled: Bool
     private let watermarkContext: WatermarkContext
     private var watermarkSetupPopover: WatermarkQuickSetupPopover?
+    private var cachedCopyKey: RecordingCopyCacheKey?
+    private var cachedCopyURL: URL?
     private let editStatusLabel = NSTextField(labelWithString: "")
     private let exportProgressLabel = NSTextField(labelWithString: L.text("正在准备…"))
     private let exportProgressIndicator = NSProgressIndicator()
@@ -111,20 +83,6 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         button.bezelStyle = .rounded
         button.controlSize = .small
         button.contentTintColor = .controlAccentColor
-        return button
-    }()
-    private lazy var undoEditButton: NSButton = {
-        let button = makeEditButton(L.text("撤销"), id: "recordingEditUndo", action: #selector(undoEdit))
-        button.keyEquivalent = "z"
-        button.keyEquivalentModifierMask = .command
-        button.isEnabled = false
-        return button
-    }()
-    private lazy var redoEditButton: NSButton = {
-        let button = makeEditButton(L.text("重做"), id: "recordingEditRedo", action: #selector(redoEdit))
-        button.keyEquivalent = "z"
-        button.keyEquivalentModifierMask = [.command, .shift]
-        button.isEnabled = false
         return button
     }()
     private lazy var playPauseButton: NSButton = {
@@ -170,7 +128,7 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
     }()
     private lazy var watermarkSettingsButton: NSButton = {
         let button = NSButton(
-            title: L.text("设置水印…"),
+            title: L.text("编辑水印…"),
             target: self,
             action: #selector(showExportWatermarkSetup)
         )
@@ -179,6 +137,7 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         button.controlSize = .small
         return button
     }()
+    private let watermarkStatusLabel = NSTextField(labelWithString: "")
     private var ownsFile = true
     private var didClose = false
 
@@ -194,6 +153,7 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
     ) {
         self.fileURL = fileURL
         self.format = format
+        self.usesVideoPreview = format == .video || fileURL.pathExtension.lowercased() != "gif"
         self.pixelSize = pixelSize
         self.onClose = onClose
         self.watermarkConfiguration = watermarkConfiguration?.hasRenderableContent == true
@@ -202,17 +162,30 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         self.watermarkEnabled = watermarkEnabled && watermarkConfiguration?.hasRenderableContent == true
         self.watermarkContext = WatermarkContext(capturedAt: capturedAt)
         self.editPlan = RecordingEditPlan(duration: duration)
+        let contentSize: CGSize
+        if format == .video {
+            contentSize = CGSize(width: 760, height: 650)
+        } else if usesVideoPreview {
+            // Keep raw GIF previews compact. The player layer preserves the actual
+            // recording aspect ratio, so very tall sources can letterbox instead of
+            // forcing the whole completion window to grow.
+            let aspectRatio = pixelSize.height > 0 ? pixelSize.width / pixelSize.height : 16 / 9
+            let fittedPreviewHeight = min(317, max(240, 728 / max(aspectRatio, 0.1)))
+            contentSize = CGSize(width: 760, height: fittedPreviewHeight + 133)
+        } else {
+            contentSize = CGSize(width: 560, height: 420)
+        }
         let window = NSWindow(
-            contentRect: CGRect(x: 0, y: 0, width: format == .video ? 760 : 560, height: format == .video ? 650 : 420),
-            styleMask: format == .video
+            contentRect: CGRect(origin: .zero, size: contentSize),
+            styleMask: usesVideoPreview
                 ? [.titled, .closable, .miniaturizable, .resizable]
                 : [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
         window.title = L.text("录制完成")
-        if format == .video {
-            window.minSize = CGSize(width: 680, height: 570)
+        if usesVideoPreview {
+            window.minSize = CGSize(width: 680, height: format == .video ? 570 : 410)
         }
         window.isReleasedWhenClosed = false
         super.init(window: window)
@@ -313,39 +286,50 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         fileActions.spacing = 12
         standardActionButtonsView = fileActions
 
-        let preview = format == .video ? playerView : imageView
+        let preview = usesVideoPreview ? playerView : imageView
         let stackViews: [NSView]
-        if format == .video {
-            let editingControls = makeEditingControls()
-            let gifControls = makeGIFSelectionControls()
+        if usesVideoPreview {
             let watermarkControls = makeWatermarkControls()
             let exportProgress = makeExportProgressView()
-            editingControls.isHidden = false
-            gifControls.isHidden = true
             exportProgress.isHidden = true
-            gifModeSpacer.isHidden = true
-            gifModeSpacer.setContentHuggingPriority(.defaultLow, for: .vertical)
-            gifModeSpacer.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
-            standardEditingControlsView = editingControls
-            gifSelectionControlsView = gifControls
             standardWatermarkControlsView = watermarkControls
             exportProgressView = exportProgress
-            stackViews = [
-                preview,
-                makePlaybackControls(),
-                editingControls,
-                watermarkControls,
-                gifModeSpacer,
-                gifControls,
-                exportProgress,
-                fileActions
-            ]
+            if format == .video {
+                let editingControls = makeEditingControls()
+                let gifControls = makeGIFSelectionControls()
+                editingControls.isHidden = false
+                gifControls.isHidden = true
+                gifModeSpacer.isHidden = true
+                gifModeSpacer.setContentHuggingPriority(.defaultLow, for: .vertical)
+                gifModeSpacer.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+                standardEditingControlsView = editingControls
+                gifSelectionControlsView = gifControls
+                stackViews = [
+                    preview,
+                    makePlaybackControls(),
+                    editingControls,
+                    watermarkControls,
+                    gifModeSpacer,
+                    gifControls,
+                    exportProgress,
+                    fileActions
+                ]
+            } else {
+                stackViews = [
+                    preview,
+                    makePlaybackControls(),
+                    watermarkControls,
+                    exportProgress,
+                    fileActions
+                ]
+            }
         } else {
             stackViews = [preview, fileActions]
         }
         let stack = NSStackView(views: stackViews)
         stack.orientation = .vertical
         stack.alignment = .centerX
+        stack.distribution = .fill
         stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
@@ -357,24 +341,35 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
             preview.widthAnchor.constraint(equalTo: stack.widthAnchor),
             fileActions.widthAnchor.constraint(equalTo: stack.widthAnchor)
         ])
-        let previewHeight = format == .video
-            ? preview.heightAnchor.constraint(greaterThanOrEqualToConstant: 310)
+        if let watermarkControls = standardWatermarkControlsView {
+            watermarkControls.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+        if let exportProgress = exportProgressView {
+            exportProgress.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+        if let editingControls = standardEditingControlsView {
+            editingControls.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+        let previewHeight = usesVideoPreview
+            ? preview.heightAnchor.constraint(greaterThanOrEqualToConstant: format == .video ? 310 : 240)
             : preview.heightAnchor.constraint(equalToConstant: 310)
         previewHeight.priority = .defaultHigh
         previewHeight.isActive = true
         previewHeightConstraint = previewHeight
-        if format == .video {
-            let gifPreviewHeight = preview.heightAnchor.constraint(equalToConstant: 240)
-            gifPreviewHeight.isActive = false
-            gifPreviewFixedHeightConstraint = gifPreviewHeight
+        if usesVideoPreview {
             preview.setContentHuggingPriority(.defaultLow, for: .vertical)
             preview.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+            if format == .video {
+                let gifPreviewHeight = preview.heightAnchor.constraint(equalToConstant: 240)
+                gifPreviewHeight.isActive = false
+                gifPreviewFixedHeightConstraint = gifPreviewHeight
+            }
             if pixelSize.width > 0, pixelSize.height > 0 {
                 let aspect = preview.widthAnchor.constraint(
                     equalTo: preview.heightAnchor,
                     multiplier: pixelSize.width / pixelSize.height
                 )
-                aspect.priority = .defaultHigh
+                aspect.priority = format == .video ? .defaultHigh : .defaultLow
                 aspect.isActive = true
                 previewAspectRatioConstraint = aspect
             }
@@ -382,21 +377,37 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
     }
 
     private func makeWatermarkControls() -> NSView {
-        let hint = NSTextField(labelWithString: L.text("添加水印需要重新编码"))
-        hint.identifier = NSUserInterfaceItemIdentifier("recordingExportWatermarkHint")
-        hint.font = .systemFont(ofSize: 11)
-        hint.textColor = .secondaryLabelColor
-        hint.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        hint.lineBreakMode = .byTruncatingTail
+        watermarkStatusLabel.identifier = NSUserInterfaceItemIdentifier("recordingExportWatermarkHint")
+        watermarkStatusLabel.font = .systemFont(ofSize: 11)
+        watermarkStatusLabel.textColor = .secondaryLabelColor
+        watermarkStatusLabel.alignment = .right
+        watermarkStatusLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        watermarkStatusLabel.lineBreakMode = .byTruncatingTail
 
-        let controls = NSStackView(views: [watermarkCheckbox, watermarkSettingsButton, hint])
+        let controls = NSStackView(views: [
+            watermarkCheckbox,
+            watermarkSettingsButton,
+            NSView(),
+            watermarkStatusLabel
+        ])
         controls.identifier = NSUserInterfaceItemIdentifier("recordingWatermarkControls")
         controls.orientation = .horizontal
         controls.alignment = .centerY
         controls.spacing = 10
+        controls.edgeInsets = NSEdgeInsets(top: 7, left: 10, bottom: 7, right: 10)
+        controls.wantsLayer = true
+        controls.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.5).cgColor
+        controls.layer?.cornerRadius = 7
         controls.translatesAutoresizingMaskIntoConstraints = false
-        controls.widthAnchor.constraint(greaterThanOrEqualToConstant: 480).isActive = true
+        updateWatermarkStatus()
         return controls
+    }
+
+    private func updateWatermarkStatus() {
+        watermarkStatusLabel.stringValue = watermarkEnabled
+            ? L.text("保存或复制时添加，导出时间可能稍长")
+            : ""
+        watermarkStatusLabel.isHidden = !watermarkEnabled
     }
 
     private func makeExportProgressView() -> NSView {
@@ -473,10 +484,6 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         timelineView.trimEnd = editPlan.trimEnd
         timelineView.currentTime = 0
         timelineView.onSeek = { [weak self] time in self?.seek(to: time) }
-        timelineView.onTrimStarted = { [weak self] in
-            guard let self else { return }
-            self.trimDragInitialPlan = self.editPlan
-        }
         timelineView.onTrimChanged = { [weak self] start, end, changedTime in
             guard let self else { return }
             self.editPlan.setTrimStart(start)
@@ -484,22 +491,12 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
             self.applyEditPlanToTimeline()
             self.seek(to: changedTime)
         }
-        timelineView.onTrimEnded = { [weak self] in
-            guard let self, let initial = self.trimDragInitialPlan else { return }
-            self.trimDragInitialPlan = nil
-            if initial != self.editPlan { self.pushUndoPlan(initial) }
-        }
         timelineView.heightAnchor.constraint(equalToConstant: 76).isActive = true
         timelineView.widthAnchor.constraint(greaterThanOrEqualToConstant: 620).isActive = true
 
         let frame = makeEditButton(L.text("提取当前帧"), id: "recordingExtractFrame", action: #selector(extractCurrentFrame))
         let gif = makeEditButton(L.text("转为 GIF…"), id: "recordingConvertGIF", action: #selector(convertToGIF))
-        let actionRow = NSStackView(views: [
-            undoEditButton,
-            redoEditButton,
-            frame,
-            gif
-        ])
+        let actionRow = NSStackView(views: [frame, gif])
         actionRow.orientation = .horizontal
         actionRow.alignment = .centerY
         actionRow.spacing = 8
@@ -659,7 +656,7 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
     }
 
     private func configurePreview() {
-        if format == .gif {
+        if !usesVideoPreview {
             imageView.image = NSImage(contentsOf: fileURL)
             return
         }
@@ -796,34 +793,6 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
                 self.updateTimeLabel(current: self.progressSlider.doubleValue)
             }
         }
-    }
-
-    @objc private func undoEdit() {
-        guard let previous = undoPlans.popLast() else { return }
-        redoPlans.append(editPlan)
-        editPlan = previous
-        applyEditPlanToTimeline()
-        updateUndoButtons()
-    }
-
-    @objc private func redoEdit() {
-        guard let next = redoPlans.popLast() else { return }
-        undoPlans.append(editPlan)
-        editPlan = next
-        applyEditPlanToTimeline()
-        updateUndoButtons()
-    }
-
-    private func pushUndoPlan(_ plan: RecordingEditPlan) {
-        guard plan != editPlan else { return }
-        undoPlans.append(plan)
-        redoPlans.removeAll()
-        updateUndoButtons()
-    }
-
-    private func updateUndoButtons() {
-        undoEditButton.isEnabled = !undoPlans.isEmpty && !isBusy
-        redoEditButton.isEnabled = !redoPlans.isEmpty && !isBusy
     }
 
     private func applyEditPlanToTimeline() {
@@ -1137,8 +1106,8 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         let setup = WatermarkQuickSetupPopover(
             context: .export,
             configuration: watermarkConfiguration ?? WatermarkPreferences.load(),
-            onApply: { [weak self] configuration in
-                WatermarkPreferences.save(configuration)
+            onApply: { [weak self] configuration, saveAsDefault in
+                if saveAsDefault { WatermarkPreferences.saveDefaultStyle(configuration) }
                 self?.watermarkConfiguration = configuration
                 self?.watermarkEnabled = true
                 self?.watermarkCheckbox.state = .on
@@ -1162,8 +1131,8 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
             return
         }
         let destination = AppPreferences.saveLocation.appendingPathComponent(Self.outputFileName(format: format))
-        if format == .video {
-            exportVideo(
+        if usesVideoPreview {
+            exportRecording(
                 to: destination,
                 forCopy: false,
                 revealInFinder: revealInFinder,
@@ -1190,14 +1159,33 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
 
     @objc private func copyAction() {
         guard !isBusy else { return }
-        if format == .video {
-            let directory = Self.clipboardDirectory
-            let cached = directory.appendingPathComponent(Self.outputFileName(format: .video))
-            exportVideo(
+        if usesVideoPreview {
+            let cacheKey = RecordingCopyCacheKey.make(
+                format: format,
+                editPlan: editPlan,
+                watermarkEnabled: watermarkEnabled,
+                watermarkConfiguration: watermarkConfiguration
+            )
+            if cacheKey == cachedCopyKey,
+               let cachedCopyURL,
+               FileManager.default.fileExists(atPath: cachedCopyURL.path) {
+                do {
+                    try copyExportedRecording(at: cachedCopyURL)
+                    FeedbackSound.playCopyCompleted()
+                } catch {
+                    showError(error.localizedDescription)
+                }
+                return
+            }
+            let cached = Self.clipboardDirectory.appendingPathComponent(
+                "Brushot-copy-\(UUID().uuidString).\(format.fileExtension)"
+            )
+            exportRecording(
                 to: cached,
                 forCopy: true,
                 revealInFinder: false,
-                completion: nil
+                completion: nil,
+                copyCacheKey: cacheKey
             )
             return
         }
@@ -1227,11 +1215,12 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
 
     @objc private func discardAction() { close() }
 
-    private func exportVideo(
+    private func exportRecording(
         to destination: URL,
         forCopy: Bool,
         revealInFinder: Bool,
-        completion: ((Bool) -> Void)?
+        completion: ((Bool) -> Void)?,
+        copyCacheKey: RecordingCopyCacheKey? = nil
     ) {
         let source = fileURL
         let plan = editPlan
@@ -1248,7 +1237,7 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
                         self?.updateExportProgress(stage: stage, fraction: fraction)
                     }
                 }
-                if plan.hasEdits {
+                if self.format == .video, plan.hasEdits {
                     _ = try await RecordingExporter.exportEditedMP4(
                         source: source,
                         destination: destination,
@@ -1260,7 +1249,7 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
                 } else {
                     _ = try await RecordingExporter.export(
                         source: source,
-                        format: .video,
+                        format: self.format,
                         destination: destination,
                         watermarkConfiguration: watermark,
                         watermarkContext: watermarkContext,
@@ -1269,11 +1258,14 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
                 }
                 try Task.checkCancellation()
                 if forCopy {
-                    let pasteboard = NSPasteboard.general
-                    pasteboard.clearContents()
-                    guard pasteboard.writeObjects([destination as NSURL]) else {
-                        try? FileManager.default.removeItem(at: destination)
-                        throw RecordingExportError.exportFailed(L.text("无法写入剪贴板。"))
+                    try self.copyExportedRecording(at: destination)
+                    if let copyCacheKey {
+                        let previousCacheURL = self.cachedCopyURL
+                        self.cachedCopyKey = copyCacheKey
+                        self.cachedCopyURL = destination
+                        if let previousCacheURL, previousCacheURL != destination {
+                            try? FileManager.default.removeItem(at: previousCacheURL)
+                        }
                     }
                     FeedbackSound.playCopyCompleted()
                     self.activeExportTask = nil
@@ -1303,6 +1295,24 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
             }
         }
         activeExportTask = task
+    }
+
+    private func copyExportedRecording(at url: URL) throws {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        let copied: Bool
+        if format == .gif {
+            let data = try Data(contentsOf: url)
+            copied = pasteboard.setData(
+                data,
+                forType: NSPasteboard.PasteboardType("com.compuserve.gif")
+            )
+        } else {
+            copied = pasteboard.writeObjects([url as NSURL])
+        }
+        guard copied else {
+            throw RecordingExportError.exportFailed(L.text("无法写入剪贴板。"))
+        }
     }
 
     @objc private func cancelActiveExport() {
@@ -1342,7 +1352,6 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         exportProgressView?.isHidden = !busy
         standardWatermarkControlsView?.isHidden = busy || isGIFSelectionMode
         cancelExportButton.isEnabled = busy
-        updateUndoButtons()
     }
 
     private func setControlsEnabled(_ enabled: Bool, in view: NSView) {
@@ -1358,6 +1367,9 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
         activeExportTask?.cancel()
         teardownPlayer()
         if ownsFile { try? FileManager.default.removeItem(at: fileURL) }
+        if format == .gif, let cachedCopyURL {
+            try? FileManager.default.removeItem(at: cachedCopyURL)
+        }
         onClose()
     }
 
@@ -1415,6 +1427,7 @@ final class RecordingPreviewWindowController: NSWindowController, NSWindowDelega
 
     private func updateWatermarkPreview() {
         watermarkPreviewTask?.cancel()
+        updateWatermarkStatus()
         guard watermarkEnabled, let configuration = normalizedWatermarkConfiguration else {
             playerView.watermarkImage = nil
             return

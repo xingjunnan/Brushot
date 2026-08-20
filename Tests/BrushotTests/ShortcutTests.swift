@@ -259,36 +259,38 @@ final class ShortcutTests: XCTestCase {
 
     func testWatermarkSettingsExplainsMissingContentAndBlocksEmptyEnable() throws {
         let previousWatermark = WatermarkPreferences.load()
-        let previousRecordingWatermark = WatermarkPreferences.recordingEnabled()
         defer {
             WatermarkPreferences.save(previousWatermark)
-            WatermarkPreferences.setRecordingEnabled(previousRecordingWatermark)
         }
 
         WatermarkPreferences.save(.default)
-        WatermarkPreferences.setRecordingEnabled(false)
         let controller = WatermarkSettingsWindowController()
         let content = try XCTUnwrap(controller.window?.contentView)
         let buttons = descendants(of: content).compactMap { $0 as? NSButton }
         let screenshotInfo = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "watermarkScreenshotInfo" })
-        let recordingInfo = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "watermarkRecordingInfo" })
         XCTAssertEqual(screenshotInfo.toolTip, "请先填写水印文字或选择 Logo")
-        XCTAssertEqual(recordingInfo.toolTip, "请先填写水印文字或选择 Logo")
+        XCTAssertNil(buttons.first { $0.identifier?.rawValue == "watermarkRecordingInfo" })
+        XCTAssertNil(buttons.first { $0.title == "应用到录制视频/GIF" })
+        XCTAssertTrue(descendants(of: content).compactMap { $0 as? NSTextField }.contains {
+            $0.stringValue == "录制水印在录制完成后选择"
+        })
+        let preview = try XCTUnwrap(descendants(of: content).first {
+            $0.identifier?.rawValue == "watermarkSettings.preview"
+        })
+        XCTAssertEqual(preview.constraints.first { $0.firstAttribute == .height }?.constant, 150)
+        let colorWell = try XCTUnwrap(descendants(of: content).compactMap { $0 as? NSColorWell }.first {
+            $0.identifier?.rawValue == "watermarkSettings.textColor"
+        })
+        XCTAssertEqual(colorWell.constraints.first { $0.firstAttribute == .width }?.constant, 54)
 
         XCTAssertFalse(controller.applyWatermarkEnabledState(true))
         XCTAssertFalse(WatermarkPreferences.load().isEnabled)
-
-        let recording = try XCTUnwrap(buttons.first { $0.title == "应用到录制视频/GIF" })
-        recording.performClick(nil)
-        XCTAssertFalse(WatermarkPreferences.recordingEnabled())
     }
 
     func testWatermarkSettingsAllowsEnableAfterTextIsConfigured() throws {
         let previousWatermark = WatermarkPreferences.load()
-        let previousRecordingWatermark = WatermarkPreferences.recordingEnabled()
         defer {
             WatermarkPreferences.save(previousWatermark)
-            WatermarkPreferences.setRecordingEnabled(previousRecordingWatermark)
         }
 
         var config = WatermarkConfiguration.default

@@ -5,6 +5,12 @@ import ImageIO
 import UniformTypeIdentifiers
 
 struct WatermarkConfiguration: Equatable, @unchecked Sendable {
+    static let maxTextLength = 120
+
+    static func limitedText(_ text: String) -> String {
+        String(text.prefix(maxTextLength))
+    }
+
     enum RepeatMode: String, CaseIterable {
         case single
         case diagonalTiled
@@ -97,7 +103,7 @@ enum WatermarkPreferences {
         if defaults.object(forKey: enabledKey) != nil {
             config.isEnabled = defaults.bool(forKey: enabledKey)
         }
-        config.text = defaults.string(forKey: textKey) ?? ""
+        config.text = WatermarkConfiguration.limitedText(defaults.string(forKey: textKey) ?? "")
         if let path = defaults.string(forKey: logoPathKey), !path.isEmpty {
             config.logoURL = URL(fileURLWithPath: path)
         }
@@ -135,23 +141,36 @@ enum WatermarkPreferences {
     }
 
     static func save(_ config: WatermarkConfiguration, defaults: UserDefaults = .standard) {
-        defaults.set(config.isEnabled && config.hasRenderableContent, forKey: enabledKey)
-        defaults.set(config.text, forKey: textKey)
-        defaults.set(config.logoURL?.path ?? "", forKey: logoPathKey)
-        defaults.set(config.logoDisplayName ?? "", forKey: logoDisplayNameKey)
-        defaults.set(config.repeatMode.rawValue, forKey: repeatModeKey)
-        defaults.set(config.position.rawValue, forKey: positionKey)
-        defaults.set(Double(config.opacity), forKey: opacityKey)
-        defaults.set(Double(config.scale), forKey: scaleKey)
-        defaults.set(Double(config.margin), forKey: marginKey)
-        let color = config.textColor.usingColorSpace(.deviceRGB) ?? .white
+        var normalized = config
+        normalized.text = WatermarkConfiguration.limitedText(config.text)
+        defaults.set(normalized.isEnabled && normalized.hasRenderableContent, forKey: enabledKey)
+        defaults.set(normalized.text, forKey: textKey)
+        defaults.set(normalized.logoURL?.path ?? "", forKey: logoPathKey)
+        defaults.set(normalized.logoDisplayName ?? "", forKey: logoDisplayNameKey)
+        defaults.set(normalized.repeatMode.rawValue, forKey: repeatModeKey)
+        defaults.set(normalized.position.rawValue, forKey: positionKey)
+        defaults.set(Double(normalized.opacity), forKey: opacityKey)
+        defaults.set(Double(normalized.scale), forKey: scaleKey)
+        defaults.set(Double(normalized.margin), forKey: marginKey)
+        let color = normalized.textColor.usingColorSpace(.deviceRGB) ?? .white
         defaults.set(Double(color.redComponent), forKey: colorRedKey)
         defaults.set(Double(color.greenComponent), forKey: colorGreenKey)
         defaults.set(Double(color.blueComponent), forKey: colorBlueKey)
         defaults.set(Double(color.alphaComponent), forKey: colorAlphaKey)
-        if !config.hasRenderableContent {
+        if !normalized.hasRenderableContent {
             defaults.set(false, forKey: recordingEnabledKey)
         }
+    }
+
+    /// Saves the reusable watermark style without changing whether screenshot
+    /// watermarking is globally enabled.
+    static func saveDefaultStyle(
+        _ config: WatermarkConfiguration,
+        defaults: UserDefaults = .standard
+    ) {
+        var defaultStyle = config
+        defaultStyle.isEnabled = load(defaults: defaults).isEnabled
+        save(defaultStyle, defaults: defaults)
     }
 
     static func setEnabled(_ enabled: Bool, defaults: UserDefaults = .standard) {
@@ -333,7 +352,10 @@ enum WatermarkRenderer {
         cgContext.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
 
         let logoImage = loadLogo(from: configuration.logoURL)
-        let resolvedText = resolvePlaceholders(in: configuration.text, date: context.capturedAt)
+        let resolvedText = resolvePlaceholders(
+            in: WatermarkConfiguration.limitedText(configuration.text),
+            date: context.capturedAt
+        )
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let block = makeBlock(
             text: resolvedText,

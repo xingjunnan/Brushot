@@ -14,6 +14,14 @@ enum RecordingRecoveryStore {
             .appendingPathExtension(pathExtension)
     }
 
+    static func intendedFormat(for file: URL) -> RecordingFormat {
+        if file.pathExtension.lowercased() == "gif"
+            || file.deletingPathExtension().lastPathComponent.hasPrefix("Brushot-RecordingGIF-") {
+            return .gif
+        }
+        return .video
+    }
+
     static func recoverableFiles(now: Date = Date()) -> [URL] {
         recoverableFiles(in: directory, now: now)
     }

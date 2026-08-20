@@ -126,6 +126,8 @@ final class AnnotationEditorTests: XCTestCase {
 
         XCTAssertFalse(button.isHidden)
         XCTAssertEqual(button.state, .on)
+        XCTAssertTrue(button.toolTip?.contains("右键编辑水印") == true)
+        XCTAssertEqual(button.menu?.items.first?.title, "编辑水印…")
         button.performClick(nil)
 
         XCTAssertEqual(received, [false])
@@ -147,11 +149,15 @@ final class AnnotationEditorTests: XCTestCase {
 
     func testQuickWatermarkSetupRequiresContentAndReturnsDraftConfiguration() throws {
         var appliedConfiguration: WatermarkConfiguration?
+        var savedAsDefault = false
         var dismissed = false
         let controller = WatermarkQuickSetupViewController(
             context: .screenshot,
             configuration: .default,
-            onApply: { appliedConfiguration = $0 },
+            onApply: {
+                appliedConfiguration = $0
+                savedAsDefault = $1
+            },
             onDismiss: { dismissed = true }
         )
         controller.loadViewIfNeeded()
@@ -162,17 +168,116 @@ final class AnnotationEditorTests: XCTestCase {
         let applyButton = try XCTUnwrap(controls.compactMap { $0 as? NSButton }.first {
             $0.identifier?.rawValue == "watermarkQuick.apply"
         })
+        let opacity = try XCTUnwrap(controls.compactMap { $0 as? NSSlider }.first {
+            $0.identifier?.rawValue == "watermarkQuick.opacity"
+        })
+        let saveAsDefault = try XCTUnwrap(controls.compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "watermarkQuick.saveAsDefault"
+        })
 
         XCTAssertFalse(applyButton.isEnabled)
         XCTAssertEqual(applyButton.title, "应用到本次截图")
+        XCTAssertFalse(saveAsDefault.isHidden)
+        XCTAssertEqual(saveAsDefault.state, .off)
+        XCTAssertNotNil(controls.first { $0.identifier?.rawValue == "watermarkQuick.preview" })
+        XCTAssertNotNil(controls.first { $0.identifier?.rawValue == "watermarkQuick.repeatMode" })
+        XCTAssertNotNil(controls.first { $0.identifier?.rawValue == "watermarkQuick.position" })
+        XCTAssertNotNil(controls.first { $0.identifier?.rawValue == "watermarkQuick.scale" })
+        XCTAssertNotNil(controls.first { $0.identifier?.rawValue == "watermarkQuick.margin" })
+        XCTAssertNotNil(controls.first { $0.identifier?.rawValue == "watermarkQuick.textColor" })
         textField.stringValue = "Brushot {datetime}"
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: textField))
+        opacity.doubleValue = 0.42
+        opacity.sendAction(opacity.action, to: opacity.target)
         XCTAssertTrue(applyButton.isEnabled)
         applyButton.performClick(nil)
 
         XCTAssertEqual(appliedConfiguration?.text, "Brushot {datetime}")
+        XCTAssertEqual(appliedConfiguration?.opacity ?? 0, 0.42, accuracy: 0.001)
         XCTAssertFalse(appliedConfiguration?.isEnabled ?? true)
+        XCTAssertFalse(savedAsDefault)
         XCTAssertTrue(dismissed)
+    }
+
+    func testQuickWatermarkSetupLimitsTextWhileEditing() throws {
+        var appliedConfiguration: WatermarkConfiguration?
+        let controller = WatermarkQuickSetupViewController(
+            context: .screenshot,
+            configuration: .default,
+            onApply: { configuration, _ in appliedConfiguration = configuration },
+            onDismiss: {}
+        )
+        controller.loadViewIfNeeded()
+        let controls = descendants(of: controller.view)
+        let textField = try XCTUnwrap(controls.compactMap { $0 as? NSTextField }.first {
+            $0.identifier?.rawValue == "watermarkQuick.text"
+        })
+        let applyButton = try XCTUnwrap(controls.compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "watermarkQuick.apply"
+        })
+
+        textField.stringValue = String(repeating: "字", count: 150)
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: textField))
+        applyButton.performClick(nil)
+
+        XCTAssertEqual(textField.stringValue.count, WatermarkConfiguration.maxTextLength)
+        XCTAssertEqual(appliedConfiguration?.text.count, WatermarkConfiguration.maxTextLength)
+    }
+
+    func testExportWatermarkEditorUsesExportScopeWithoutChangingDefaultsByDefault() throws {
+        var configuration = WatermarkConfiguration.default
+        configuration.text = "Brushot"
+        let controller = WatermarkQuickSetupViewController(
+            context: .export,
+            configuration: configuration,
+            onApply: { _, _ in },
+            onDismiss: {}
+        )
+        controller.loadViewIfNeeded()
+        let controls = descendants(of: controller.view)
+        let saveAsDefault = try XCTUnwrap(controls.compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "watermarkQuick.saveAsDefault"
+        })
+
+        XCTAssertTrue(controls.compactMap { $0 as? NSTextField }.contains {
+            $0.stringValue == "导出水印设置"
+        })
+        XCTAssertFalse(saveAsDefault.isHidden)
+        XCTAssertEqual(saveAsDefault.state, .off)
+    }
+
+    func testWatermarkEditorKeepsPopoverOpenAndLogoPickerAboveCaptureOverlay() {
+        let popover = WatermarkQuickSetupPopover(
+            context: .screenshot,
+            configuration: .default,
+            onApply: { _, _ in },
+            onClose: {}
+        )
+
+        XCTAssertEqual(popover.behavior, .applicationDefined)
+        XCTAssertGreaterThan(
+            WatermarkLogoPickerPresentation.level(above: .normal).rawValue,
+            NSWindow.Level.screenSaver.rawValue
+        )
+    }
+
+    func testWatermarkEditorColorWellUsesCompactWidth() throws {
+        let controller = WatermarkQuickSetupViewController(
+            context: .export,
+            configuration: .default,
+            onApply: { _, _ in },
+            onDismiss: {}
+        )
+        controller.loadViewIfNeeded()
+        let colorWell = try XCTUnwrap(descendants(of: controller.view).compactMap { $0 as? NSColorWell }.first {
+            $0.identifier?.rawValue == "watermarkQuick.textColor"
+        })
+        let preview = try XCTUnwrap(descendants(of: controller.view).first {
+            $0.identifier?.rawValue == "watermarkQuick.preview"
+        })
+
+        XCTAssertEqual(colorWell.constraints.first { $0.firstAttribute == .width }?.constant, 54)
+        XCTAssertEqual(preview.constraints.first { $0.firstAttribute == .height }?.constant, 150)
     }
 
     func testAnnotationCanvasCanRenderWithReplacementBaseImage() throws {
@@ -404,6 +509,36 @@ final class AnnotationEditorTests: XCTestCase {
 
         XCTAssertGreaterThan(try changedPixelCount(between: withoutWatermark, and: withWatermark), 0)
         XCTAssertFalse(WatermarkPreferences.load().isEnabled)
+    }
+
+    func testSelectionWatermarkSetupUsesSessionConfigurationWithoutChangingDefault() throws {
+        let previousWatermark = WatermarkPreferences.load()
+        defer { WatermarkPreferences.save(previousWatermark) }
+
+        var defaultWatermark = WatermarkConfiguration.default
+        defaultWatermark.text = "Default"
+        WatermarkPreferences.save(defaultWatermark)
+        let overlay = try makeConfirmedSelectionOverlay()
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = overlay
+        var sessionWatermark = defaultWatermark
+        sessionWatermark.text = "This capture only"
+        overlay.applySessionWatermark(sessionWatermark, saveAsDefault: false)
+
+        var submittedOptions: CaptureOutputOptions?
+        overlay.onSelectionFinished = { _, _, options in submittedOptions = options }
+        let copyButton = try XCTUnwrap(descendants(of: overlay).compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "copyAction"
+        })
+        copyButton.performClick(nil)
+
+        XCTAssertEqual(submittedOptions?.watermarkConfiguration?.text, "This capture only")
+        XCTAssertEqual(WatermarkPreferences.load().text, "Default")
     }
 
     func testAnnotationPreviewShowsWatermarkAndDoesNotApplyItAgainOnSubmit() throws {
