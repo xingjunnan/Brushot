@@ -994,7 +994,7 @@ final class RecordingSessionController: NSObject {
 
 @MainActor
 final class RecordingStartBar: NSVisualEffectView {
-    var onStart: ((RecordingFormat, Bool, Bool, String?, WatermarkConfiguration?) -> Void)?
+    var onStart: ((RecordingFormat, RecordingVideoResolution, Int, Bool, Bool, String?, WatermarkConfiguration?) -> Void)?
     var onCancel: (() -> Void)?
     private let audioCheckbox = NSButton(
         checkboxWithTitle: L.text("系统音频"),
@@ -1007,6 +1007,10 @@ final class RecordingStartBar: NSVisualEffectView {
         action: nil
     )
     private let microphonePopup = NSPopUpButton()
+    private let resolutionPopup = NSPopUpButton()
+    private let fpsPopup = NSPopUpButton()
+    private let outputSizeLabel = NSTextField(labelWithString: "")
+    private let performanceHint = NSTextField(labelWithString: L.text("高负载，建议 1080p · 30 FPS"))
     private lazy var formatControl = NSSegmentedControl(
         labels: [L.text("视频"), "GIF"],
         trackingMode: .selectOne,
@@ -1019,9 +1023,11 @@ final class RecordingStartBar: NSVisualEffectView {
         action: #selector(startAction)
     )
     private lazy var audioLabel = makeSectionLabel(L.text("视频音频"))
+    private lazy var qualityLabel = makeSectionLabel(L.text("视频质量"))
     private let silentHint = NSTextField(labelWithString: L.text("GIF 最长 60 秒，建议 30 秒内 · 无声音"))
     private var hasMicrophones = false
     private var canUseMicrophonePermission = true
+    private var sourcePixelSize = CGSize.zero
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1035,6 +1041,7 @@ final class RecordingStartBar: NSVisualEffectView {
         let formatLabel = makeSectionLabel(L.text("录制格式"))
         formatControl.selectedSegment = 0
         formatControl.identifier = NSUserInterfaceItemIdentifier("recordingFormatControl")
+        configureVideoQualityControls()
         audioCheckbox.state = RecordingPreferences.systemAudioEnabled() ? .on : .off
         audioCheckbox.target = self
         audioCheckbox.action = #selector(audioChanged)
@@ -1098,7 +1105,18 @@ final class RecordingStartBar: NSVisualEffectView {
         audioRow.alignment = .centerY
         audioRow.spacing = 10
 
-        let stack = NSStackView(views: [formatRow, audioRow])
+        let qualityRow = NSStackView(views: [
+            qualityLabel,
+            resolutionPopup,
+            fpsPopup,
+            outputSizeLabel,
+            performanceHint
+        ])
+        qualityRow.orientation = .horizontal
+        qualityRow.alignment = .centerY
+        qualityRow.spacing = 10
+
+        let stack = NSStackView(views: [formatRow, qualityRow, audioRow])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
@@ -1109,8 +1127,10 @@ final class RecordingStartBar: NSVisualEffectView {
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
             formatRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            qualityRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             audioRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             formatLabel.widthAnchor.constraint(equalToConstant: 58),
+            qualityLabel.widthAnchor.constraint(equalToConstant: 58),
             audioLabel.widthAnchor.constraint(equalToConstant: 58)
         ])
         updateFormatState()
@@ -1134,18 +1154,43 @@ final class RecordingStartBar: NSVisualEffectView {
         RecordingPreferences.setMicrophoneDeviceID(selectedMicrophoneID)
     }
 
+    @objc private func videoQualityChanged() {
+        RecordingPreferences.setVideoResolution(selectedVideoResolution)
+        RecordingPreferences.setVideoFPS(selectedVideoFPS)
+        updateVideoQualitySummary()
+    }
+
     private var selectedMicrophoneID: String? {
         microphonePopup.selectedItem?.representedObject as? String
+    }
+
+    private var selectedVideoResolution: RecordingVideoResolution {
+        guard let rawValue = resolutionPopup.selectedItem?.representedObject as? String,
+              let resolution = RecordingVideoResolution(rawValue: rawValue) else {
+            return .p1080
+        }
+        return resolution
+    }
+
+    private var selectedVideoFPS: Int {
+        (fpsPopup.selectedItem?.representedObject as? Int) ?? 30
+    }
+
+    func updateSourcePixelSize(_ size: CGSize) {
+        sourcePixelSize = size
+        updateVideoQualitySummary()
     }
 
     @objc private func formatChanged() { updateFormatState() }
 
     @objc private func startAction() {
         if formatControl.selectedSegment == 1 {
-            onStart?(.gif, false, false, nil, nil)
+            onStart?(.gif, selectedVideoResolution, selectedVideoFPS, false, false, nil, nil)
         } else {
             onStart?(
                 .video,
+                selectedVideoResolution,
+                selectedVideoFPS,
                 audioCheckbox.state == .on,
                 microphoneCheckbox.state == .on && microphoneCheckbox.isEnabled,
                 selectedMicrophoneID,
@@ -1160,11 +1205,74 @@ final class RecordingStartBar: NSVisualEffectView {
         audioCheckbox.isHidden = !isVideo
         microphoneCheckbox.isHidden = !isVideo
         microphonePopup.isHidden = !isVideo
+        qualityLabel.isHidden = !isVideo
+        resolutionPopup.isHidden = !isVideo
+        fpsPopup.isHidden = !isVideo
+        outputSizeLabel.isHidden = !isVideo
+        performanceHint.isHidden = !isVideo || !isHighLoadSelection
         audioCheckbox.isEnabled = isVideo
         microphoneCheckbox.isEnabled = isVideo && canUseMicrophonePermission
         microphonePopup.isEnabled = isVideo && hasMicrophones && microphoneCheckbox.state == .on
         silentHint.isHidden = isVideo
         startButton.title = isVideo ? L.text("开始录制视频") : L.text("开始录制 GIF")
+    }
+
+    private var isHighLoadSelection: Bool {
+        selectedVideoFPS == 60 && (selectedVideoResolution == .native || selectedVideoResolution == .p4K)
+    }
+
+    private func configureVideoQualityControls() {
+        let savedResolution = RecordingPreferences.videoResolution()
+        for resolution in RecordingVideoResolution.allCases {
+            let title = resolution == .p1080 ? L.text("1080p（推荐）") : resolution.displayName
+            resolutionPopup.addItem(withTitle: title)
+            resolutionPopup.lastItem?.representedObject = resolution.rawValue
+        }
+        if let index = resolutionPopup.itemArray.firstIndex(where: {
+            ($0.representedObject as? String) == savedResolution.rawValue
+        }) {
+            resolutionPopup.selectItem(at: index)
+        }
+        resolutionPopup.identifier = NSUserInterfaceItemIdentifier("recordingVideoResolution")
+        resolutionPopup.target = self
+        resolutionPopup.action = #selector(videoQualityChanged)
+        resolutionPopup.toolTip = L.text("保持比例，不裁剪、不放大较小画面")
+        resolutionPopup.widthAnchor.constraint(equalToConstant: 122).isActive = true
+
+        let savedFPS = RecordingPreferences.videoFPS()
+        for fps in [15, 30, 60] {
+            let title = fps == 30 ? L.text("30 FPS（推荐）") : "\(fps) FPS"
+            fpsPopup.addItem(withTitle: title)
+            fpsPopup.lastItem?.representedObject = fps
+        }
+        if let index = fpsPopup.itemArray.firstIndex(where: {
+            ($0.representedObject as? Int) == savedFPS
+        }) {
+            fpsPopup.selectItem(at: index)
+        }
+        fpsPopup.identifier = NSUserInterfaceItemIdentifier("recordingVideoFPS")
+        fpsPopup.target = self
+        fpsPopup.action = #selector(videoQualityChanged)
+        fpsPopup.widthAnchor.constraint(equalToConstant: 118).isActive = true
+
+        outputSizeLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        outputSizeLabel.textColor = .secondaryLabelColor
+        outputSizeLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        performanceHint.font = .systemFont(ofSize: 11, weight: .medium)
+        performanceHint.textColor = .systemOrange
+        performanceHint.toolTip = L.text("高负载模式，长时间录制建议使用 1080p · 30 FPS")
+        performanceHint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        updateVideoQualitySummary()
+    }
+
+    private func updateVideoQualitySummary() {
+        if sourcePixelSize.width > 0, sourcePixelSize.height > 0 {
+            let outputSize = selectedVideoResolution.outputSize(for: sourcePixelSize)
+            outputSizeLabel.stringValue = "\(L.text("输出")) \(Int(outputSize.width)) × \(Int(outputSize.height))"
+        } else {
+            outputSizeLabel.stringValue = L.text("输出尺寸待确定")
+        }
+        performanceHint.isHidden = formatControl.selectedSegment != 0 || !isHighLoadSelection
     }
 
     @objc private func cancelAction() { onCancel?() }

@@ -12,10 +12,64 @@ enum RecordingFormat: String, Sendable {
     var fileExtension: String { self == .video ? "mp4" : "gif" }
 }
 
+enum RecordingVideoResolution: String, CaseIterable, Sendable {
+    case native
+    case p4K = "4k"
+    case p1080 = "1080p"
+    case p720 = "720p"
+
+    var displayName: String {
+        switch self {
+        case .native: L.text("原始")
+        case .p4K: "4K"
+        case .p1080: "1080p"
+        case .p720: "720p"
+        }
+    }
+
+    func outputSize(for sourceSize: CGSize) -> CGSize {
+        let sourceWidth = max(1, sourceSize.width)
+        let sourceHeight = max(1, sourceSize.height)
+        guard self != .native else {
+            return CGSize(
+                width: Self.evenDimension(sourceWidth),
+                height: Self.evenDimension(sourceHeight)
+            )
+        }
+
+        let landscapeBounds: CGSize
+        switch self {
+        case .native:
+            landscapeBounds = CGSize(width: sourceWidth, height: sourceHeight)
+        case .p4K:
+            landscapeBounds = CGSize(width: 3_840, height: 2_160)
+        case .p1080:
+            landscapeBounds = CGSize(width: 1_920, height: 1_080)
+        case .p720:
+            landscapeBounds = CGSize(width: 1_280, height: 720)
+        }
+        let bounds = sourceWidth >= sourceHeight
+            ? landscapeBounds
+            : CGSize(width: landscapeBounds.height, height: landscapeBounds.width)
+        let scale = min(1, bounds.width / sourceWidth, bounds.height / sourceHeight)
+        return CGSize(
+            width: Self.evenDimension(sourceWidth * scale),
+            height: Self.evenDimension(sourceHeight * scale)
+        )
+    }
+
+    private static func evenDimension(_ value: CGFloat) -> CGFloat {
+        let integer = max(2, Int(value.rounded(.down)))
+        return CGFloat(integer.isMultiple(of: 2) ? integer : integer - 1)
+    }
+}
+
 enum RecordingPreferences {
     private static let systemAudioKey = "recording.systemAudioEnabled"
     private static let microphoneKey = "recording.microphoneEnabled"
     private static let microphoneDeviceKey = "recording.microphoneDeviceID"
+    private static let videoResolutionKey = "recording.videoResolution"
+    private static let videoFPSKey = "recording.videoFPS"
 
     static func systemAudioEnabled(defaults: UserDefaults = .standard) -> Bool {
         defaults.bool(forKey: systemAudioKey)
@@ -40,6 +94,30 @@ enum RecordingPreferences {
     static func setMicrophoneDeviceID(_ identifier: String?, defaults: UserDefaults = .standard) {
         if let identifier { defaults.set(identifier, forKey: microphoneDeviceKey) }
         else { defaults.removeObject(forKey: microphoneDeviceKey) }
+    }
+
+    static func videoResolution(defaults: UserDefaults = .standard) -> RecordingVideoResolution {
+        guard let rawValue = defaults.string(forKey: videoResolutionKey),
+              let resolution = RecordingVideoResolution(rawValue: rawValue) else {
+            return .p1080
+        }
+        return resolution
+    }
+
+    static func setVideoResolution(
+        _ resolution: RecordingVideoResolution,
+        defaults: UserDefaults = .standard
+    ) {
+        defaults.set(resolution.rawValue, forKey: videoResolutionKey)
+    }
+
+    static func videoFPS(defaults: UserDefaults = .standard) -> Int {
+        let value = defaults.integer(forKey: videoFPSKey)
+        return [15, 30, 60].contains(value) ? value : 30
+    }
+
+    static func setVideoFPS(_ fps: Int, defaults: UserDefaults = .standard) {
+        defaults.set([15, 30, 60].contains(fps) ? fps : 30, forKey: videoFPSKey)
     }
 }
 
@@ -213,6 +291,7 @@ enum RecordingDiskSpace {
 
 struct RecordingConfiguration: Sendable {
     let format: RecordingFormat
+    var videoResolution: RecordingVideoResolution = .p1080
     var fps: Int = 30
     var capturesSystemAudio = false
     var capturesMicrophone = false
@@ -318,8 +397,12 @@ final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate {
         }
 
         let streamConfiguration = capturer.streamConfiguration
-        let width = Self.evenDimension(streamConfiguration.width)
-        let height = Self.evenDimension(streamConfiguration.height)
+        let sourceSize = CGSize(width: streamConfiguration.width, height: streamConfiguration.height)
+        let requestedSize = configuration.format == .video
+            ? configuration.videoResolution.outputSize(for: sourceSize)
+            : sourceSize
+        let width = Self.evenDimension(Int(requestedSize.width))
+        let height = Self.evenDimension(Int(requestedSize.height))
         streamConfiguration.width = width
         streamConfiguration.height = height
         streamConfiguration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(max(1, configuration.fps)))

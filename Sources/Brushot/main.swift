@@ -2773,10 +2773,12 @@ final class CaptureController {
         }
         window.onOCRRequested = { [weak self] source in self?.finishOCR(source: source) }
         window.onLongCaptureRequested = { [weak self] rect in self?.startLongCapture(globalRect: rect) }
-        window.onRecordingRequested = { [weak self] target, format, systemAudio, microphone, deviceID, watermark in
+        window.onRecordingRequested = { [weak self] target, format, resolution, fps, systemAudio, microphone, deviceID, watermark in
             self?.startRecording(
                 target: target,
                 format: format,
+                videoResolution: resolution,
+                fps: fps,
                 systemAudio: systemAudio,
                 microphone: microphone,
                 microphoneDeviceID: deviceID,
@@ -2950,10 +2952,12 @@ final class CaptureController {
         window.onSelectionCancelled = { [weak self] in
             self?.closeOverlays()
         }
-        window.onRecordingRequested = { [weak self] target, format, systemAudio, microphone, deviceID, watermark in
+        window.onRecordingRequested = { [weak self] target, format, resolution, fps, systemAudio, microphone, deviceID, watermark in
             self?.startRecording(
                 target: target,
                 format: format,
+                videoResolution: resolution,
+                fps: fps,
                 systemAudio: systemAudio,
                 microphone: microphone,
                 microphoneDeviceID: deviceID,
@@ -3006,6 +3010,8 @@ final class CaptureController {
     private func startRecording(
         target: RecordingCaptureTarget,
         format: RecordingFormat,
+        videoResolution: RecordingVideoResolution,
+        fps: Int,
         systemAudio: Bool,
         microphone: Bool,
         microphoneDeviceID: String?,
@@ -3017,6 +3023,8 @@ final class CaptureController {
                 self?.startRecording(
                     target: target,
                     format: format,
+                    videoResolution: videoResolution,
+                    fps: fps,
                     systemAudio: systemAudio,
                     microphone: microphone,
                     microphoneDeviceID: microphoneDeviceID,
@@ -3044,7 +3052,8 @@ final class CaptureController {
                     capturer: capturer,
                     configuration: RecordingConfiguration(
                         format: format,
-                        fps: 30,
+                        videoResolution: videoResolution,
+                        fps: fps,
                         capturesSystemAudio: format == .video && systemAudio,
                         capturesMicrophone: format == .video && microphone,
                         microphoneDeviceID: microphoneDeviceID,
@@ -3398,7 +3407,7 @@ final class SelectionOverlayWindow: NSPanel {
     var onAnnotationFailed: ((Error) -> Void)?
     var onOCRRequested: ((OCRSource) -> Void)?
     var onLongCaptureRequested: ((CGRect) -> Void)?
-    var onRecordingRequested: ((RecordingCaptureTarget, RecordingFormat, Bool, Bool, String?, WatermarkConfiguration?) -> Void)?
+    var onRecordingRequested: ((RecordingCaptureTarget, RecordingFormat, RecordingVideoResolution, Int, Bool, Bool, String?, WatermarkConfiguration?) -> Void)?
     var onDelayedCaptureRequested: ((CGRect) -> Void)?
 
     private var overlayView: SelectionOverlayView? {
@@ -3454,8 +3463,8 @@ final class SelectionOverlayWindow: NSPanel {
         view.onLongCaptureRequested = { [weak self] rect in
             self?.onLongCaptureRequested?(rect)
         }
-        view.onRecordingRequested = { [weak self] target, format, systemAudio, microphone, deviceID, watermark in
-            self?.onRecordingRequested?(target, format, systemAudio, microphone, deviceID, watermark)
+        view.onRecordingRequested = { [weak self] target, format, resolution, fps, systemAudio, microphone, deviceID, watermark in
+            self?.onRecordingRequested?(target, format, resolution, fps, systemAudio, microphone, deviceID, watermark)
         }
         view.onDelayedCaptureRequested = { [weak self] rect in
             self?.onDelayedCaptureRequested?(rect)
@@ -3537,7 +3546,7 @@ final class SelectionOverlayView: NSView {
     var onAnnotationFailed: ((Error) -> Void)?
     var onOCRRequested: ((OCRSource) -> Void)?
     var onLongCaptureRequested: ((CGRect) -> Void)?
-    var onRecordingRequested: ((RecordingCaptureTarget, RecordingFormat, Bool, Bool, String?, WatermarkConfiguration?) -> Void)?
+    var onRecordingRequested: ((RecordingCaptureTarget, RecordingFormat, RecordingVideoResolution, Int, Bool, Bool, String?, WatermarkConfiguration?) -> Void)?
     var onDelayedCaptureRequested: ((CGRect) -> Void)?
 
     private let purpose: SelectionPurpose
@@ -3590,8 +3599,8 @@ final class SelectionOverlayView: NSView {
         return bar
     }()
     private lazy var recordingBar: RecordingStartBar = {
-        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 104))
-        bar.onStart = { [weak self] format, systemAudio, microphone, deviceID, watermark in
+        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 136))
+        bar.onStart = { [weak self] format, resolution, fps, systemAudio, microphone, deviceID, watermark in
             guard let self,
                   let selection = self.currentSelection(),
                   selection.width >= (self.purpose.isContentRecording ? 10 : 80),
@@ -3603,7 +3612,7 @@ final class SelectionOverlayView: NSView {
             self.isSubmitting = true
             self.hideSelectionControls()
             let target = self.recordingTargetCandidate ?? .region(globalRect: globalRect)
-            self.onRecordingRequested?(target, format, systemAudio, microphone, deviceID, watermark)
+            self.onRecordingRequested?(target, format, resolution, fps, systemAudio, microphone, deviceID, watermark)
         }
         bar.onCancel = { [weak self] in
             guard let self else { return }
@@ -4966,6 +4975,14 @@ final class SelectionOverlayView: NSView {
         } else {
             controls = actionBar
             updateLiveCaptureActionAvailability(for: selection)
+        }
+        if controls === recordingBar {
+            let logicalSize = recordingTargetCandidate?.globalRect.size ?? selection.size
+            let scale = window?.screen?.backingScaleFactor ?? 1
+            recordingBar.updateSourcePixelSize(CGSize(
+                width: logicalSize.width * scale,
+                height: logicalSize.height * scale
+            ))
         }
         let size = controls.frame.size
         let horizontalInset: CGFloat = 8

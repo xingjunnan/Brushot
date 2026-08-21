@@ -23,6 +23,29 @@ final class RecordingCoreTests: XCTestCase {
         XCTAssertEqual(RecordingEngine.evenDimension(201), 200)
     }
 
+    func testVideoResolutionPreservesAspectRatioWithoutUpscaling() {
+        XCTAssertEqual(
+            RecordingVideoResolution.p1080.outputSize(for: CGSize(width: 2_560, height: 1_600)),
+            CGSize(width: 1_728, height: 1_080)
+        )
+        XCTAssertEqual(
+            RecordingVideoResolution.p1080.outputSize(for: CGSize(width: 1_600, height: 2_560)),
+            CGSize(width: 1_080, height: 1_728)
+        )
+        XCTAssertEqual(
+            RecordingVideoResolution.p1080.outputSize(for: CGSize(width: 1_280, height: 800)),
+            CGSize(width: 1_280, height: 800)
+        )
+        XCTAssertEqual(
+            RecordingVideoResolution.p4K.outputSize(for: CGSize(width: 3_000, height: 3_000)),
+            CGSize(width: 2_160, height: 2_160)
+        )
+        XCTAssertEqual(
+            RecordingVideoResolution.native.outputSize(for: CGSize(width: 2_561, height: 1_601)),
+            CGSize(width: 2_560, height: 1_600)
+        )
+    }
+
     func testPausedDurationIsRemovedFromOutputTimeline() {
         let adjusted = RecordingTimeline.adjustedTime(
             source: CMTime(seconds: 12, preferredTimescale: 600),
@@ -51,6 +74,21 @@ final class RecordingCoreTests: XCTestCase {
         RecordingPreferences.setMicrophoneDeviceID("external-mic", defaults: defaults)
         XCTAssertTrue(RecordingPreferences.microphoneEnabled(defaults: defaults))
         XCTAssertEqual(RecordingPreferences.microphoneDeviceID(defaults: defaults), "external-mic")
+    }
+
+    func testVideoQualityPreferencesDefaultAndPersist() throws {
+        let suite = "Brushot.VideoQualityPreferences.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        XCTAssertEqual(RecordingPreferences.videoResolution(defaults: defaults), .p1080)
+        XCTAssertEqual(RecordingPreferences.videoFPS(defaults: defaults), 30)
+        RecordingPreferences.setVideoResolution(.p4K, defaults: defaults)
+        RecordingPreferences.setVideoFPS(60, defaults: defaults)
+        XCTAssertEqual(RecordingPreferences.videoResolution(defaults: defaults), .p4K)
+        XCTAssertEqual(RecordingPreferences.videoFPS(defaults: defaults), 60)
+        RecordingPreferences.setVideoFPS(24, defaults: defaults)
+        XCTAssertEqual(RecordingPreferences.videoFPS(defaults: defaults), 30)
     }
 
     func testLongGIFRecordingReducesFrameRateToSixHundredFrames() {
@@ -654,13 +692,20 @@ final class RecordingInteractionTests: XCTestCase {
     func testFormatChooserOffersVideoGIFAndPersistedAudioToggle() throws {
         let originalAudioPreference = RecordingPreferences.systemAudioEnabled()
         let originalMicrophonePreference = RecordingPreferences.microphoneEnabled()
+        let originalResolution = RecordingPreferences.videoResolution()
+        let originalFPS = RecordingPreferences.videoFPS()
         defer {
             RecordingPreferences.setSystemAudioEnabled(originalAudioPreference)
             RecordingPreferences.setMicrophoneEnabled(originalMicrophonePreference)
+            RecordingPreferences.setVideoResolution(originalResolution)
+            RecordingPreferences.setVideoFPS(originalFPS)
         }
         RecordingPreferences.setSystemAudioEnabled(false)
         RecordingPreferences.setMicrophoneEnabled(false)
-        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 104))
+        RecordingPreferences.setVideoResolution(.p1080)
+        RecordingPreferences.setVideoFPS(30)
+        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 136))
+        bar.updateSourcePixelSize(CGSize(width: 2_560, height: 1_600))
         let buttons = descendants(of: bar).compactMap { $0 as? NSButton }
         let start = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "startRecordingAction" })
         let format = try XCTUnwrap(descendants(of: bar).compactMap { $0 as? NSSegmentedControl }.first {
@@ -670,6 +715,12 @@ final class RecordingInteractionTests: XCTestCase {
         let microphone = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "recordingMicrophone" })
         let microphonePopup = try XCTUnwrap(descendants(of: bar).compactMap { $0 as? NSPopUpButton }.first {
             $0.identifier?.rawValue == "recordingMicrophoneDevice"
+        })
+        let resolutionPopup = try XCTUnwrap(descendants(of: bar).compactMap { $0 as? NSPopUpButton }.first {
+            $0.identifier?.rawValue == "recordingVideoResolution"
+        })
+        let fpsPopup = try XCTUnwrap(descendants(of: bar).compactMap { $0 as? NSPopUpButton }.first {
+            $0.identifier?.rawValue == "recordingVideoFPS"
         })
         XCTAssertNil(descendants(of: bar).first {
             $0.identifier?.rawValue == "recordingMicrophoneVolume"
@@ -682,13 +733,44 @@ final class RecordingInteractionTests: XCTestCase {
         })
         let labels = descendants(of: bar).compactMap { $0 as? NSTextField }
         let audioLabel = try XCTUnwrap(labels.first { $0.stringValue == "视频音频" })
+        let qualityLabel = try XCTUnwrap(labels.first { $0.stringValue == "视频质量" })
+        let outputSizeLabel = try XCTUnwrap(
+            labels.first { $0.stringValue == "输出 1728 × 1080" },
+            "labels: \(labels.map(\.stringValue))"
+        )
         let silentHint = try XCTUnwrap(labels.first {
             $0.stringValue == "GIF 最长 60 秒，建议 30 秒内 · 无声音"
         })
-        var received: [(RecordingFormat, Bool, Bool)] = []
+        let performanceHint = try XCTUnwrap(labels.first {
+            $0.stringValue == "高负载，建议 1080p · 30 FPS"
+        })
+        XCTAssertTrue(performanceHint.isHidden)
+
+        resolutionPopup.selectItem(at: try XCTUnwrap(resolutionPopup.itemArray.firstIndex {
+            ($0.representedObject as? String) == RecordingVideoResolution.p4K.rawValue
+        }))
+        XCTAssertTrue(resolutionPopup.sendAction(resolutionPopup.action, to: resolutionPopup.target))
+        fpsPopup.selectItem(at: try XCTUnwrap(fpsPopup.itemArray.firstIndex {
+            ($0.representedObject as? Int) == 60
+        }))
+        XCTAssertTrue(fpsPopup.sendAction(fpsPopup.action, to: fpsPopup.target))
+        XCTAssertEqual(RecordingPreferences.videoResolution(), .p4K)
+        XCTAssertEqual(RecordingPreferences.videoFPS(), 60)
+        XCTAssertFalse(performanceHint.isHidden)
+
+        bar.layoutSubtreeIfNeeded()
+        for view in [resolutionPopup, fpsPopup, outputSizeLabel, performanceHint] {
+            let frame = view.convert(view.bounds, to: bar)
+            XCTAssertGreaterThanOrEqual(frame.minX, bar.bounds.minX)
+            XCTAssertLessThanOrEqual(frame.maxX, bar.bounds.maxX)
+            XCTAssertGreaterThanOrEqual(frame.minY, bar.bounds.minY)
+            XCTAssertLessThanOrEqual(frame.maxY, bar.bounds.maxY)
+        }
+        XCTAssertGreaterThanOrEqual(performanceHint.frame.width, performanceHint.fittingSize.width)
+        var received: [(RecordingFormat, RecordingVideoResolution, Int, Bool, Bool)] = []
         var receivedWatermarks: [WatermarkConfiguration?] = []
-        bar.onStart = { format, systemAudio, microphone, _, watermark in
-            received.append((format, systemAudio, microphone))
+        bar.onStart = { format, resolution, fps, systemAudio, microphone, _, watermark in
+            received.append((format, resolution, fps, systemAudio, microphone))
             receivedWatermarks.append(watermark)
         }
 
@@ -697,6 +779,9 @@ final class RecordingInteractionTests: XCTestCase {
         format.selectedSegment = 1
         format.performClick(nil)
         XCTAssertTrue(audioLabel.isHidden)
+        XCTAssertTrue(qualityLabel.isHidden)
+        XCTAssertTrue(resolutionPopup.isHidden)
+        XCTAssertTrue(fpsPopup.isHidden)
         XCTAssertTrue(audio.isHidden)
         XCTAssertTrue(microphone.isHidden)
         XCTAssertTrue(microphonePopup.isHidden)
@@ -705,14 +790,16 @@ final class RecordingInteractionTests: XCTestCase {
         start.performClick(nil)
 
         XCTAssertEqual(received.map(\.0), [.video, .gif])
-        XCTAssertEqual(received.map(\.1), [true, false])
-        XCTAssertEqual(received.map(\.2), [false, false])
+        XCTAssertEqual(received.map(\.1), [.p4K, .p4K])
+        XCTAssertEqual(received.map(\.2), [60, 60])
+        XCTAssertEqual(received.map(\.3), [true, false])
+        XCTAssertEqual(received.map(\.4), [false, false])
         XCTAssertTrue(receivedWatermarks.allSatisfy { $0 == nil })
         XCTAssertTrue(RecordingPreferences.systemAudioEnabled())
     }
 
     func testRecordingFormatChooserDoesNotOfferWatermarkBeforeRecording() {
-        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 104))
+        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 136))
         let buttons = descendants(of: bar).compactMap { $0 as? NSButton }
         XCTAssertNil(buttons.first { $0.identifier?.rawValue == "recordingWatermark" })
         XCTAssertNil(buttons.first { $0.identifier?.rawValue == "recordingWatermarkInfo" })
