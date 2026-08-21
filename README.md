@@ -112,4 +112,4 @@ The first capture requires macOS screen recording permission. If permission is d
 
 ## Distribution TODO
 
-- Developer ID signing and notarization
+Current work and release status are tracked in [TODO.md](TODO.md).

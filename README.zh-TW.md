@@ -112,4 +112,4 @@ BRUSHOT_CODESIGN_IDENTITY="Apple Development: Your Name (TEAMID)" ./scripts/buil
 
 ## 發佈待辦
 
-- Developer ID 簽署與公證
+目前需求與發佈狀態統一記錄在 [TODO.md](TODO.md)。
