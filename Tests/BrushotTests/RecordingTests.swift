@@ -8,6 +8,15 @@ import XCTest
 @testable import Brushot
 
 final class RecordingCoreTests: XCTestCase {
+    func testRecordingCaptureTargetsPreserveSourceIdentityAndBounds() {
+        let rect = CGRect(x: 20, y: 30, width: 640, height: 360)
+        let window = RecordingCaptureTarget.window(id: 42, globalRect: rect, title: "Document")
+
+        XCTAssertEqual(window.globalRect, rect)
+        XCTAssertEqual(window.displayName, "Document")
+        XCTAssertNotEqual(window, .region(globalRect: rect))
+    }
+
     func testEvenVideoDimensionsNeverGrowPastSelection() {
         XCTAssertEqual(RecordingEngine.evenDimension(1), 2)
         XCTAssertEqual(RecordingEngine.evenDimension(200), 200)

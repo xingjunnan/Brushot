@@ -613,8 +613,8 @@ final class RecordingSessionController: NSObject {
             guard let self else { return }
             // Rebuild the filter now that Brushot's border/control windows
             // are on screen, so they are excluded from every recorded frame.
-            await self.capturer.prepareForOverlayExclusion()
             do {
+                try await self.capturer.prepareForRecordingOverlay()
                 for second in RecordingCountdown.seconds {
                     try Task.checkCancellation()
                     guard !self.isFinished else { return }

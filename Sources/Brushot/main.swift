@@ -696,6 +696,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         fullscreenRecording.target = self
         fullscreenRecording.keyEquivalentModifierMask = []
         menu.addItem(fullscreenRecording)
+
+        let windowRecording = NSMenuItem(
+            title: L.text("窗口录屏…"),
+            action: #selector(captureWindowRecording),
+            keyEquivalent: ""
+        )
+        windowRecording.target = self
+        windowRecording.keyEquivalentModifierMask = []
+        menu.addItem(windowRecording)
+
         menu.addItem(NSMenuItem.separator())
 
         let pinItem = NSMenuItem(title: L.text("贴图"), action: nil, keyEquivalent: "")
@@ -995,6 +1005,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func captureFullscreenRecording() {
         captureController.beginFullscreenRecordingCapture()
+    }
+
+    @objc private func captureWindowRecording() {
+        captureController.beginWindowRecordingCapture()
     }
 
     @objc private func showSettings() {
@@ -2559,6 +2573,23 @@ final class CaptureController {
         }
     }
 
+    func beginWindowRecordingCapture() {
+        beginContentRecordingCapture(purpose: .windowRecording)
+    }
+
+    private func beginContentRecordingCapture(purpose: SelectionPurpose) {
+        guard canBeginCaptureFlow else {
+            NSSound.beep()
+            return
+        }
+        resolveRecordingPreviewIfNeeded { [weak self] in
+            guard let self, self.canBeginCaptureFlow else { return }
+            self.requestScreenCapturePermission { [weak self] in
+                self?.presentContentRecordingOverlays(purpose: purpose)
+            }
+        }
+    }
+
     private func resolveRecordingPreviewIfNeeded(
         then continuation: @escaping @MainActor () -> Void
     ) {
@@ -2742,9 +2773,9 @@ final class CaptureController {
         }
         window.onOCRRequested = { [weak self] source in self?.finishOCR(source: source) }
         window.onLongCaptureRequested = { [weak self] rect in self?.startLongCapture(globalRect: rect) }
-        window.onRecordingRequested = { [weak self] rect, format, systemAudio, microphone, deviceID, watermark in
+        window.onRecordingRequested = { [weak self] target, format, systemAudio, microphone, deviceID, watermark in
             self?.startRecording(
-                globalRect: rect,
+                target: target,
                 format: format,
                 systemAudio: systemAudio,
                 microphone: microphone,
@@ -2902,13 +2933,26 @@ final class CaptureController {
         window.refreshCursorAfterPresentation()
     }
 
+    private func presentContentRecordingOverlays(purpose: SelectionPurpose) {
+        closeOverlays()
+        overlayWindows = NSScreen.screens.map { screen in
+            let window = SelectionOverlayWindow(screen: screen, purpose: purpose)
+            configureRecordingCallbacks(for: window)
+            return window
+        }
+        overlayWindows.forEach { $0.orderFrontRegardless() }
+        let mouseLocation = NSEvent.mouseLocation
+        overlayWindows.first(where: { $0.frame.contains(mouseLocation) })?.makeKeyAndOrderFront(nil)
+        overlayWindows.forEach { $0.refreshCursorAfterPresentation() }
+    }
+
     private func configureRecordingCallbacks(for window: SelectionOverlayWindow) {
         window.onSelectionCancelled = { [weak self] in
             self?.closeOverlays()
         }
-        window.onRecordingRequested = { [weak self] rect, format, systemAudio, microphone, deviceID, watermark in
+        window.onRecordingRequested = { [weak self] target, format, systemAudio, microphone, deviceID, watermark in
             self?.startRecording(
-                globalRect: rect,
+                target: target,
                 format: format,
                 systemAudio: systemAudio,
                 microphone: microphone,
@@ -2960,7 +3004,7 @@ final class CaptureController {
     }
 
     private func startRecording(
-        globalRect: CGRect,
+        target: RecordingCaptureTarget,
         format: RecordingFormat,
         systemAudio: Bool,
         microphone: Bool,
@@ -2971,7 +3015,7 @@ final class CaptureController {
         if recordingPreview != nil {
             resolveRecordingPreviewIfNeeded { [weak self] in
                 self?.startRecording(
-                    globalRect: globalRect,
+                    target: target,
                     format: format,
                     systemAudio: systemAudio,
                     microphone: microphone,
@@ -2994,9 +3038,9 @@ final class CaptureController {
                     }
                 }
                 try await Task.sleep(for: .milliseconds(90))
-                let capturer = try await ScreenRegionCapturer(globalRect: globalRect)
+                let capturer = try await ScreenRegionCapturer(target: target)
                 let session = RecordingSessionController(
-                    selectionRect: globalRect,
+                    selectionRect: target.globalRect,
                     capturer: capturer,
                     configuration: RecordingConfiguration(
                         format: format,
@@ -3023,7 +3067,6 @@ final class CaptureController {
                 )
                 recordingSession = session
                 session.start()
-                await capturer.prepareForOverlayExclusion()
             } catch {
                 showRecordingError(error)
             }
@@ -3339,7 +3382,12 @@ enum SelectionPurpose {
     case regular
     case longCapture
     case recording
+    case windowRecording
     case delayedCapture
+
+    var isContentRecording: Bool {
+        self == .windowRecording
+    }
 }
 
 final class SelectionOverlayWindow: NSPanel {
@@ -3350,7 +3398,7 @@ final class SelectionOverlayWindow: NSPanel {
     var onAnnotationFailed: ((Error) -> Void)?
     var onOCRRequested: ((OCRSource) -> Void)?
     var onLongCaptureRequested: ((CGRect) -> Void)?
-    var onRecordingRequested: ((CGRect, RecordingFormat, Bool, Bool, String?, WatermarkConfiguration?) -> Void)?
+    var onRecordingRequested: ((RecordingCaptureTarget, RecordingFormat, Bool, Bool, String?, WatermarkConfiguration?) -> Void)?
     var onDelayedCaptureRequested: ((CGRect) -> Void)?
 
     private var overlayView: SelectionOverlayView? {
@@ -3406,8 +3454,8 @@ final class SelectionOverlayWindow: NSPanel {
         view.onLongCaptureRequested = { [weak self] rect in
             self?.onLongCaptureRequested?(rect)
         }
-        view.onRecordingRequested = { [weak self] rect, format, systemAudio, microphone, deviceID, watermark in
-            self?.onRecordingRequested?(rect, format, systemAudio, microphone, deviceID, watermark)
+        view.onRecordingRequested = { [weak self] target, format, systemAudio, microphone, deviceID, watermark in
+            self?.onRecordingRequested?(target, format, systemAudio, microphone, deviceID, watermark)
         }
         view.onDelayedCaptureRequested = { [weak self] rect in
             self?.onDelayedCaptureRequested?(rect)
@@ -3489,7 +3537,7 @@ final class SelectionOverlayView: NSView {
     var onAnnotationFailed: ((Error) -> Void)?
     var onOCRRequested: ((OCRSource) -> Void)?
     var onLongCaptureRequested: ((CGRect) -> Void)?
-    var onRecordingRequested: ((CGRect, RecordingFormat, Bool, Bool, String?, WatermarkConfiguration?) -> Void)?
+    var onRecordingRequested: ((RecordingCaptureTarget, RecordingFormat, Bool, Bool, String?, WatermarkConfiguration?) -> Void)?
     var onDelayedCaptureRequested: ((CGRect) -> Void)?
 
     private let purpose: SelectionPurpose
@@ -3511,6 +3559,8 @@ final class SelectionOverlayView: NSView {
     private var mouseTrackingTimer: Timer?
     private var lastPolledMouseLocation: CGPoint?
     private var isRecordingConfirming = false
+    private var recordingTargetCandidate: RecordingCaptureTarget?
+    private var recordingTargetRects: [CGRect] = []
     private var isPreparingAnnotation = false
     private var isSubmitting = false
     private var annotationCanvas: AnnotationCanvasView?
@@ -3544,19 +3594,20 @@ final class SelectionOverlayView: NSView {
         bar.onStart = { [weak self] format, systemAudio, microphone, deviceID, watermark in
             guard let self,
                   let selection = self.currentSelection(),
-                  selection.width >= 80,
-                  selection.height >= 80,
+                  selection.width >= (self.purpose.isContentRecording ? 10 : 80),
+                  selection.height >= (self.purpose.isContentRecording ? 10 : 80),
                   let globalRect = self.currentGlobalSelectionRect() else {
                 NSSound.beep()
                 return
             }
             self.isSubmitting = true
             self.hideSelectionControls()
-            self.onRecordingRequested?(globalRect, format, systemAudio, microphone, deviceID, watermark)
+            let target = self.recordingTargetCandidate ?? .region(globalRect: globalRect)
+            self.onRecordingRequested?(target, format, systemAudio, microphone, deviceID, watermark)
         }
         bar.onCancel = { [weak self] in
             guard let self else { return }
-            if self.purpose == .recording {
+            if self.purpose == .recording || self.purpose.isContentRecording {
                 self.onSelectionCancelled?()
             } else if let selection = self.currentSelection() {
                 self.isRecordingConfirming = false
@@ -3608,6 +3659,9 @@ final class SelectionOverlayView: NSView {
             addSubview(longCaptureBar)
             longCaptureBar.isHidden = true
         case .recording:
+            addSubview(recordingBar)
+            recordingBar.isHidden = true
+        case .windowRecording:
             addSubview(recordingBar)
             recordingBar.isHidden = true
         case .delayedCapture:
@@ -3769,7 +3823,7 @@ final class SelectionOverlayView: NSView {
             candidates = [actionBar, recordingBar]
         case .longCapture:
             candidates = [longCaptureBar]
-        case .recording:
+        case .recording, .windowRecording:
             candidates = [recordingBar]
         case .delayedCapture:
             candidates = [delayedCaptureBar]
@@ -3833,7 +3887,8 @@ final class SelectionOverlayView: NSView {
             NSCursor.arrow.set()
             return
         }
-        if let handle = selectionHandle(at: location), isSelectionFinalized, !isPreselected {
+        if let handle = selectionHandle(at: location), isSelectionFinalized, !isPreselected,
+           !purpose.isContentRecording {
             restoreSystemCursorIfNeeded()
             cursor(for: handle).set()
             return
@@ -4102,11 +4157,11 @@ final class SelectionOverlayView: NSView {
         return L.text(best)
     }
 
-    /// iShot-style smart window detection: finds the topmost window under
-    /// the cursor and snaps the selection to its bounds.  Falls back to
-    /// full-screen preselection when the cursor is on the desktop.
+    /// Finds the topmost window under the cursor. Regular screenshots snap to
+    /// that window; content recording also retains its real window/app identity
+    /// so ScreenCaptureKit can exclude everything else.
     private func detectWindowUnderCursor(at location: CGPoint) {
-        guard purpose == .regular,
+        guard purpose == .regular || purpose.isContentRecording,
               !isPreparingAnnotation,
               !isSubmitting, !isRecordingConfirming,
               annotationCanvas == nil,
@@ -4132,6 +4187,7 @@ final class SelectionOverlayView: NSView {
                       layer == 0,
                       let pid = info[kCGWindowOwnerPID as String] as? Int,
                       pid != ownPID,
+                      let windowNumber = info[kCGWindowNumber as String] as? NSNumber,
                       let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
                       let x = boundsDict["X"] as? CGFloat,
                       let y = boundsDict["Y"] as? CGFloat,
@@ -4158,21 +4214,44 @@ final class SelectionOverlayView: NSView {
                 guard !clipped.isNull,
                       clipped.width > 10, clipped.height > 10 else { continue }
 
+                let ownerName = (info[kCGWindowOwnerName as String] as? String) ?? L.text("未知应用")
+                let windowTitle = (info[kCGWindowName as String] as? String)?.trimmingCharacters(
+                    in: .whitespacesAndNewlines
+                )
                 startPoint = clipped.origin
                 currentPoint = CGPoint(x: clipped.maxX, y: clipped.maxY)
+                recordingTargetRects = [clipped]
                 isSelectionFinalized = true
                 isPreselected = true
+                if purpose.isContentRecording,
+                   let globalRect = currentGlobalSelectionRect() {
+                    let title = (windowTitle?.isEmpty == false ? windowTitle : nil) ?? ownerName
+                    recordingTargetCandidate = .window(
+                        id: CGWindowID(windowNumber.uint32Value),
+                        globalRect: globalRect,
+                        title: title
+                    )
+                }
                 window.invalidateCursorRects(for: self)
                 needsDisplay = true
                 return
             }
         }
 
-        // Desktop fallback: full-screen preselection
-        startPoint = .zero
-        currentPoint = CGPoint(x: bounds.maxX, y: bounds.maxY)
-        isSelectionFinalized = true
-        isPreselected = true
+        recordingTargetCandidate = nil
+        recordingTargetRects = []
+        if purpose == .regular {
+            // Desktop fallback for screenshots remains full screen.
+            startPoint = .zero
+            currentPoint = CGPoint(x: bounds.maxX, y: bounds.maxY)
+            isSelectionFinalized = true
+            isPreselected = true
+        } else {
+            startPoint = nil
+            currentPoint = nil
+            isSelectionFinalized = false
+            isPreselected = false
+        }
         window.invalidateCursorRects(for: self)
         needsDisplay = true
     }
@@ -4181,7 +4260,18 @@ final class SelectionOverlayView: NSView {
         guard !isPreparingAnnotation else { return }
         let location = convert(event.locationInWindow, from: nil)
 
-        if isSelectionFinalized, !isPreselected,
+        if purpose.isContentRecording,
+           recordingTargetCandidate != nil,
+           let selection = currentSelection(),
+           recordingTargetRects.contains(where: { $0.contains(location) }) {
+            isPreselected = false
+            positionSelectionControls(for: selection)
+            window?.makeFirstResponder(self)
+            needsDisplay = true
+            return
+        }
+
+        if isSelectionFinalized, !isPreselected, !purpose.isContentRecording,
            let handle = selectionHandle(at: location),
            let selection = currentSelection() {
             dragOperation = .resizing(handle)
@@ -4200,7 +4290,7 @@ final class SelectionOverlayView: NSView {
             if event.clickCount >= 2 {
                 if purpose == .longCapture {
                     requestLongCapture()
-                } else if purpose == .recording {
+                } else if purpose == .recording || purpose.isContentRecording {
                     NSSound.beep()
                 } else if purpose == .delayedCapture {
                     requestDelayedCapture()
@@ -4421,11 +4511,19 @@ final class SelectionOverlayView: NSView {
         NSColor.black.withAlphaComponent(0.34).setFill()
         guard let selection = currentSelection() else {
             bounds.fill()
-            let hint = purpose == .longCapture
-                ? L.text("拖动选择可滚动区域，Esc 取消")
-                : purpose == .delayedCapture
-                    ? L.text("拖动选择延时截图区域，Esc 取消")
-                    : L.text("拖动选择截图区域，Esc 取消")
+            let hint: String
+            switch purpose {
+            case .longCapture:
+                hint = L.text("拖动选择可滚动区域，Esc 取消")
+            case .delayedCapture:
+                hint = L.text("拖动选择延时截图区域，Esc 取消")
+            case .recording:
+                hint = L.text("拖动选择录制区域，Esc 取消")
+            case .windowRecording:
+                hint = L.text("移动到窗口并单击选择，Esc 取消")
+            case .regular:
+                hint = L.text("拖动选择截图区域，Esc 取消")
+            }
             drawHint(hint, at: NSPoint(x: bounds.midX - 110, y: bounds.midY))
             drawSelectionGuideLines()
             drawColorSamplerOverlay()
@@ -4434,7 +4532,10 @@ final class SelectionOverlayView: NSView {
         }
 
         let dimmedArea = NSBezierPath(rect: bounds)
-        dimmedArea.append(NSBezierPath(rect: selection))
+        let cutoutRects = purpose.isContentRecording && !recordingTargetRects.isEmpty
+            ? recordingTargetRects
+            : [selection]
+        cutoutRects.forEach { dimmedArea.append(NSBezierPath(rect: $0)) }
         dimmedArea.windingRule = .evenOdd
         dimmedArea.fill()
 
@@ -4447,15 +4548,23 @@ final class SelectionOverlayView: NSView {
         }
 
         NSColor.systemBlue.setStroke()
-        let path = NSBezierPath(rect: selection)
-        path.lineWidth = 2
-        path.stroke()
+        for rect in cutoutRects {
+            let path = NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5)
+            path.lineWidth = 2
+            path.stroke()
+        }
 
-        if isSelectionFinalized, !isPreselected, annotationCanvas == nil {
+        if isSelectionFinalized, !isPreselected, annotationCanvas == nil,
+           !purpose.isContentRecording {
             drawSelectionHandles(for: selection)
         }
 
-        let label = "\(Int(selection.width)) x \(Int(selection.height))"
+        var label = recordingTargetCandidate.map {
+            L.format("窗口 · %@", $0.displayName)
+        } ?? "\(Int(selection.width)) x \(Int(selection.height))"
+        if purpose.isContentRecording && isPreselected {
+            label += L.text(" · 单击选择")
+        }
         drawHint(
             label,
             at: NSPoint(
@@ -4852,7 +4961,7 @@ final class SelectionOverlayView: NSView {
             controls = longCaptureBar
         } else if purpose == .delayedCapture {
             controls = delayedCaptureBar
-        } else if purpose == .recording || isRecordingConfirming {
+        } else if purpose == .recording || purpose.isContentRecording || isRecordingConfirming {
             controls = recordingBar
         } else {
             controls = actionBar
@@ -4885,7 +4994,7 @@ final class SelectionOverlayView: NSView {
             recordingBar.isHidden = true
         case .longCapture:
             longCaptureBar.isHidden = true
-        case .recording:
+        case .recording, .windowRecording:
             recordingBar.isHidden = true
         case .delayedCapture:
             delayedCaptureBar.isHidden = true

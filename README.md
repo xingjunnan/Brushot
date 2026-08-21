@@ -56,8 +56,8 @@ Sequence annotations are numeric badges only and increment automatically. Add ex
 
 ## Recording Workflow
 
-1. Choose `Record Region` from the menu bar or press its configurable shortcut (default `Option + R`). To record the entire display containing the pointer, choose `Record Full Screen` instead.
-2. Confirm the area or full display, then choose `Start Recording Video` or `Start Recording GIF`. Video can capture system audio, a selected built-in/USB/Bluetooth microphone, or both; GIF is always silent. The `Watermark` checkbox uses the shared watermark settings and is applied during export before the preview appears, not while recording.
+1. Choose `Record Region` from the menu bar or press its configurable shortcut (default `Option + R`). You can also choose `Record Full Screen` or `Record Window...`.
+2. For a window, point to the live highlight and click to lock that exact window. Then choose `Start Recording Video` or `Start Recording GIF`. Video can capture system audio, a selected built-in/USB/Bluetooth microphone, or both; GIF is always silent.
 3. A centered 3–2–1 countdown appears before capture starts and can be cancelled. During recording, use the compact floating controls to pause, resume, stop, cancel, or collapse/expand the annotation tools. Full-screen recordings start with the controls collapsed so less of the screen is covered. The real-time annotation bar provides select, rectangle, arrow, pen, color, stroke width, undo, and redo controls; annotations enter both video and GIF output while the countdown, red border, and controls stay excluded.
 4. After export, preview the result and save it to the configured location, copy it to the clipboard, or discard it.
 
