@@ -4,19 +4,35 @@ import ScreenCaptureKit
 
 enum RecordingCaptureTarget: Equatable, Sendable {
     case region(globalRect: CGRect)
-    case window(id: CGWindowID, globalRect: CGRect, title: String)
+    case window(
+        id: CGWindowID,
+        globalRect: CGRect,
+        title: String,
+        applicationName: String,
+        bundleIdentifier: String?
+    )
 
     var globalRect: CGRect {
         switch self {
-        case .region(let rect), .window(_, let rect, _): rect
+        case .region(let rect), .window(_, let rect, _, _, _): rect
         }
     }
 
     var displayName: String {
         switch self {
         case .region: L.text("所选区域")
-        case .window(_, _, let title): title
+        case .window(_, _, let title, _, _): title
         }
+    }
+
+    var windowApplicationName: String? {
+        guard case .window(_, _, _, let applicationName, _) = self else { return nil }
+        return applicationName
+    }
+
+    var windowBundleIdentifier: String? {
+        guard case .window(_, _, _, _, let bundleIdentifier) = self else { return nil }
+        return bundleIdentifier
     }
 }
 
@@ -94,7 +110,7 @@ final class ScreenRegionCapturer {
                 exceptingWindows: []
             )
             mode = .region
-        case .window(let id, _, _):
+        case .window(let id, _, _, _, _):
             guard let selectedWindow = shareableContent.windows.first(where: { $0.windowID == id }) else {
                 throw Self.captureError(L.text("所选窗口已关闭，请重新选择。"))
             }

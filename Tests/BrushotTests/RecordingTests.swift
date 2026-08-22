@@ -78,10 +78,18 @@ final class RecordingCoreTests: XCTestCase {
 
     func testRecordingCaptureTargetsPreserveSourceIdentityAndBounds() {
         let rect = CGRect(x: 20, y: 30, width: 640, height: 360)
-        let window = RecordingCaptureTarget.window(id: 42, globalRect: rect, title: "Document")
+        let window = RecordingCaptureTarget.window(
+            id: 42,
+            globalRect: rect,
+            title: "Document",
+            applicationName: "Preview",
+            bundleIdentifier: "com.apple.Preview"
+        )
 
         XCTAssertEqual(window.globalRect, rect)
         XCTAssertEqual(window.displayName, "Document")
+        XCTAssertEqual(window.windowApplicationName, "Preview")
+        XCTAssertEqual(window.windowBundleIdentifier, "com.apple.Preview")
         XCTAssertNotEqual(window, .region(globalRect: rect))
     }
 
@@ -797,6 +805,43 @@ final class RecordingInteractionTests: XCTestCase {
             }
         )
         XCTAssertTrue(fullscreenSizeButton.isHidden)
+    }
+
+    func testWindowRecordingIdentityShowsApplicationNotDocumentNameAtWindowCenter() throws {
+        let selection = CGRect(x: 100, y: 120, width: 800, height: 500)
+        let target = RecordingCaptureTarget.window(
+            id: 42,
+            globalRect: CGRect(x: 20, y: 30, width: 746, height: 404),
+            title: "Quarterly Report",
+            applicationName: "Google Chrome",
+            bundleIdentifier: nil
+        )
+        let frame = try XCTUnwrap(RecordingWindowIdentityView.centeredFrame(in: selection))
+        let identity = RecordingWindowIdentityView(frame: frame)
+
+        identity.update(target: target, pixelDimensions: CGSize(width: 1_492, height: 808))
+
+        let views = descendants(of: identity)
+        let icon = try XCTUnwrap(views.first {
+            $0.identifier?.rawValue == "recordingWindowIdentityIcon"
+        } as? NSImageView)
+        let appName = try XCTUnwrap(views.first {
+            $0.identifier?.rawValue == "recordingWindowIdentityName"
+        } as? NSTextField)
+        let pixelSize = try XCTUnwrap(views.first {
+            $0.identifier?.rawValue == "recordingWindowIdentityPixelSize"
+        } as? NSTextField)
+
+        XCTAssertNotNil(icon.image)
+        XCTAssertEqual(appName.stringValue, "Google Chrome")
+        XCTAssertNotEqual(appName.stringValue, "Quarterly Report")
+        XCTAssertEqual(pixelSize.stringValue, "1,492 × 808 像素")
+        XCTAssertEqual(frame.midX, selection.midX)
+        XCTAssertEqual(frame.midY, selection.midY)
+        XCTAssertTrue(selection.contains(frame))
+        XCTAssertNil(RecordingWindowIdentityView.centeredFrame(
+            in: CGRect(x: 0, y: 0, width: 120, height: 90)
+        ))
     }
 
     func testCameraPermissionRequestBlocksStartingUntilItFinishes() async throws {

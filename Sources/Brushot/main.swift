@@ -3460,6 +3460,109 @@ enum SelectionPurpose {
     }
 }
 
+@MainActor
+final class RecordingWindowIdentityView: NSView {
+    static let preferredSize = CGSize(width: 300, height: 154)
+
+    private let applicationIcon = NSImageView()
+    private let applicationName = NSTextField(labelWithString: "")
+    private let pixelSize = NSTextField(labelWithString: "")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        identifier = NSUserInterfaceItemIdentifier("recordingWindowIdentity")
+
+        applicationIcon.imageScaling = .scaleProportionallyUpOrDown
+        applicationIcon.identifier = NSUserInterfaceItemIdentifier("recordingWindowIdentityIcon")
+        applicationIcon.translatesAutoresizingMaskIntoConstraints = false
+
+        applicationName.font = .systemFont(ofSize: 26, weight: .bold)
+        applicationName.textColor = .white
+        applicationName.alignment = .center
+        applicationName.lineBreakMode = .byTruncatingTail
+        applicationName.identifier = NSUserInterfaceItemIdentifier("recordingWindowIdentityName")
+
+        pixelSize.font = .monospacedDigitSystemFont(ofSize: 14, weight: .medium)
+        pixelSize.textColor = .white
+        pixelSize.alignment = .center
+        pixelSize.identifier = NSUserInterfaceItemIdentifier("recordingWindowIdentityPixelSize")
+
+        [applicationIcon, applicationName, pixelSize].forEach(applyShadow)
+
+        let stack = NSStackView(views: [applicationIcon, applicationName, pixelSize])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 5
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            applicationIcon.widthAnchor.constraint(equalToConstant: 72),
+            applicationIcon.heightAnchor.constraint(equalToConstant: 72),
+            applicationName.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -16),
+            pixelSize.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -16),
+            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func update(target: RecordingCaptureTarget, pixelDimensions: CGSize) {
+        guard let name = target.windowApplicationName else { return }
+        applicationName.stringValue = name
+        applicationName.toolTip = name
+        applicationIcon.image = Self.applicationIcon(
+            bundleIdentifier: target.windowBundleIdentifier
+        )
+        applicationIcon.toolTip = name
+        applicationIcon.setAccessibilityLabel(name)
+        pixelSize.stringValue = L.format(
+            "%d × %d 像素",
+            Int(pixelDimensions.width.rounded()),
+            Int(pixelDimensions.height.rounded())
+        )
+    }
+
+    static func centeredFrame(in selection: CGRect) -> CGRect? {
+        guard selection.width >= 160, selection.height >= 130 else { return nil }
+        let size = CGSize(
+            width: min(preferredSize.width, selection.width - 24),
+            height: min(preferredSize.height, selection.height - 16)
+        )
+        return CGRect(
+            x: selection.midX - size.width / 2,
+            y: selection.midY - size.height / 2,
+            width: size.width,
+            height: size.height
+        ).integral
+    }
+
+    private static func applicationIcon(bundleIdentifier: String?) -> NSImage {
+        if let bundleIdentifier,
+           let applicationURL = NSWorkspace.shared.urlForApplication(
+               withBundleIdentifier: bundleIdentifier
+           ) {
+            return NSWorkspace.shared.icon(forFile: applicationURL.path)
+        }
+        return NSImage(
+            systemSymbolName: "app.fill",
+            accessibilityDescription: L.text("未知应用")
+        ) ?? NSImage()
+    }
+
+    private func applyShadow(to view: NSView) {
+        view.wantsLayer = true
+        view.layer?.shadowColor = NSColor.black.cgColor
+        view.layer?.shadowOpacity = 0.9
+        view.layer?.shadowRadius = 3
+        view.layer?.shadowOffset = CGSize(width: 0, height: -1)
+    }
+}
+
 final class SelectionOverlayWindow: NSPanel {
     var onSelectionFinished: ((CGRect, CaptureAction, CaptureOutputOptions) -> Void)?
     var onSelectionCancelled: (() -> Void)?
@@ -3637,6 +3740,7 @@ final class SelectionOverlayView: NSView {
     private var lastPolledMouseLocation: CGPoint?
     private var isRecordingConfirming = false
     private var cameraPreviewView: RecordingCameraPreviewView?
+    private var recordingWindowIdentityView: RecordingWindowIdentityView?
     private var recordingTargetCandidate: RecordingCaptureTarget?
     private var recordingTargetRects: [CGRect] = []
     private var isPreparingAnnotation = false
@@ -4283,6 +4387,8 @@ final class SelectionOverlayView: NSView {
               bounds.width > 0, bounds.height > 0,
               let window else { return }
 
+        recordingWindowIdentityView?.isHidden = true
+
         // Convert view point → AppKit screen point → CG display point
         let windowPoint = convert(location, to: nil)
         let screenPoint = window.convertToScreen(
@@ -4328,6 +4434,8 @@ final class SelectionOverlayView: NSView {
                       clipped.width > 10, clipped.height > 10 else { continue }
 
                 let ownerName = (info[kCGWindowOwnerName as String] as? String) ?? L.text("未知应用")
+                let runningApplication = NSRunningApplication(processIdentifier: pid_t(pid))
+                let applicationName = runningApplication?.localizedName ?? ownerName
                 let windowTitle = (info[kCGWindowName as String] as? String)?.trimmingCharacters(
                     in: .whitespacesAndNewlines
                 )
@@ -4339,10 +4447,21 @@ final class SelectionOverlayView: NSView {
                 if purpose.isContentRecording,
                    let globalRect = currentGlobalSelectionRect() {
                     let title = (windowTitle?.isEmpty == false ? windowTitle : nil) ?? ownerName
-                    recordingTargetCandidate = .window(
+                    let target = RecordingCaptureTarget.window(
                         id: CGWindowID(windowNumber.uint32Value),
                         globalRect: globalRect,
-                        title: title
+                        title: title,
+                        applicationName: applicationName,
+                        bundleIdentifier: runningApplication?.bundleIdentifier
+                    )
+                    recordingTargetCandidate = target
+                    let scale = window.screen?.backingScaleFactor ?? 1
+                    updateRecordingWindowIdentity(
+                        for: clipped,
+                        pixelSize: CGSize(
+                            width: globalRect.width * scale,
+                            height: globalRect.height * scale
+                        )
                     )
                 }
                 window.invalidateCursorRects(for: self)
@@ -4682,19 +4801,21 @@ final class SelectionOverlayView: NSView {
             drawSelectionHandles(for: selection)
         }
 
-        var label = recordingTargetCandidate.map {
-            L.format("窗口 · %@", $0.displayName)
-        } ?? selectionSizeLabel(for: selection)
-        if purpose.isContentRecording && isPreselected {
-            label += L.text(" · 单击选择")
-        }
-        drawHint(
-            label,
-            at: NSPoint(
-                x: max(min(selection.minX, bounds.maxX - 120), 8),
-                y: min(selection.maxY + 7, bounds.maxY - 34)
+        if !(purpose.isContentRecording && !isPreselected) {
+            var label = recordingTargetCandidate.map {
+                L.format("窗口 · %@", $0.windowApplicationName ?? L.text("未知应用"))
+            } ?? selectionSizeLabel(for: selection)
+            if purpose.isContentRecording && isPreselected {
+                label += L.text(" · 单击选择")
+            }
+            drawHint(
+                label,
+                at: NSPoint(
+                    x: max(min(selection.minX, bounds.maxX - 120), 8),
+                    y: min(selection.maxY + 7, bounds.maxY - 34)
+                )
             )
-        )
+        }
         drawSelectionGuideLines()
         drawColorSamplerOverlay()
         drawSyntheticSelectionCursor()
@@ -5093,10 +5214,12 @@ final class SelectionOverlayView: NSView {
         if controls === recordingBar {
             let logicalSize = recordingTargetCandidate?.globalRect.size ?? selection.size
             let scale = window?.screen?.backingScaleFactor ?? 1
-            recordingBar.updateSourcePixelSize(CGSize(
+            let pixelSize = CGSize(
                 width: logicalSize.width * scale,
                 height: logicalSize.height * scale
-            ))
+            )
+            recordingBar.updateSourcePixelSize(pixelSize)
+            updateRecordingWindowIdentity(for: selection, pixelSize: pixelSize)
             if let options = cameraPreviewView?.options {
                 cameraPreviewView?.update(options: options, allowedFrame: selection)
             }
@@ -5122,6 +5245,26 @@ final class SelectionOverlayView: NSView {
         updateCursorAtCurrentMouseLocation()
     }
 
+    private func updateRecordingWindowIdentity(for selection: CGRect, pixelSize: CGSize) {
+        guard purpose.isContentRecording,
+              let target = recordingTargetCandidate,
+              let frame = RecordingWindowIdentityView.centeredFrame(in: selection) else {
+            recordingWindowIdentityView?.isHidden = true
+            return
+        }
+        let identityView: RecordingWindowIdentityView
+        if let existing = recordingWindowIdentityView {
+            identityView = existing
+        } else {
+            identityView = RecordingWindowIdentityView(frame: frame)
+            addSubview(identityView, positioned: .below, relativeTo: recordingBar)
+            recordingWindowIdentityView = identityView
+        }
+        identityView.frame = frame
+        identityView.update(target: target, pixelDimensions: pixelSize)
+        identityView.isHidden = false
+    }
+
     private func updateRecordingRegionSizeControl(for selection: CGRect) {
         let scale = window?.screen?.backingScaleFactor ?? 1
         recordingBar.updateRegionSelection(
@@ -5132,6 +5275,7 @@ final class SelectionOverlayView: NSView {
     }
 
     private func hideSelectionControls() {
+        recordingWindowIdentityView?.isHidden = true
         switch purpose {
         case .regular:
             actionBar.isHidden = true
