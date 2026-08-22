@@ -2752,6 +2752,7 @@ final class CaptureController {
     }
 
     private func configureRegularCaptureCallbacks(for window: SelectionOverlayWindow) {
+        window.onCameraPermissionDenied = { [weak self] in self?.showCameraPermissionAlert() }
         window.onSelectionFinished = { [weak self] rect, action, options in
             self?.finishCapture(globalRect: rect, action: action, options: options)
         }
@@ -2773,7 +2774,7 @@ final class CaptureController {
         }
         window.onOCRRequested = { [weak self] source in self?.finishOCR(source: source) }
         window.onLongCaptureRequested = { [weak self] rect in self?.startLongCapture(globalRect: rect) }
-        window.onRecordingRequested = { [weak self] target, format, resolution, fps, systemAudio, microphone, deviceID, watermark in
+        window.onRecordingRequested = { [weak self] target, format, resolution, fps, systemAudio, microphone, deviceID, camera, watermark in
             self?.startRecording(
                 target: target,
                 format: format,
@@ -2782,6 +2783,7 @@ final class CaptureController {
                 systemAudio: systemAudio,
                 microphone: microphone,
                 microphoneDeviceID: deviceID,
+                cameraOptions: camera,
                 watermarkConfiguration: watermark
             )
         }
@@ -2949,10 +2951,11 @@ final class CaptureController {
     }
 
     private func configureRecordingCallbacks(for window: SelectionOverlayWindow) {
+        window.onCameraPermissionDenied = { [weak self] in self?.showCameraPermissionAlert() }
         window.onSelectionCancelled = { [weak self] in
             self?.closeOverlays()
         }
-        window.onRecordingRequested = { [weak self] target, format, resolution, fps, systemAudio, microphone, deviceID, watermark in
+        window.onRecordingRequested = { [weak self] target, format, resolution, fps, systemAudio, microphone, deviceID, camera, watermark in
             self?.startRecording(
                 target: target,
                 format: format,
@@ -2961,6 +2964,7 @@ final class CaptureController {
                 systemAudio: systemAudio,
                 microphone: microphone,
                 microphoneDeviceID: deviceID,
+                cameraOptions: camera,
                 watermarkConfiguration: watermark
             )
         }
@@ -3015,6 +3019,7 @@ final class CaptureController {
         systemAudio: Bool,
         microphone: Bool,
         microphoneDeviceID: String?,
+        cameraOptions: RecordingCameraOptions?,
         watermarkConfiguration: WatermarkConfiguration?
     ) {
         guard recordingSession == nil, !isExportingRecording, !isResolvingRecordingPreview else { return }
@@ -3028,6 +3033,7 @@ final class CaptureController {
                     systemAudio: systemAudio,
                     microphone: microphone,
                     microphoneDeviceID: microphoneDeviceID,
+                    cameraOptions: cameraOptions,
                     watermarkConfiguration: watermarkConfiguration
                 )
             }
@@ -3045,6 +3051,16 @@ final class CaptureController {
                         return
                     }
                 }
+                if format == .video, cameraOptions?.isEnabled == true {
+                    let status = await RecordingCameras.requestPermissionIfNeeded()
+                    guard status == .authorized else {
+                        var disabled = cameraOptions
+                        disabled?.isEnabled = false
+                        if let disabled { RecordingCameraPreferences.save(disabled) }
+                        showCameraPermissionAlert()
+                        return
+                    }
+                }
                 try await Task.sleep(for: .milliseconds(90))
                 let capturer = try await ScreenRegionCapturer(target: target)
                 let session = RecordingSessionController(
@@ -3057,6 +3073,7 @@ final class CaptureController {
                         capturesSystemAudio: format == .video && systemAudio,
                         capturesMicrophone: format == .video && microphone,
                         microphoneDeviceID: microphoneDeviceID,
+                        cameraOptions: format == .video ? cameraOptions : nil,
                         showsCursor: true,
                         watermarkConfiguration: watermarkConfiguration,
                         capturedAt: Date()
@@ -3371,6 +3388,18 @@ final class CaptureController {
         }
     }
 
+    private func showCameraPermissionAlert() {
+        let alert = NSAlert()
+        alert.messageText = L.text("需要摄像头权限")
+        alert.informativeText = L.text("请在“系统设置 > 隐私与安全性 > 摄像头”中允许 Brushot，然后重试。")
+        alert.addButton(withTitle: L.text("打开系统设置"))
+        alert.addButton(withTitle: L.text("取消"))
+        if alert.runModal() == .alertFirstButtonReturn,
+           let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     private func showFailureAlert(message: String) {
         let alert = NSAlert()
         alert.messageText = L.text("截图失败")
@@ -3407,7 +3436,8 @@ final class SelectionOverlayWindow: NSPanel {
     var onAnnotationFailed: ((Error) -> Void)?
     var onOCRRequested: ((OCRSource) -> Void)?
     var onLongCaptureRequested: ((CGRect) -> Void)?
-    var onRecordingRequested: ((RecordingCaptureTarget, RecordingFormat, RecordingVideoResolution, Int, Bool, Bool, String?, WatermarkConfiguration?) -> Void)?
+    var onRecordingRequested: ((RecordingCaptureTarget, RecordingFormat, RecordingVideoResolution, Int, Bool, Bool, String?, RecordingCameraOptions?, WatermarkConfiguration?) -> Void)?
+    var onCameraPermissionDenied: (() -> Void)?
     var onDelayedCaptureRequested: ((CGRect) -> Void)?
 
     private var overlayView: SelectionOverlayView? {
@@ -3463,9 +3493,10 @@ final class SelectionOverlayWindow: NSPanel {
         view.onLongCaptureRequested = { [weak self] rect in
             self?.onLongCaptureRequested?(rect)
         }
-        view.onRecordingRequested = { [weak self] target, format, resolution, fps, systemAudio, microphone, deviceID, watermark in
-            self?.onRecordingRequested?(target, format, resolution, fps, systemAudio, microphone, deviceID, watermark)
+        view.onRecordingRequested = { [weak self] target, format, resolution, fps, systemAudio, microphone, deviceID, camera, watermark in
+            self?.onRecordingRequested?(target, format, resolution, fps, systemAudio, microphone, deviceID, camera, watermark)
         }
+        view.onCameraPermissionDenied = { [weak self] in self?.onCameraPermissionDenied?() }
         view.onDelayedCaptureRequested = { [weak self] rect in
             self?.onDelayedCaptureRequested?(rect)
         }
@@ -3546,7 +3577,8 @@ final class SelectionOverlayView: NSView {
     var onAnnotationFailed: ((Error) -> Void)?
     var onOCRRequested: ((OCRSource) -> Void)?
     var onLongCaptureRequested: ((CGRect) -> Void)?
-    var onRecordingRequested: ((RecordingCaptureTarget, RecordingFormat, RecordingVideoResolution, Int, Bool, Bool, String?, WatermarkConfiguration?) -> Void)?
+    var onRecordingRequested: ((RecordingCaptureTarget, RecordingFormat, RecordingVideoResolution, Int, Bool, Bool, String?, RecordingCameraOptions?, WatermarkConfiguration?) -> Void)?
+    var onCameraPermissionDenied: (() -> Void)?
     var onDelayedCaptureRequested: ((CGRect) -> Void)?
 
     private let purpose: SelectionPurpose
@@ -3568,6 +3600,7 @@ final class SelectionOverlayView: NSView {
     private var mouseTrackingTimer: Timer?
     private var lastPolledMouseLocation: CGPoint?
     private var isRecordingConfirming = false
+    private var cameraPreviewView: RecordingCameraPreviewView?
     private var recordingTargetCandidate: RecordingCaptureTarget?
     private var recordingTargetRects: [CGRect] = []
     private var isPreparingAnnotation = false
@@ -3599,8 +3632,8 @@ final class SelectionOverlayView: NSView {
         return bar
     }()
     private lazy var recordingBar: RecordingStartBar = {
-        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 136))
-        bar.onStart = { [weak self] format, resolution, fps, systemAudio, microphone, deviceID, watermark in
+        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 176))
+        bar.onStart = { [weak self] format, resolution, fps, systemAudio, microphone, deviceID, camera, watermark in
             guard let self,
                   let selection = self.currentSelection(),
                   selection.width >= (self.purpose.isContentRecording ? 10 : 80),
@@ -3612,8 +3645,11 @@ final class SelectionOverlayView: NSView {
             self.isSubmitting = true
             self.hideSelectionControls()
             let target = self.recordingTargetCandidate ?? .region(globalRect: globalRect)
-            self.onRecordingRequested?(target, format, resolution, fps, systemAudio, microphone, deviceID, watermark)
+            self.stopCameraPreview()
+            self.onRecordingRequested?(target, format, resolution, fps, systemAudio, microphone, deviceID, camera, watermark)
         }
+        bar.onCameraOptionsChanged = { [weak self] options in self?.updateCameraPreview(options) }
+        bar.onCameraPermissionDenied = { [weak self] in self?.onCameraPermissionDenied?() }
         bar.onCancel = { [weak self] in
             guard let self else { return }
             if self.purpose == .recording || self.purpose.isContentRecording {
@@ -3728,6 +3764,10 @@ final class SelectionOverlayView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if window == nil {
+            stopCameraPreview()
+            return
+        }
         window?.makeFirstResponder(self)
         window?.invalidateCursorRects(for: self)
         // The overlay is intentionally non-activating so menus/popovers can be
@@ -4983,6 +5023,9 @@ final class SelectionOverlayView: NSView {
                 width: logicalSize.width * scale,
                 height: logicalSize.height * scale
             ))
+            if let options = cameraPreviewView?.options {
+                cameraPreviewView?.update(options: options, allowedFrame: selection)
+            }
         }
         let size = controls.frame.size
         let horizontalInset: CGFloat = 8
@@ -5019,6 +5062,41 @@ final class SelectionOverlayView: NSView {
         window?.invalidateCursorRects(for: self)
         updateCursorAtCurrentMouseLocation()
     }
+
+    private func updateCameraPreview(_ options: RecordingCameraOptions?) {
+        guard let options, let selection = currentSelection() else {
+            stopCameraPreview()
+            return
+        }
+        if let preview = cameraPreviewView {
+            preview.isHidden = false
+            preview.update(options: options, allowedFrame: selection)
+            return
+        }
+        let preview = RecordingCameraPreviewView(
+            frame: RecordingCameraGeometry.frame(in: selection, options: options),
+            allowedFrame: selection,
+            options: options,
+            movesWindow: false
+        )
+        preview.onOptionsChanged = { updated in RecordingCameraPreferences.save(updated) }
+        preview.onUnavailable = { [weak self] in self?.stopCameraPreview() }
+        addSubview(preview, positioned: .above, relativeTo: nil)
+        cameraPreviewView = preview
+        do {
+            try preview.startPreview()
+        } catch {
+            stopCameraPreview()
+            NSSound.beep()
+        }
+    }
+
+    private func stopCameraPreview() {
+        cameraPreviewView?.stopPreview()
+        cameraPreviewView?.removeFromSuperview()
+        cameraPreviewView = nil
+    }
+
 
     /// Switch from the annotation toolbar to the shared recording format bar
     /// that reuses the current selection (no re-drawing needed).

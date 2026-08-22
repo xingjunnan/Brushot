@@ -1,2 +1,3 @@
 "NSMicrophoneUsageDescription" = "启用麦克风录制时，Brushot 会使用你选择的内置或外接麦克风。";
+"NSCameraUsageDescription" = "启用摄像头画中画录制时，Brushot 会使用你选择的摄像头。";
 "NSScreenCaptureUsageDescription" = "Brushot 需要屏幕和系统音频访问权限，用于截图、长截图和屏幕录制。";

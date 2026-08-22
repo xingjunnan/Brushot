@@ -27,7 +27,7 @@ It supports macOS 13 or later on both Apple Silicon and Intel Macs through a Uni
 - right-click or double-click secondary annotation for pinned images
 - on-device Chinese and English text recognition using macOS Vision, with editable result preview
 - on-device English-to-Simplified-Chinese translation on macOS 15 or later using Apple Translation
-- unified MP4 video and adaptive GIF area recording with a 3–2–1 start countdown, optional system audio, selectable built-in/external microphone, cursor capture, pause/resume, and live annotations
+- unified MP4 video and adaptive GIF recording with a 3–2–1 countdown, system audio, microphone, camera picture-in-picture, pause/resume, and live annotations
 - recording preview with save, clipboard copy, and discard actions
 - screen, system audio, and microphone recording permission prompts
 
@@ -62,6 +62,8 @@ Sequence annotations are numeric badges only and increment automatically. Add ex
 4. After export, preview the result and save it to the configured location, copy it to the clipboard, or discard it.
 
 Video defaults to 1080p at 30 FPS, with Original, 4K, and 720p resolution choices plus 15 and 60 FPS options. Scaling preserves the source aspect ratio without cropping or upscaling smaller content; the confirmation bar shows the actual output size and remembers the selection. Video is exported as network-optimized H.264/AAC MP4. When system audio and microphone are both enabled, they are synchronized and mixed into the exported audio. GIF export defaults to 720 pixels wide and 15 FPS; long recordings automatically reduce sampling to keep the result at approximately 600 frames instead of imposing the previous 30-second limit.
+
+Video can include camera picture-in-picture with device selection, circle or rounded-rectangle appearance, and mirroring. Drag and resize it directly inside the selected area; Brushot remembers its placement and style, and lets you toggle it during recording. A disconnected or failed camera does not stop screen recording. Camera pixels enter video output, while GIF does not use the camera.
 
 GIF recording stops automatically at 3 minutes. Video recording stops automatically at 2 hours and shows the remaining time after the first hour. Recording is blocked when less than 1 GB is available, and an active recording is safely stopped if free space falls below that threshold.
 

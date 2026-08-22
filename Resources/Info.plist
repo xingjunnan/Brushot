@@ -28,5 +28,7 @@
     <string>Brushot needs screen and system audio access for screenshots, scrolling capture, and screen recording.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Brushot uses the selected built-in or external microphone when you enable microphone recording.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Brushot uses the selected camera when you enable camera picture-in-picture recording.</string>
 </dict>
 </plist>

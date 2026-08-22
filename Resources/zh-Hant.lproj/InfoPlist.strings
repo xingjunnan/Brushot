@@ -1,2 +1,3 @@
 "NSMicrophoneUsageDescription" = "啟用麥克風錄製時，Brushot 會使用你選擇的內建或外接麥克風。";
+"NSCameraUsageDescription" = "啟用攝影機子母畫面錄製時，Brushot 會使用你選擇的攝影機。";
 "NSScreenCaptureUsageDescription" = "Brushot 需要螢幕和系統音訊存取權限，用於截圖、長截圖和螢幕錄製。";

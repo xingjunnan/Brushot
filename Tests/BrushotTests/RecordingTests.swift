@@ -8,6 +8,49 @@ import XCTest
 @testable import Brushot
 
 final class RecordingCoreTests: XCTestCase {
+    func testCameraPreferencesPersistAndClampLayout() throws {
+        let suite = "BrushotTests.Camera.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var options = RecordingCameraOptions.defaults
+        options.isEnabled = true
+        options.deviceID = "camera-1"
+        options.shape = .circle
+        options.isMirrored = false
+        options.normalizedCenterX = 2
+        options.normalizedCenterY = -1
+        options.relativeWidth = 2
+        RecordingCameraPreferences.save(options, defaults: defaults)
+
+        let loaded = RecordingCameraPreferences.load(defaults: defaults)
+        XCTAssertTrue(loaded.isEnabled)
+        XCTAssertEqual(loaded.deviceID, "camera-1")
+        XCTAssertEqual(loaded.shape, .circle)
+        XCTAssertFalse(loaded.isMirrored)
+        XCTAssertEqual(loaded.normalizedCenterX, 1)
+        XCTAssertEqual(loaded.normalizedCenterY, 0)
+        XCTAssertEqual(loaded.relativeWidth, 0.8)
+    }
+
+    func testCameraGeometryKeepsCircleInsideSelectionAndRoundTripsPosition() {
+        let selection = CGRect(x: 100, y: 200, width: 800, height: 500)
+        var options = RecordingCameraOptions.defaults
+        options.isEnabled = true
+        options.shape = .circle
+        let frame = RecordingCameraGeometry.frame(in: selection, options: options)
+        XCTAssertEqual(frame.width, frame.height)
+        XCTAssertTrue(selection.contains(frame))
+
+        let moved = RecordingCameraGeometry.clamp(
+            frame.offsetBy(dx: -1_000, dy: 1_000),
+            to: selection
+        )
+        XCTAssertGreaterThanOrEqual(moved.minX, selection.minX + RecordingCameraGeometry.margin)
+        XCTAssertLessThanOrEqual(moved.maxY, selection.maxY - RecordingCameraGeometry.margin)
+        let updated = RecordingCameraGeometry.options(byUpdating: options, frame: moved, in: selection)
+        XCTAssertEqual(RecordingCameraGeometry.frame(in: selection, options: updated), moved)
+    }
+
     func testRecordingCaptureTargetsPreserveSourceIdentityAndBounds() {
         let rect = CGRect(x: 20, y: 30, width: 640, height: 360)
         let window = RecordingCaptureTarget.window(id: 42, globalRect: rect, title: "Document")
@@ -704,7 +747,7 @@ final class RecordingInteractionTests: XCTestCase {
         RecordingPreferences.setMicrophoneEnabled(false)
         RecordingPreferences.setVideoResolution(.p1080)
         RecordingPreferences.setVideoFPS(30)
-        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 136))
+        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 176))
         bar.updateSourcePixelSize(CGSize(width: 2_560, height: 1_600))
         let buttons = descendants(of: bar).compactMap { $0 as? NSButton }
         let start = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "startRecordingAction" })
@@ -769,7 +812,7 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(performanceHint.frame.width, performanceHint.fittingSize.width)
         var received: [(RecordingFormat, RecordingVideoResolution, Int, Bool, Bool)] = []
         var receivedWatermarks: [WatermarkConfiguration?] = []
-        bar.onStart = { format, resolution, fps, systemAudio, microphone, _, watermark in
+        bar.onStart = { format, resolution, fps, systemAudio, microphone, _, _, watermark in
             received.append((format, resolution, fps, systemAudio, microphone))
             receivedWatermarks.append(watermark)
         }
@@ -799,7 +842,7 @@ final class RecordingInteractionTests: XCTestCase {
     }
 
     func testRecordingFormatChooserDoesNotOfferWatermarkBeforeRecording() {
-        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 136))
+        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 176))
         let buttons = descendants(of: bar).compactMap { $0 as? NSButton }
         XCTAssertNil(buttons.first { $0.identifier?.rawValue == "recordingWatermark" })
         XCTAssertNil(buttons.first { $0.identifier?.rawValue == "recordingWatermarkInfo" })

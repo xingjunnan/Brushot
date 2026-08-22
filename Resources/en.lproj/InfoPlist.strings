@@ -1,2 +1,3 @@
 "NSMicrophoneUsageDescription" = "Brushot uses the selected built-in or external microphone when you enable microphone recording.";
+"NSCameraUsageDescription" = "Brushot uses the selected camera when you enable camera picture-in-picture recording.";
 "NSScreenCaptureUsageDescription" = "Brushot needs screen and system audio access for screenshots, scrolling capture, and screen recording.";

@@ -296,6 +296,7 @@ struct RecordingConfiguration: Sendable {
     var capturesSystemAudio = false
     var capturesMicrophone = false
     var microphoneDeviceID: String?
+    var cameraOptions: RecordingCameraOptions?
     var showsCursor = true
     var watermarkConfiguration: WatermarkConfiguration?
     var capturedAt = Date()
