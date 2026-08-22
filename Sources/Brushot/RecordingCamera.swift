@@ -93,6 +93,7 @@ struct RecordingCameraOptions: Equatable, Sendable {
 enum RecordingCameraPreferences {
     private static let deviceKey = "recording.cameraDeviceID"
     private static let shapeKey = "recording.cameraShape"
+    private static let mirroredKey = "recording.cameraMirrored"
     private static let centerXKey = "recording.cameraCenterX"
     private static let centerYKey = "recording.cameraCenterY"
     private static let relativeWidthKey = "recording.cameraRelativeWidth"
@@ -110,11 +111,14 @@ enum RecordingCameraPreferences {
         let relativeWidth = defaults.object(forKey: relativeWidthKey) == nil
             ? fallback.relativeWidth
             : defaults.double(forKey: relativeWidthKey)
+        let isMirrored = defaults.object(forKey: mirroredKey) == nil
+            ? fallback.isMirrored
+            : defaults.bool(forKey: mirroredKey)
         return RecordingCameraOptions(
             isEnabled: false,
             deviceID: defaults.string(forKey: deviceKey),
             shape: shape,
-            isMirrored: true,
+            isMirrored: isMirrored,
             normalizedCenterX: min(max(centerX, 0), 1),
             normalizedCenterY: min(max(centerY, 0), 1),
             relativeWidth: min(max(relativeWidth, 0.08), 0.8)
@@ -126,7 +130,7 @@ enum RecordingCameraPreferences {
         if let deviceID = options.deviceID { defaults.set(deviceID, forKey: deviceKey) }
         else { defaults.removeObject(forKey: deviceKey) }
         defaults.set(options.shape.rawValue, forKey: shapeKey)
-        defaults.removeObject(forKey: "recording.cameraMirrored")
+        defaults.set(options.isMirrored, forKey: mirroredKey)
         defaults.set(options.normalizedCenterX, forKey: centerXKey)
         defaults.set(options.normalizedCenterY, forKey: centerYKey)
         defaults.set(options.relativeWidth, forKey: relativeWidthKey)

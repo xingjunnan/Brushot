@@ -27,13 +27,21 @@ final class RecordingCoreTests: XCTestCase {
         XCTAssertFalse(loaded.isEnabled)
         XCTAssertEqual(loaded.deviceID, "camera-1")
         XCTAssertEqual(loaded.shape, .circle)
-        XCTAssertTrue(loaded.isMirrored)
+        XCTAssertFalse(loaded.isMirrored)
         XCTAssertEqual(loaded.normalizedCenterX, 1)
         XCTAssertEqual(loaded.normalizedCenterY, 0)
         XCTAssertEqual(loaded.relativeWidth, 0.8)
         XCTAssertEqual(RecordingCameraSize.small.relativeWidth, 0.16)
         XCTAssertEqual(RecordingCameraSize.medium.relativeWidth, 0.22)
         XCTAssertEqual(RecordingCameraSize.large.relativeWidth, 0.30)
+    }
+
+    func testCameraPreferencesDefaultToMirroredBeforeUserChooses() throws {
+        let suite = "BrushotTests.CameraDefaults.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        XCTAssertTrue(RecordingCameraPreferences.load(defaults: defaults).isMirrored)
     }
 
     func testCameraGeometryKeepsCircleInsideSelectionAndRoundTripsPosition() {
