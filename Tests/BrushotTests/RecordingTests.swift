@@ -907,6 +907,24 @@ final class RecordingInteractionTests: XCTestCase {
         )
     }
 
+    func testRecordingControlPanelStaysInsideVisibleScreenAfterDraggingOrResizing() {
+        let visible = CGRect(x: -1_440, y: 24, width: 1_440, height: 876)
+        XCTAssertEqual(
+            RecordingControlPanelGeometry.constrainedFrame(
+                CGRect(x: -1_600, y: -80, width: 426, height: 48),
+                to: visible
+            ).origin,
+            CGPoint(x: -1_440, y: 24)
+        )
+        XCTAssertEqual(
+            RecordingControlPanelGeometry.constrainedFrame(
+                CGRect(x: -200, y: 880, width: 650, height: 84),
+                to: visible
+            ).origin,
+            CGPoint(x: -650, y: 816)
+        )
+    }
+
     func testFullscreenRecordingStartsWithCompactControls() {
         let screen = CGRect(x: 0, y: 0, width: 1_920, height: 1_080)
         XCTAssertTrue(RecordingSessionController.shouldStartWithCollapsedControls(

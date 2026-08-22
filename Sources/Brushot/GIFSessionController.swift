@@ -5,6 +5,40 @@ import Foundation
 private final class GIFOverlayPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        guard let visibleFrame = screen?.visibleFrame else {
+            return super.constrainFrameRect(frameRect, to: screen)
+        }
+        return RecordingControlPanelGeometry.constrainedFrame(frameRect, to: visibleFrame)
+    }
+}
+
+private final class RecordingControlBackgroundView: NSVisualEffectView {
+    override var mouseDownCanMoveWindow: Bool { true }
+}
+
+enum RecordingControlPanelGeometry {
+    nonisolated static func constrainedFrame(_ frame: CGRect, to visibleFrame: CGRect) -> CGRect {
+        var result = frame
+        if result.width <= visibleFrame.width {
+            result.origin.x = min(
+                max(result.origin.x, visibleFrame.minX),
+                visibleFrame.maxX - result.width
+            )
+        } else {
+            result.origin.x = visibleFrame.minX
+        }
+        if result.height <= visibleFrame.height {
+            result.origin.y = min(
+                max(result.origin.y, visibleFrame.minY),
+                visibleFrame.maxY - result.height
+            )
+        } else {
+            result.origin.y = visibleFrame.minY
+        }
+        return result
+    }
 }
 
 /// Transparent panel that sits on top of the recording area and captures
@@ -471,7 +505,7 @@ enum RecordingCountdown {
 }
 
 @MainActor
-final class RecordingSessionController: NSObject {
+final class RecordingSessionController: NSObject, NSWindowDelegate {
     private let selectionRect: CGRect
     private let capturer: ScreenRegionCapturer
     private let engine = RecordingEngine()
@@ -506,6 +540,8 @@ final class RecordingSessionController: NSObject {
     private var annotationToolbarHeightConstraint: NSLayoutConstraint?
     private var collapseButtonWidthConstraint: NSLayoutConstraint?
     private var isControlPanelCollapsed = false
+    private var hasUserPositionedControlPanel = false
+    private var isPositioningControlPanel = false
     private var isFinished = false
     private var lastDiskCheckAt = Date.distantPast
     private var cameraOverlay: RecordingCameraOverlayController?
@@ -866,8 +902,13 @@ final class RecordingSessionController: NSObject {
         controlWindow.isReleasedWhenClosed = false
         controlWindow.level = Self.controlWindowLevel
         controlWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        controlWindow.isMovable = true
+        controlWindow.isMovableByWindowBackground = true
+        controlWindow.delegate = self
 
-        let background = NSVisualEffectView(frame: controlWindow.contentView?.bounds ?? .zero)
+        let background = RecordingControlBackgroundView(
+            frame: controlWindow.contentView?.bounds ?? .zero
+        )
         background.autoresizingMask = [.width, .height]
         background.material = .hudWindow
         background.blendingMode = .behindWindow
@@ -1022,7 +1063,10 @@ final class RecordingSessionController: NSObject {
             ? Self.collapsedControlSize
             : expandedControlSize(for: annotationToolbar.currentPreferredSize)
         controlWindow.setContentSize(size)
-        if reposition { positionControlPanel() }
+        if reposition {
+            if hasUserPositionedControlPanel { keepControlPanelVisible() }
+            else { positionControlPanel() }
+        }
     }
 
     private func updateAnnotationToolbarSize(_ size: CGSize) {
@@ -1032,7 +1076,8 @@ final class RecordingSessionController: NSObject {
             > RecordingAnnotationToolbarView.selectionPreferredSize.height ? 56 : 28
         guard !isControlPanelCollapsed else { return }
         controlWindow.setContentSize(expandedControlSize(for: size))
-        positionControlPanel()
+        if hasUserPositionedControlPanel { keepControlPanelVisible() }
+        else { positionControlPanel() }
     }
 
     private func expandedControlSize(for toolbarSize: CGSize) -> CGSize {
@@ -1145,7 +1190,32 @@ final class RecordingSessionController: NSObject {
         if origin.x < visible.minX {
             origin.x = visible.minX
         }
+        setControlPanelFrameOrigin(origin)
+    }
+
+    private func keepControlPanelVisible() {
+        let screen = controlWindow.screen
+            ?? NSScreen.screens.first { $0.frame.intersects(controlWindow.frame) }
+            ?? NSScreen.main
+        guard let visibleFrame = screen?.visibleFrame else { return }
+        let frame = RecordingControlPanelGeometry.constrainedFrame(
+            controlWindow.frame,
+            to: visibleFrame
+        )
+        guard frame.origin != controlWindow.frame.origin else { return }
+        setControlPanelFrameOrigin(frame.origin)
+    }
+
+    private func setControlPanelFrameOrigin(_ origin: CGPoint) {
+        isPositioningControlPanel = true
         controlWindow.setFrameOrigin(origin)
+        isPositioningControlPanel = false
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        guard notification.object as? NSWindow === controlWindow,
+              !isPositioningControlPanel else { return }
+        hasUserPositionedControlPanel = true
     }
 
     // MARK: - Annotation actions
