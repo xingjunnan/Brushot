@@ -1,4 +1,5 @@
 import AppKit
+@preconcurrency import AVFoundation
 import Foundation
 
 private final class GIFOverlayPanel: NSPanel {
@@ -476,8 +477,10 @@ final class RecordingSessionController: NSObject {
     private let engine = RecordingEngine()
     private let configuration: RecordingConfiguration
     private let onFinish: (RecordingResult) -> Void
+    private let onInterrupted: (RecordingResult, Error) -> Void
     private let onCancel: () -> Void
     private let onError: (Error) -> Void
+    private let onCameraPermissionDenied: () -> Void
 
     private let borderWindow: NSWindow
     private let controlWindow: GIFOverlayPanel
@@ -489,6 +492,7 @@ final class RecordingSessionController: NSObject {
     private let cancelButton = NSButton(title: L.text("取消"), target: nil, action: nil)
     private let collapseButton = NSButton()
     private let cameraButton = NSButton()
+    private let cameraSettingsButton = NSButton()
     private let countdownLabel = NSTextField(labelWithString: "")
     private let annotationToolbar = RecordingAnnotationToolbarView(
         frame: CGRect(origin: .zero, size: RecordingAnnotationToolbarView.selectionPreferredSize)
@@ -505,11 +509,32 @@ final class RecordingSessionController: NSObject {
     private var isFinished = false
     private var lastDiskCheckAt = Date.distantPast
     private var cameraOverlay: RecordingCameraOverlayController?
+    private var cameraOptions: RecordingCameraOptions?
+    private lazy var cameraSettingsView: RecordingCameraSettingsView = {
+        let view = RecordingCameraSettingsView(
+            frame: CGRect(x: 0, y: 0, width: 330, height: 252),
+            options: cameraOptions ?? .defaults,
+            showsDevice: true
+        )
+        view.onOptionsChanged = { [weak self] options in self?.applyCameraOptions(options) }
+        return view
+    }()
+    private lazy var cameraSettingsPopover: NSPopover = {
+        let popover = NSPopover()
+        let controller = NSViewController()
+        controller.view = cameraSettingsView
+        popover.contentViewController = controller
+        popover.contentSize = cameraSettingsView.frame.size
+        popover.behavior = .transient
+        return popover
+    }()
+    private var cameraStatusMessage: String?
+    private var cameraStatusExpiresAt = Date.distantPast
 
     nonisolated static let borderExpansion: CGFloat = 3
-    nonisolated static let expandedControlSize = CGSize(width: 580, height: 48)
+    nonisolated static let expandedControlSize = CGSize(width: 616, height: 48)
     nonisolated static let drawingControlSize = CGSize(width: 650, height: 84)
-    nonisolated static let collapsedControlSize = CGSize(width: 390, height: 48)
+    nonisolated static let collapsedControlSize = CGSize(width: 426, height: 48)
     static let annotationWindowLevel = NSWindow.Level.screenSaver
     static let controlWindowLevel = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1)
 
@@ -518,15 +543,20 @@ final class RecordingSessionController: NSObject {
         capturer: ScreenRegionCapturer,
         configuration: RecordingConfiguration,
         onFinish: @escaping (RecordingResult) -> Void,
+        onInterrupted: @escaping (RecordingResult, Error) -> Void,
         onCancel: @escaping () -> Void,
-        onError: @escaping (Error) -> Void
+        onError: @escaping (Error) -> Void,
+        onCameraPermissionDenied: @escaping () -> Void
     ) {
         self.selectionRect = selectionRect
         self.capturer = capturer
         self.configuration = configuration
         self.onFinish = onFinish
+        self.onInterrupted = onInterrupted
         self.onCancel = onCancel
         self.onError = onError
+        self.onCameraPermissionDenied = onCameraPermissionDenied
+        cameraOptions = configuration.cameraOptions
 
         let borderFrame = selectionRect.insetBy(dx: -Self.borderExpansion, dy: -Self.borderExpansion)
         borderWindow = NSWindow(
@@ -584,10 +614,14 @@ final class RecordingSessionController: NSObject {
             countdownLabel.centerXAnchor.constraint(equalTo: annotationView.centerXAnchor),
             countdownLabel.centerYAnchor.constraint(equalTo: annotationView.centerYAnchor)
         ])
-        engine.onUnexpectedStop = { [weak self] error in
+        engine.onUnexpectedStop = { [weak self] error, recoveredResult in
             guard let self, !self.isFinished else { return }
             self.cleanup()
-            self.onError(error)
+            if let recoveredResult {
+                self.onInterrupted(recoveredResult, error)
+            } else {
+                self.onError(error)
+            }
         }
         configureControlPanel()
     }
@@ -611,6 +645,7 @@ final class RecordingSessionController: NSObject {
         updateStatus(elapsed: 0)
         pauseButton.isEnabled = false
         finishButton.isEnabled = false
+        cameraButton.isEnabled = false
 
         startTask = Task { [weak self] in
             guard let self else { return }
@@ -634,6 +669,7 @@ final class RecordingSessionController: NSObject {
                 )
                 self.pauseButton.isEnabled = true
                 self.finishButton.isEnabled = true
+                self.cameraButton.isEnabled = true
             } catch {
                 if error is CancellationError { return }
                 self.cleanup()
@@ -673,14 +709,57 @@ final class RecordingSessionController: NSObject {
 
     @objc private func toggleCamera() {
         guard let cameraOverlay else { return }
-        do {
-            try cameraOverlay.toggle()
-            updateCameraButton(isVisible: cameraOverlay.isVisible)
-        } catch {
+        if cameraOverlay.isVisible {
             cameraOverlay.hide()
+            cameraOptions?.isEnabled = false
             updateCameraButton(isVisible: false)
-            statusLabel.stringValue = L.text("摄像头不可用，录屏继续")
+            return
         }
+        cameraButton.isEnabled = false
+        Task { [weak self] in
+            guard let self else { return }
+            let status = await RecordingCameras.requestPermissionIfNeeded()
+            guard status == .authorized else {
+                self.cameraButton.isEnabled = true
+                self.onCameraPermissionDenied()
+                return
+            }
+            do {
+                try cameraOverlay.show()
+                self.capturer.exceptedWindowIDs.insert(cameraOverlay.windowID)
+                try await self.capturer.refreshRecordingOverlayExclusion()
+                try await self.engine.updateContentFilter(self.capturer.captureContentFilter)
+                self.cameraOptions?.isEnabled = true
+                self.updateCameraButton(isVisible: true)
+            } catch {
+                cameraOverlay.hide()
+                self.capturer.exceptedWindowIDs.remove(cameraOverlay.windowID)
+                self.cameraOptions?.isEnabled = false
+                self.updateCameraButton(isVisible: false)
+                self.showCameraStatus(L.text("摄像头不可用，录屏继续"))
+            }
+        }
+    }
+
+    @objc private func showCameraSettings() {
+        guard let cameraOptions, !cameraSettingsButton.isHidden else { return }
+        cameraSettingsView.update(options: cameraOptions)
+        if cameraSettingsPopover.isShown { cameraSettingsPopover.performClose(nil) }
+        else {
+            cameraSettingsPopover.show(
+                relativeTo: cameraSettingsButton.bounds,
+                of: cameraSettingsButton,
+                preferredEdge: .maxY
+            )
+        }
+    }
+
+    private func applyCameraOptions(_ options: RecordingCameraOptions) {
+        var updated = options
+        updated.isEnabled = cameraOverlay?.isVisible == true
+        cameraOptions = updated
+        cameraOverlay?.update(options: updated)
+        RecordingCameraPreferences.save(updated)
     }
 
     func finish() {
@@ -731,14 +810,19 @@ final class RecordingSessionController: NSObject {
         let now = Date()
         if now.timeIntervalSince(lastDiskCheckAt) >= 5 {
             lastDiskCheckAt = now
-            if !RecordingDiskSpace.hasEnoughSpace() {
-                statusLabel.stringValue = L.text("磁盘空间不足，正在安全停止…")
+            if !RecordingDiskSpace.hasEnoughSpaceToContinue() {
+                statusLabel.stringValue = L.text("磁盘可用空间低于 12 GB，正在安全停止…")
                 finish()
             }
         }
     }
 
     private func updateStatus(elapsed: TimeInterval) {
+        if let cameraStatusMessage, Date() < cameraStatusExpiresAt {
+            statusLabel.stringValue = cameraStatusMessage
+            return
+        }
+        cameraStatusMessage = nil
         let e = elapsed
         let paused = engine.state == .paused ? L.text(" · 已暂停") : ""
         let microphone = configuration.capturesMicrophone ? L.text(" · 麦克风") : ""
@@ -766,6 +850,7 @@ final class RecordingSessionController: NSObject {
         annotationWindow.orderOut(nil)
         borderWindow.orderOut(nil)
         controlWindow.orderOut(nil)
+        if cameraSettingsPopover.isShown { cameraSettingsPopover.performClose(nil) }
         cameraOverlay?.close()
         cameraOverlay = nil
         annotationWindow.close()
@@ -833,6 +918,15 @@ final class RecordingSessionController: NSObject {
         cameraButton.action = #selector(toggleCamera)
         cameraButton.identifier = NSUserInterfaceItemIdentifier("recordingCameraToggle")
         cameraButton.isHidden = configuration.cameraOptions == nil
+        configureControlButton(
+            cameraSettingsButton,
+            symbol: "slider.horizontal.3",
+            title: L.text("画中画设置…")
+        )
+        cameraSettingsButton.target = self
+        cameraSettingsButton.action = #selector(showCameraSettings)
+        cameraSettingsButton.identifier = NSUserInterfaceItemIdentifier("recordingCameraSettingsDuringRecording")
+        cameraSettingsButton.isHidden = configuration.cameraOptions == nil
 
         annotationToolbar.onToolSelected = { [weak self] tool in
             self?.selectRecordingAnnotationTool(tool)
@@ -855,7 +949,13 @@ final class RecordingSessionController: NSObject {
         statusRow.alignment = .centerY
         statusRow.spacing = 7
         let recordingControls = NSStackView(views: [
-            statusRow, cameraButton, pauseButton, cancelButton, finishButton, collapseButton
+            statusRow,
+            cameraButton,
+            cameraSettingsButton,
+            pauseButton,
+            cancelButton,
+            finishButton,
+            collapseButton
         ])
         recordingControls.orientation = .horizontal
         recordingControls.alignment = .centerY
@@ -972,8 +1072,7 @@ final class RecordingSessionController: NSObject {
     }
 
     private func prepareCameraOverlayIfNeeded() {
-        guard var options = configuration.cameraOptions, options.isEnabled else { return }
-        options.isEnabled = true
+        guard var options = cameraOptions else { return }
         let overlay = RecordingCameraOverlayController(
             selectionRect: selectionRect,
             options: options,
@@ -983,30 +1082,52 @@ final class RecordingSessionController: NSObject {
             guard let self, let overlay else { return }
             overlay.hide()
             self.updateCameraButton(isVisible: false)
-            self.statusLabel.stringValue = L.text("摄像头已断开，录屏继续")
+            self.showCameraStatus(L.text("摄像头已断开，录屏继续"))
         }
+        overlay.onOptionsChanged = { [weak self] updated in
+            guard let self else { return }
+            self.cameraOptions = updated
+            self.cameraSettingsView.update(options: updated)
+        }
+        cameraOverlay = overlay
+        guard options.isEnabled else {
+            updateCameraButton(isVisible: false)
+            return
+        }
+        options.isEnabled = true
         do {
+            overlay.update(options: options)
             try overlay.show()
-            cameraOverlay = overlay
             capturer.exceptedWindowIDs.insert(overlay.windowID)
             updateCameraButton(isVisible: true)
         } catch {
-            overlay.close()
-            cameraOverlay = nil
-            cameraButton.isHidden = true
-            statusLabel.stringValue = L.text("摄像头启动失败，录屏继续")
+            overlay.hide()
+            cameraOptions?.isEnabled = false
+            updateCameraButton(isVisible: false)
+            showCameraStatus(L.text("摄像头启动失败，录屏继续"), duration: 8)
         }
     }
 
-    private func updateCameraButton(isVisible: Bool) {
-        let title = L.text(isVisible ? "关闭摄像头" : "打开摄像头")
+    private func updateCameraButton(isVisible: Bool, isAvailable: Bool = true) {
+        let title = isAvailable
+            ? L.text(isVisible ? "关闭摄像头" : "打开摄像头")
+            : L.text("摄像头不可用")
         cameraButton.image = NSImage(
-            systemSymbolName: isVisible ? "video.fill" : "video.slash.fill",
+            systemSymbolName: isAvailable && isVisible ? "video.fill" : "video.slash.fill",
             accessibilityDescription: title
         )?.withSymbolConfiguration(.init(pointSize: 13, weight: .semibold))
-        cameraButton.contentTintColor = isVisible ? .systemGreen : .secondaryLabelColor
+        cameraButton.contentTintColor = !isAvailable
+            ? .systemOrange
+            : (isVisible ? .systemGreen : .secondaryLabelColor)
+        cameraButton.isEnabled = isAvailable
         cameraButton.toolTip = title
         cameraButton.setAccessibilityLabel(title)
+    }
+
+    private func showCameraStatus(_ message: String, duration: TimeInterval = 6) {
+        cameraStatusMessage = message
+        cameraStatusExpiresAt = Date().addingTimeInterval(duration)
+        statusLabel.stringValue = message
     }
 
     private func positionControlPanel() {
@@ -1058,6 +1179,15 @@ final class RecordingStartBar: NSVisualEffectView {
     var onCancel: (() -> Void)?
     var onCameraOptionsChanged: ((RecordingCameraOptions?) -> Void)?
     var onCameraPermissionDenied: (() -> Void)?
+    var onRegionPixelSizeChanged: ((CGSize) -> Void)?
+    var onRegionAspectRatioChanged: ((CGFloat?) -> Void)?
+    var onRestoreLastRegion: (() -> Void)?
+    var cameraPermissionRequester: () async -> AVAuthorizationStatus = {
+        await RecordingCameras.requestPermissionIfNeeded()
+    }
+    var availableDiskBytesProvider: () -> Int64? = {
+        RecordingDiskSpace.availableBytes()
+    }
     private let audioCheckbox = NSButton(
         checkboxWithTitle: L.text("系统音频"),
         target: nil,
@@ -1073,10 +1203,55 @@ final class RecordingStartBar: NSVisualEffectView {
     private let fpsPopup = NSPopUpButton()
     private let cameraCheckbox = NSButton(checkboxWithTitle: L.text("摄像头"), target: nil, action: nil)
     private let cameraPopup = NSPopUpButton()
-    private let cameraShapePopup = NSPopUpButton()
-    private let cameraMirrorCheckbox = NSButton(checkboxWithTitle: L.text("镜像"), target: nil, action: nil)
-    private let outputSizeLabel = NSTextField(labelWithString: "")
-    private let performanceHint = NSTextField(labelWithString: L.text("高负载，建议 1080p · 30 FPS"))
+    private lazy var cameraSettingsButton = NSButton(
+        title: L.text("画中画设置…"),
+        target: self,
+        action: #selector(showCameraSettingsPopover)
+    )
+    private lazy var cameraSettingsView: RecordingCameraSettingsView = {
+        let view = RecordingCameraSettingsView(
+            frame: CGRect(x: 0, y: 0, width: 330, height: 212),
+            options: cameraOptions,
+            showsDevice: false
+        )
+        view.onOptionsChanged = { [weak self] options in
+            guard let self else { return }
+            self.cameraOptions = options
+            self.saveAndPublishCameraOptions()
+        }
+        return view
+    }()
+    private lazy var cameraSettingsPopover: NSPopover = {
+        let popover = NSPopover()
+        let controller = NSViewController()
+        controller.view = cameraSettingsView
+        popover.contentViewController = controller
+        popover.contentSize = cameraSettingsView.frame.size
+        popover.behavior = .transient
+        return popover
+    }()
+    private lazy var regionSizeButton = NSButton(
+        title: L.text("选区尺寸"),
+        target: self,
+        action: #selector(showRegionSizePopover)
+    )
+    private lazy var regionSizeView: RecordingRegionSizeBar = {
+        let view = RecordingRegionSizeBar(frame: CGRect(x: 0, y: 0, width: 410, height: 104))
+        view.onPixelSizeChanged = { [weak self] size in self?.onRegionPixelSizeChanged?(size) }
+        view.onAspectRatioChanged = { [weak self] ratio in self?.onRegionAspectRatioChanged?(ratio) }
+        view.onRestoreLast = { [weak self] in self?.onRestoreLastRegion?() }
+        return view
+    }()
+    private lazy var regionSizePopover: NSPopover = {
+        let popover = NSPopover()
+        let controller = NSViewController()
+        controller.view = regionSizeView
+        popover.contentViewController = controller
+        popover.contentSize = regionSizeView.frame.size
+        popover.behavior = .transient
+        return popover
+    }()
+    private let performanceHint = NSTextField(labelWithString: L.text("高负载"))
     private lazy var formatControl = NSSegmentedControl(
         labels: [L.text("视频"), "GIF"],
         trackingMode: .selectOne,
@@ -1095,8 +1270,10 @@ final class RecordingStartBar: NSVisualEffectView {
     private var hasMicrophones = false
     private var canUseMicrophonePermission = true
     private var sourcePixelSize = CGSize.zero
+    private var isRegionSizingAvailable = false
     private var cameraOptions = RecordingCameraPreferences.load()
     private var hasCameras = false
+    private var isRequestingCameraPermission = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1110,6 +1287,7 @@ final class RecordingStartBar: NSVisualEffectView {
         let formatLabel = makeSectionLabel(L.text("录制格式"))
         formatControl.selectedSegment = 0
         formatControl.identifier = NSUserInterfaceItemIdentifier("recordingFormatControl")
+        regionSizeButton.identifier = NSUserInterfaceItemIdentifier("recordingRegionSize")
         configureVideoQualityControls()
         audioCheckbox.state = RecordingPreferences.systemAudioEnabled() ? .on : .off
         audioCheckbox.target = self
@@ -1179,7 +1357,7 @@ final class RecordingStartBar: NSVisualEffectView {
             qualityLabel,
             resolutionPopup,
             fpsPopup,
-            outputSizeLabel,
+            regionSizeButton,
             performanceHint
         ])
         qualityRow.orientation = .horizontal
@@ -1190,8 +1368,7 @@ final class RecordingStartBar: NSVisualEffectView {
             cameraLabel,
             cameraCheckbox,
             cameraPopup,
-            cameraShapePopup,
-            cameraMirrorCheckbox
+            cameraSettingsButton
         ])
         cameraRow.orientation = .horizontal
         cameraRow.alignment = .centerY
@@ -1225,12 +1402,14 @@ final class RecordingStartBar: NSVisualEffectView {
 
     @objc private func audioChanged() {
         RecordingPreferences.setSystemAudioEnabled(audioCheckbox.state == .on)
+        updateVideoQualitySummary()
     }
 
     @objc private func microphoneChanged() {
         let enabled = microphoneCheckbox.state == .on
         RecordingPreferences.setMicrophoneEnabled(enabled)
         microphonePopup.isEnabled = formatControl.selectedSegment == 0 && enabled && hasMicrophones
+        updateVideoQualitySummary()
     }
 
     @objc private func microphoneDeviceChanged() {
@@ -1252,31 +1431,31 @@ final class RecordingStartBar: NSVisualEffectView {
             return
         }
         cameraCheckbox.isEnabled = false
+        isRequestingCameraPermission = true
+        updateCameraControlState()
+        updateStartButtonState()
         Task { [weak self] in
             guard let self else { return }
-            let status = await RecordingCameras.requestPermissionIfNeeded()
-            cameraCheckbox.isEnabled = true
+            let status = await cameraPermissionRequester()
+            isRequestingCameraPermission = false
             guard status == .authorized else {
                 cameraCheckbox.state = .off
                 cameraOptions.isEnabled = false
                 saveAndPublishCameraOptions()
                 updateCameraControlState()
+                updateStartButtonState()
                 onCameraPermissionDenied?()
                 return
             }
             cameraOptions.isEnabled = true
             saveAndPublishCameraOptions()
             updateCameraControlState()
+            updateStartButtonState()
         }
     }
 
-    @objc private func cameraSettingsChanged() {
+    @objc private func cameraDeviceChanged() {
         cameraOptions.deviceID = cameraPopup.selectedItem?.representedObject as? String
-        if let raw = cameraShapePopup.selectedItem?.representedObject as? String,
-           let shape = RecordingCameraShape(rawValue: raw) {
-            cameraOptions.shape = shape
-        }
-        cameraOptions.isMirrored = cameraMirrorCheckbox.state == .on
         saveAndPublishCameraOptions()
     }
 
@@ -1303,7 +1482,34 @@ final class RecordingStartBar: NSVisualEffectView {
 
     @objc private func formatChanged() { updateFormatState() }
 
+    @objc private func showRegionSizePopover() {
+        guard !regionSizeButton.isHidden else { return }
+        if regionSizePopover.isShown { regionSizePopover.performClose(nil) }
+        else {
+            regionSizePopover.show(
+                relativeTo: regionSizeButton.bounds,
+                of: regionSizeButton,
+                preferredEdge: .maxY
+            )
+        }
+    }
+
+    @objc private func showCameraSettingsPopover() {
+        guard !cameraSettingsButton.isHidden, cameraSettingsButton.isEnabled else { return }
+        cameraSettingsView.update(options: cameraOptions)
+        if cameraSettingsPopover.isShown { cameraSettingsPopover.performClose(nil) }
+        else {
+            cameraSettingsPopover.show(
+                relativeTo: cameraSettingsButton.bounds,
+                of: cameraSettingsButton,
+                preferredEdge: .maxY
+            )
+        }
+    }
+
     @objc private func startAction() {
+        guard !isRequestingCameraPermission else { return }
+        guard confirmDiskSpaceBeforeStarting() else { return }
         if formatControl.selectedSegment == 1 {
             onStart?(.gif, selectedVideoResolution, selectedVideoFPS, false, false, nil, nil, nil)
         } else {
@@ -1314,7 +1520,7 @@ final class RecordingStartBar: NSVisualEffectView {
                 audioCheckbox.state == .on,
                 microphoneCheckbox.state == .on && microphoneCheckbox.isEnabled,
                 selectedMicrophoneID,
-                cameraOptions.isEnabled ? cameraOptions : nil,
+                cameraOptions,
                 nil
             )
         }
@@ -1329,13 +1535,12 @@ final class RecordingStartBar: NSVisualEffectView {
         qualityLabel.isHidden = !isVideo
         resolutionPopup.isHidden = !isVideo
         fpsPopup.isHidden = !isVideo
-        outputSizeLabel.isHidden = !isVideo
+        regionSizeButton.isHidden = !isVideo || !isRegionSizingAvailable
         performanceHint.isHidden = !isVideo || !isHighLoadSelection
         cameraLabel.isHidden = !isVideo
         cameraCheckbox.isHidden = !isVideo
         cameraPopup.isHidden = !isVideo
-        cameraShapePopup.isHidden = !isVideo
-        cameraMirrorCheckbox.isHidden = !isVideo
+        cameraSettingsButton.isHidden = !isVideo
         audioCheckbox.isEnabled = isVideo
         microphoneCheckbox.isEnabled = isVideo && canUseMicrophonePermission
         microphonePopup.isEnabled = isVideo && hasMicrophones && microphoneCheckbox.state == .on
@@ -1343,7 +1548,7 @@ final class RecordingStartBar: NSVisualEffectView {
         if !isVideo { onCameraOptionsChanged?(nil) }
         else if cameraOptions.isEnabled { onCameraOptionsChanged?(cameraOptions) }
         updateCameraControlState()
-        startButton.title = isVideo ? L.text("开始录制视频") : L.text("开始录制 GIF")
+        updateStartButtonState()
     }
 
     private var isHighLoadSelection: Bool {
@@ -1384,9 +1589,6 @@ final class RecordingStartBar: NSVisualEffectView {
         fpsPopup.action = #selector(videoQualityChanged)
         fpsPopup.widthAnchor.constraint(equalToConstant: 118).isActive = true
 
-        outputSizeLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        outputSizeLabel.textColor = .secondaryLabelColor
-        outputSizeLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         performanceHint.font = .systemFont(ofSize: 11, weight: .medium)
         performanceHint.textColor = .systemOrange
         performanceHint.toolTip = L.text("高负载模式，长时间录制建议使用 1080p · 30 FPS")
@@ -1417,30 +1619,25 @@ final class RecordingStartBar: NSVisualEffectView {
         cameraCheckbox.action = #selector(cameraChanged)
         cameraPopup.identifier = NSUserInterfaceItemIdentifier("recordingCameraDevice")
         cameraPopup.target = self
-        cameraPopup.action = #selector(cameraSettingsChanged)
+        cameraPopup.action = #selector(cameraDeviceChanged)
         cameraPopup.widthAnchor.constraint(equalToConstant: 180).isActive = true
-        for shape in RecordingCameraShape.allCases {
-            cameraShapePopup.addItem(withTitle: shape.displayName)
-            cameraShapePopup.lastItem?.representedObject = shape.rawValue
-        }
-        cameraShapePopup.selectItem(at: RecordingCameraShape.allCases.firstIndex(of: cameraOptions.shape) ?? 0)
-        cameraShapePopup.identifier = NSUserInterfaceItemIdentifier("recordingCameraShape")
-        cameraShapePopup.target = self
-        cameraShapePopup.action = #selector(cameraSettingsChanged)
-        cameraMirrorCheckbox.state = cameraOptions.isMirrored ? .on : .off
-        cameraMirrorCheckbox.identifier = NSUserInterfaceItemIdentifier("recordingCameraMirror")
-        cameraMirrorCheckbox.target = self
-        cameraMirrorCheckbox.action = #selector(cameraSettingsChanged)
+        cameraSettingsButton.identifier = NSUserInterfaceItemIdentifier("recordingCameraSettings")
         RecordingCameraPreferences.save(cameraOptions)
         updateCameraControlState()
     }
 
     private func updateCameraControlState() {
-        let active = formatControl.selectedSegment == 0 && hasCameras && cameraCheckbox.state == .on
-        cameraCheckbox.isEnabled = formatControl.selectedSegment == 0 && hasCameras
+        let active = formatControl.selectedSegment == 0
+            && hasCameras
+            && cameraCheckbox.state == .on
+            && !isRequestingCameraPermission
+        cameraCheckbox.isEnabled = formatControl.selectedSegment == 0 && hasCameras && !isRequestingCameraPermission
         cameraPopup.isEnabled = active
-        cameraShapePopup.isEnabled = active
-        cameraMirrorCheckbox.isEnabled = active
+        cameraPopup.isHidden = !active
+        cameraSettingsButton.isEnabled = active
+        cameraSettingsButton.isHidden = !active
+        if !active, cameraSettingsPopover.isShown { cameraSettingsPopover.performClose(nil) }
+        startButton.isEnabled = !isRequestingCameraPermission
     }
 
     private func saveAndPublishCameraOptions() {
@@ -1449,14 +1646,72 @@ final class RecordingStartBar: NSVisualEffectView {
         onCameraOptionsChanged?(active ? cameraOptions : nil)
     }
 
-    private func updateVideoQualitySummary() {
-        if sourcePixelSize.width > 0, sourcePixelSize.height > 0 {
-            let outputSize = selectedVideoResolution.outputSize(for: sourcePixelSize)
-            outputSizeLabel.stringValue = "\(L.text("输出")) \(Int(outputSize.width)) × \(Int(outputSize.height))"
+    func updateCameraPlacement(_ updated: RecordingCameraOptions) {
+        cameraOptions.normalizedCenterX = updated.normalizedCenterX
+        cameraOptions.normalizedCenterY = updated.normalizedCenterY
+        cameraOptions.relativeWidth = updated.relativeWidth
+        cameraSettingsView.update(options: cameraOptions)
+        RecordingCameraPreferences.save(cameraOptions)
+    }
+
+    private func updateStartButtonState() {
+        if isRequestingCameraPermission {
+            startButton.title = L.text("正在请求摄像头权限…")
+            startButton.isEnabled = false
         } else {
-            outputSizeLabel.stringValue = L.text("输出尺寸待确定")
+            startButton.title = formatControl.selectedSegment == 0
+                ? L.text("开始录制视频")
+                : L.text("开始录制 GIF")
+            startButton.isEnabled = true
         }
+    }
+
+    private func updateVideoQualitySummary() {
         performanceHint.isHidden = formatControl.selectedSegment != 0 || !isHighLoadSelection
+    }
+
+    func updateRegionSelection(pixelSize: CGSize, hasLast: Bool, isAvailable: Bool) {
+        isRegionSizingAvailable = isAvailable
+        regionSizeButton.isHidden = formatControl.selectedSegment != 0 || !isAvailable
+        guard isAvailable else {
+            if regionSizePopover.isShown { regionSizePopover.performClose(nil) }
+            return
+        }
+        regionSizeButton.title = L.format(
+            "选区 %d × %d",
+            Int(pixelSize.width.rounded()),
+            Int(pixelSize.height.rounded())
+        )
+        regionSizeView.update(pixelSize: pixelSize, hasLast: hasLast)
+    }
+
+    private func confirmDiskSpaceBeforeStarting() -> Bool {
+        guard let availableBytes = availableDiskBytesProvider() else { return true }
+        let availableGB = String(format: "%.1f", Double(availableBytes) / 1_000_000_000)
+        switch RecordingDiskSpace.startDecision(availableBytes: availableBytes) {
+        case .blocked:
+            let alert = NSAlert()
+            alert.messageText = L.text("磁盘空间不足")
+            alert.informativeText = L.format(
+                "当前可用空间约 %@ GB。录屏至少需要保留 12 GB，请清理空间后重试。",
+                availableGB
+            )
+            alert.addButton(withTitle: L.text("好"))
+            alert.runModal()
+            return false
+        case .warning:
+            let alert = NSAlert()
+            alert.messageText = L.text("磁盘空间较低")
+            alert.informativeText = L.format(
+                "当前可用空间约 %@ GB。录制中低于 12 GB 时将自动安全停止，建议先清理空间。",
+                availableGB
+            )
+            alert.addButton(withTitle: L.text("仍要录制"))
+            alert.addButton(withTitle: L.text("取消"))
+            return alert.runModal() == .alertFirstButtonReturn
+        case .allowed:
+            return true
+        }
     }
 
     @objc private func cancelAction() { onCancel?() }

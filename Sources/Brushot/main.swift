@@ -2928,7 +2928,11 @@ final class CaptureController {
             return
         }
 
-        let window = SelectionOverlayWindow(screen: screen, purpose: .recording)
+        let window = SelectionOverlayWindow(
+            screen: screen,
+            purpose: .recording,
+            allowsRecordingRegionSizing: false
+        )
         configureRecordingCallbacks(for: window)
         window.presetSelection(CGRect(origin: .zero, size: screen.frame.size))
         overlayWindows = [window]
@@ -2940,7 +2944,11 @@ final class CaptureController {
     private func presentContentRecordingOverlays(purpose: SelectionPurpose) {
         closeOverlays()
         overlayWindows = NSScreen.screens.map { screen in
-            let window = SelectionOverlayWindow(screen: screen, purpose: purpose)
+            let window = SelectionOverlayWindow(
+                screen: screen,
+                purpose: purpose,
+                allowsRecordingRegionSizing: false
+            )
             configureRecordingCallbacks(for: window)
             return window
         }
@@ -3083,12 +3091,21 @@ final class CaptureController {
                         self.recordingSession = nil
                         self.finishRecording(result)
                     },
+                    onInterrupted: { [weak self] result, error in
+                        guard let self else { return }
+                        self.recordingSession = nil
+                        self.finishRecording(result)
+                        self.showRecordingStoppedAlert(error: error)
+                    },
                     onCancel: { [weak self] in
                         self?.recordingSession = nil
                     },
                     onError: { [weak self] error in
                         self?.recordingSession = nil
                         self?.showRecordingError(error)
+                    },
+                    onCameraPermissionDenied: { [weak self] in
+                        self?.showCameraPermissionAlert()
                     }
                 )
                 recordingSession = session
@@ -3125,7 +3142,22 @@ final class CaptureController {
             showMicrophonePermissionAlert()
             return
         }
-        showFailureAlert(message: error.localizedDescription)
+        showRecordingFailureAlert(message: error.localizedDescription)
+    }
+
+    private func showRecordingStoppedAlert(error: Error) {
+        NSLog("Brushot: recording stream stopped unexpectedly: %@", RecordingDiagnostics.describe(error))
+        let alert = NSAlert()
+        alert.messageText = L.text("录屏已停止")
+        alert.informativeText = L.text("macOS 已停止录屏，停止前的内容已保留并可继续导出。")
+        alert.runModal()
+    }
+
+    private func showRecordingFailureAlert(message: String) {
+        let alert = NSAlert()
+        alert.messageText = L.text("录屏失败")
+        alert.informativeText = message
+        alert.runModal()
     }
 
     private func showLongCapturePreview(image: CGImage, logicalWidth: CGFloat) {
@@ -3447,12 +3479,14 @@ final class SelectionOverlayWindow: NSPanel {
     init(
         screen: NSScreen,
         purpose: SelectionPurpose = .regular,
-        allowsLiveCaptureActions: Bool = true
+        allowsLiveCaptureActions: Bool = true,
+        allowsRecordingRegionSizing: Bool = true
     ) {
         let view = SelectionOverlayView(
             frame: CGRect(origin: .zero, size: screen.frame.size),
             purpose: purpose,
-            allowsLiveCaptureActions: allowsLiveCaptureActions
+            allowsLiveCaptureActions: allowsLiveCaptureActions,
+            allowsRecordingRegionSizing: allowsRecordingRegionSizing
         )
         super.init(
             contentRect: screen.frame,
@@ -3583,12 +3617,14 @@ final class SelectionOverlayView: NSView {
 
     private let purpose: SelectionPurpose
     private let allowsLiveCaptureActions: Bool
+    private let allowsRecordingRegionSizing: Bool
     private var startPoint: NSPoint?
     private var currentPoint: NSPoint?
     private var dragOperation: DragOperation?
     private var moveAnchorPoint: NSPoint?
     private var moveInitialRect: CGRect?
     private var resizeInitialRect: CGRect?
+    private var recordingLockedAspectRatio: CGFloat?
     private var isSelectionFinalized = false
     private var isPreselected = false
     private var preselectClickStart: CGPoint?
@@ -3643,6 +3679,7 @@ final class SelectionOverlayView: NSView {
                 return
             }
             self.isSubmitting = true
+            self.rememberCurrentRecordingRegionIfNeeded()
             self.hideSelectionControls()
             let target = self.recordingTargetCandidate ?? .region(globalRect: globalRect)
             self.stopCameraPreview()
@@ -3650,6 +3687,13 @@ final class SelectionOverlayView: NSView {
         }
         bar.onCameraOptionsChanged = { [weak self] options in self?.updateCameraPreview(options) }
         bar.onCameraPermissionDenied = { [weak self] in self?.onCameraPermissionDenied?() }
+        bar.onRegionPixelSizeChanged = { [weak self] size in self?.applyRecordingPixelSize(size) }
+        bar.onRegionAspectRatioChanged = { [weak self] ratio in
+            self?.updateRecordingAspectRatio(ratio)
+        }
+        bar.onRestoreLastRegion = { [weak self] in
+            self?.restoreRecordingRegion(RecordingRegionPreferences.last())
+        }
         bar.onCancel = { [weak self] in
             guard let self else { return }
             if self.purpose == .recording || self.purpose.isContentRecording {
@@ -3688,10 +3732,12 @@ final class SelectionOverlayView: NSView {
     init(
         frame frameRect: NSRect,
         purpose: SelectionPurpose = .regular,
-        allowsLiveCaptureActions: Bool = true
+        allowsLiveCaptureActions: Bool = true,
+        allowsRecordingRegionSizing: Bool = true
     ) {
         self.purpose = purpose
         self.allowsLiveCaptureActions = allowsLiveCaptureActions
+        self.allowsRecordingRegionSizing = allowsRecordingRegionSizing
         super.init(frame: frameRect)
         switch purpose {
         case .regular:
@@ -3721,12 +3767,29 @@ final class SelectionOverlayView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    private var isSelectionGeometryEditable: Bool {
+        guard !purpose.isContentRecording else { return false }
+        if purpose == .recording { return allowsRecordingRegionSizing }
+        return true
+    }
+
+    private var showsRecordingRegionControls: Bool {
+        allowsRecordingRegionSizing &&
+            isSelectionFinalized &&
+            !isPreselected &&
+            (purpose == .recording || isRecordingConfirming)
+    }
+
     // Mirror the window-level override so the view also accepts the first
     // click when the app is not active.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        if isSelectionFinalized, !isPreselected, selectionHandle(at: point) != nil {
+        if visibleSelectionControls.contains(where: { $0.frame.contains(point) }) {
+            return super.hitTest(point)
+        }
+        if isSelectionGeometryEditable,
+           isSelectionFinalized, !isPreselected, selectionHandle(at: point) != nil {
             return self
         }
         return super.hitTest(point)
@@ -3741,7 +3804,8 @@ final class SelectionOverlayView: NSView {
             bounds,
             cursor: shouldUseSyntheticSelectionCursor ? Self.invisibleSelectionCursor : .crosshair
         )
-        if isSelectionFinalized, !isPreselected, let selection = currentSelection() {
+        if isSelectionGeometryEditable,
+           isSelectionFinalized, !isPreselected, let selection = currentSelection() {
             if annotationCanvas == nil {
                 addCursorRect(selection, cursor: .openHand)
             }
@@ -3936,8 +4000,8 @@ final class SelectionOverlayView: NSView {
             NSCursor.arrow.set()
             return
         }
-        if let handle = selectionHandle(at: location), isSelectionFinalized, !isPreselected,
-           !purpose.isContentRecording {
+        if let handle = selectionHandle(at: location), isSelectionGeometryEditable,
+           isSelectionFinalized, !isPreselected {
             restoreSystemCursorIfNeeded()
             cursor(for: handle).set()
             return
@@ -4320,7 +4384,16 @@ final class SelectionOverlayView: NSView {
             return
         }
 
-        if isSelectionFinalized, !isPreselected, !purpose.isContentRecording,
+        if !isSelectionGeometryEditable,
+           isSelectionFinalized,
+           let selection = currentSelection(),
+           selection.contains(location) {
+            window?.makeFirstResponder(self)
+            return
+        }
+
+        if isSelectionGeometryEditable,
+           isSelectionFinalized, !isPreselected,
            let handle = selectionHandle(at: location),
            let selection = currentSelection() {
             dragOperation = .resizing(handle)
@@ -4333,7 +4406,8 @@ final class SelectionOverlayView: NSView {
 
         if annotationCanvas != nil { return }
 
-        if isSelectionFinalized,
+        if isSelectionGeometryEditable,
+           isSelectionFinalized,
            let selection = currentSelection(),
            selection.contains(location) {
             if event.clickCount >= 2 {
@@ -4603,14 +4677,14 @@ final class SelectionOverlayView: NSView {
             path.stroke()
         }
 
-        if isSelectionFinalized, !isPreselected, annotationCanvas == nil,
-           !purpose.isContentRecording {
+        if isSelectionGeometryEditable,
+           isSelectionFinalized, !isPreselected, annotationCanvas == nil {
             drawSelectionHandles(for: selection)
         }
 
         var label = recordingTargetCandidate.map {
             L.format("窗口 · %@", $0.displayName)
-        } ?? "\(Int(selection.width)) x \(Int(selection.height))"
+        } ?? selectionSizeLabel(for: selection)
         if purpose.isContentRecording && isPreselected {
             label += L.text(" · 单击选择")
         }
@@ -5043,8 +5117,18 @@ final class SelectionOverlayView: NSView {
 
         controls.setFrameOrigin(NSPoint(x: x, y: y))
         controls.isHidden = false
+        updateRecordingRegionSizeControl(for: selection)
         window?.invalidateCursorRects(for: self)
         updateCursorAtCurrentMouseLocation()
+    }
+
+    private func updateRecordingRegionSizeControl(for selection: CGRect) {
+        let scale = window?.screen?.backingScaleFactor ?? 1
+        recordingBar.updateRegionSelection(
+            pixelSize: CGSize(width: selection.width * scale, height: selection.height * scale),
+            hasLast: RecordingRegionPreferences.last() != nil,
+            isAvailable: showsRecordingRegionControls
+        )
     }
 
     private func hideSelectionControls() {
@@ -5079,7 +5163,10 @@ final class SelectionOverlayView: NSView {
             options: options,
             movesWindow: false
         )
-        preview.onOptionsChanged = { updated in RecordingCameraPreferences.save(updated) }
+        preview.onOptionsChanged = { [weak self] updated in
+            RecordingCameraPreferences.save(updated)
+            self?.recordingBar.updateCameraPlacement(updated)
+        }
         preview.onUnavailable = { [weak self] in self?.stopCameraPreview() }
         addSubview(preview, positioned: .above, relativeTo: nil)
         cameraPreviewView = preview
@@ -5173,6 +5260,75 @@ final class SelectionOverlayView: NSView {
         ).integral
     }
 
+    private func selectionSizeLabel(for selection: CGRect) -> String {
+        guard purpose == .recording || isRecordingConfirming else {
+            return "\(Int(selection.width)) × \(Int(selection.height))"
+        }
+        let scale = window?.screen?.backingScaleFactor ?? 1
+        return "\(Int((selection.width * scale).rounded())) × \(Int((selection.height * scale).rounded())) px"
+    }
+
+    private func applyRecordingPixelSize(_ pixelSize: CGSize) {
+        guard showsRecordingRegionControls, let selection = currentSelection() else { return }
+        let scale = window?.screen?.backingScaleFactor ?? 1
+        let updated = RecordingRegionGeometry.centeredRect(
+            pixelSize: pixelSize,
+            scale: scale,
+            around: CGPoint(x: selection.midX, y: selection.midY),
+            in: bounds
+        )
+        setRecordingSelection(updated)
+    }
+
+    private func applyRecordingAspectRatio(_ ratio: CGFloat) {
+        guard showsRecordingRegionControls, let selection = currentSelection() else { return }
+        let updated = RecordingRegionGeometry.fittedRect(
+            aspectRatio: ratio,
+            around: CGPoint(x: selection.midX, y: selection.midY),
+            preferredWidth: selection.width,
+            in: bounds
+        )
+        setRecordingSelection(updated)
+    }
+
+    func updateRecordingAspectRatio(_ ratio: CGFloat?) {
+        recordingLockedAspectRatio = ratio
+        if let ratio { applyRecordingAspectRatio(ratio) }
+    }
+
+    private func setRecordingSelection(_ selection: CGRect) {
+        let clipped = selection.intersection(bounds).integral
+        guard !clipped.isNull, clipped.width >= 24, clipped.height >= 24 else { return }
+        startPoint = clipped.origin
+        currentPoint = CGPoint(x: clipped.maxX, y: clipped.maxY)
+        recordingTargetCandidate = nil
+        recordingTargetRects = []
+        updateSelectionWatermarkPreview(for: clipped)
+        if let options = cameraPreviewView?.options {
+            cameraPreviewView?.update(options: options, allowedFrame: clipped)
+        }
+        positionSelectionControls(for: clipped)
+        window?.invalidateCursorRects(for: self)
+        needsDisplay = true
+    }
+
+    private func restoreRecordingRegion(_ snapshot: RecordingRegionSnapshot?) {
+        guard showsRecordingRegionControls,
+              let snapshot,
+              let rect = RecordingRegionPreferences.rect(for: snapshot, in: bounds) else {
+            NSSound.beep()
+            return
+        }
+        setRecordingSelection(rect)
+    }
+
+    private func rememberCurrentRecordingRegionIfNeeded() {
+        guard showsRecordingRegionControls,
+              let selection = currentSelection(),
+              let snapshot = RecordingRegionPreferences.snapshot(for: selection, in: bounds) else { return }
+        RecordingRegionPreferences.setLast(snapshot)
+    }
+
     private func moveSelection(to location: NSPoint) {
         guard let moveAnchorPoint, let moveInitialRect else { return }
 
@@ -5258,8 +5414,99 @@ final class SelectionOverlayView: NSView {
             minY = min(y, original.maxY - minimumSize)
         }
 
-        startPoint = CGPoint(x: minX, y: minY)
-        currentPoint = CGPoint(x: maxX, y: maxY)
+        var updated = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        if let ratio = recordingLockedAspectRatio, showsRecordingRegionControls {
+            updated = aspectLockedResize(
+                candidate: updated,
+                original: original,
+                handle: handle,
+                ratio: ratio,
+                minimumSize: minimumSize
+            )
+        }
+        startPoint = updated.origin
+        currentPoint = CGPoint(x: updated.maxX, y: updated.maxY)
+    }
+
+    private func aspectLockedResize(
+        candidate: CGRect,
+        original: CGRect,
+        handle: SelectionHandle,
+        ratio: CGFloat,
+        minimumSize: CGFloat
+    ) -> CGRect {
+        let safeRatio = max(0.01, ratio)
+        var width: CGFloat
+        var height: CGFloat
+        var maxWidth = bounds.width
+        var maxHeight = bounds.height
+
+        switch handle {
+        case .left, .right:
+            width = max(minimumSize, candidate.width)
+            height = width / safeRatio
+            let centerY = original.midY
+            maxHeight = 2 * min(centerY - bounds.minY, bounds.maxY - centerY)
+        case .top, .bottom:
+            height = max(minimumSize, candidate.height)
+            width = height * safeRatio
+            let centerX = original.midX
+            maxWidth = 2 * min(centerX - bounds.minX, bounds.maxX - centerX)
+        case .topLeft, .bottomLeft:
+            maxWidth = original.maxX - bounds.minX
+            maxHeight = handle == .topLeft
+                ? bounds.maxY - original.minY
+                : original.maxY - bounds.minY
+            if abs(candidate.width - original.width) >= abs(candidate.height - original.height) * safeRatio {
+                width = max(minimumSize, candidate.width)
+                height = width / safeRatio
+            } else {
+                height = max(minimumSize, candidate.height)
+                width = height * safeRatio
+            }
+        case .topRight, .bottomRight:
+            maxWidth = bounds.maxX - original.minX
+            maxHeight = handle == .topRight
+                ? bounds.maxY - original.minY
+                : original.maxY - bounds.minY
+            if abs(candidate.width - original.width) >= abs(candidate.height - original.height) * safeRatio {
+                width = max(minimumSize, candidate.width)
+                height = width / safeRatio
+            } else {
+                height = max(minimumSize, candidate.height)
+                width = height * safeRatio
+            }
+        }
+
+        if width > maxWidth {
+            width = maxWidth
+            height = width / safeRatio
+        }
+        if height > maxHeight {
+            height = maxHeight
+            width = height * safeRatio
+        }
+
+        let origin: CGPoint
+        switch handle {
+        case .topLeft:
+            origin = CGPoint(x: original.maxX - width, y: original.minY)
+        case .top:
+            origin = CGPoint(x: original.midX - width / 2, y: original.minY)
+        case .topRight:
+            origin = CGPoint(x: original.minX, y: original.minY)
+        case .left:
+            origin = CGPoint(x: original.maxX - width, y: original.midY - height / 2)
+        case .right:
+            origin = CGPoint(x: original.minX, y: original.midY - height / 2)
+        case .bottomLeft:
+            origin = CGPoint(x: original.maxX - width, y: original.maxY - height)
+        case .bottom:
+            origin = CGPoint(x: original.midX - width / 2, y: original.maxY - height)
+        case .bottomRight:
+            origin = CGPoint(x: original.minX, y: original.maxY - height)
+        }
+        return CGRect(origin: origin, size: CGSize(width: width, height: height)).integral
     }
 
     private func drawSyntheticSelectionCursor() {

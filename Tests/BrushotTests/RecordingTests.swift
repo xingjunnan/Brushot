@@ -4,6 +4,7 @@ import AVFoundation
 import CoreMedia
 import CoreVideo
 import ImageIO
+import ScreenCaptureKit
 import XCTest
 @testable import Brushot
 
@@ -16,20 +17,23 @@ final class RecordingCoreTests: XCTestCase {
         options.isEnabled = true
         options.deviceID = "camera-1"
         options.shape = .circle
-        options.isMirrored = false
+        options.isMirrored = true
         options.normalizedCenterX = 2
         options.normalizedCenterY = -1
         options.relativeWidth = 2
         RecordingCameraPreferences.save(options, defaults: defaults)
 
         let loaded = RecordingCameraPreferences.load(defaults: defaults)
-        XCTAssertTrue(loaded.isEnabled)
+        XCTAssertFalse(loaded.isEnabled)
         XCTAssertEqual(loaded.deviceID, "camera-1")
         XCTAssertEqual(loaded.shape, .circle)
         XCTAssertFalse(loaded.isMirrored)
         XCTAssertEqual(loaded.normalizedCenterX, 1)
         XCTAssertEqual(loaded.normalizedCenterY, 0)
         XCTAssertEqual(loaded.relativeWidth, 0.8)
+        XCTAssertEqual(RecordingCameraSize.small.relativeWidth, 0.16)
+        XCTAssertEqual(RecordingCameraSize.medium.relativeWidth, 0.22)
+        XCTAssertEqual(RecordingCameraSize.large.relativeWidth, 0.30)
     }
 
     func testCameraGeometryKeepsCircleInsideSelectionAndRoundTripsPosition() {
@@ -49,6 +53,19 @@ final class RecordingCoreTests: XCTestCase {
         XCTAssertLessThanOrEqual(moved.maxY, selection.maxY - RecordingCameraGeometry.margin)
         let updated = RecordingCameraGeometry.options(byUpdating: options, frame: moved, in: selection)
         XCTAssertEqual(RecordingCameraGeometry.frame(in: selection, options: updated), moved)
+
+        let almostBottomRight = CGRect(
+            x: selection.maxX - RecordingCameraGeometry.margin - frame.width + 10,
+            y: selection.minY + RecordingCameraGeometry.margin + 8,
+            width: frame.width,
+            height: frame.height
+        )
+        let snapped = RecordingCameraGeometry.snappedFrame(almostBottomRight, to: selection)
+        XCTAssertEqual(snapped.maxX, selection.maxX - RecordingCameraGeometry.margin)
+        XCTAssertEqual(snapped.minY, selection.minY + RecordingCameraGeometry.margin)
+        for position in RecordingCameraPosition.allCases {
+            XCTAssertFalse(position.displayName.isEmpty)
+        }
     }
 
     func testRecordingCaptureTargetsPreserveSourceIdentityAndBounds() {
@@ -64,6 +81,21 @@ final class RecordingCoreTests: XCTestCase {
         XCTAssertEqual(RecordingEngine.evenDimension(1), 2)
         XCTAssertEqual(RecordingEngine.evenDimension(200), 200)
         XCTAssertEqual(RecordingEngine.evenDimension(201), 200)
+    }
+
+    func testTerminalScreenCaptureStopErrorsAreRecognized() {
+        XCTAssertTrue(RecordingEngine.isTerminalStreamStopError(NSError(
+            domain: SCStreamErrorDomain,
+            code: -3817
+        )))
+        XCTAssertTrue(RecordingEngine.isTerminalStreamStopError(NSError(
+            domain: SCStreamErrorDomain,
+            code: -3821
+        )))
+        XCTAssertFalse(RecordingEngine.isTerminalStreamStopError(NSError(
+            domain: SCStreamErrorDomain,
+            code: -3811
+        )))
     }
 
     func testVideoResolutionPreservesAspectRatioWithoutUpscaling() {
@@ -86,6 +118,47 @@ final class RecordingCoreTests: XCTestCase {
         XCTAssertEqual(
             RecordingVideoResolution.native.outputSize(for: CGSize(width: 2_561, height: 1_601)),
             CGSize(width: 2_560, height: 1_600)
+        )
+    }
+
+    func testRecordingRegionGeometryUsesPixelsAndPreservesAspectRatio() {
+        let bounds = CGRect(x: 0, y: 0, width: 1_512, height: 982)
+        let exact = RecordingRegionGeometry.centeredRect(
+            pixelSize: CGSize(width: 1_920, height: 1_080),
+            scale: 2,
+            around: CGPoint(x: bounds.midX, y: bounds.midY),
+            in: bounds
+        )
+        XCTAssertEqual(exact.size, CGSize(width: 960, height: 540))
+        XCTAssertTrue(bounds.contains(exact))
+
+        let widescreen = RecordingRegionGeometry.fittedRect(
+            aspectRatio: 16 / 9,
+            around: CGPoint(x: bounds.midX, y: bounds.midY),
+            preferredWidth: 960,
+            in: bounds
+        )
+        XCTAssertEqual(widescreen.size, CGSize(width: 960, height: 540))
+        XCTAssertTrue(bounds.contains(widescreen))
+    }
+
+    func testRecordingRegionSnapshotsScaleAcrossDisplaysAndPersist() throws {
+        let suiteName = "BrushotTests.RecordingRegion.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let sourceBounds = CGRect(x: 0, y: 0, width: 1_000, height: 800)
+        let snapshot = try XCTUnwrap(RecordingRegionPreferences.snapshot(
+            for: CGRect(x: 100, y: 160, width: 500, height: 400),
+            in: sourceBounds
+        ))
+        RecordingRegionPreferences.setLast(snapshot, defaults: defaults)
+        XCTAssertEqual(RecordingRegionPreferences.last(defaults: defaults), snapshot)
+        XCTAssertEqual(
+            RecordingRegionPreferences.rect(
+                for: snapshot,
+                in: CGRect(x: 0, y: 0, width: 2_000, height: 1_600)
+            ),
+            CGRect(x: 200, y: 320, width: 1_000, height: 800)
         )
     }
 
@@ -236,7 +309,29 @@ final class RecordingCoreTests: XCTestCase {
         XCTAssertNil(RecordingLimits.remainingTime(for: .video, elapsed: 3_599))
         XCTAssertEqual(RecordingLimits.remainingTime(for: .video, elapsed: 3_600), 3_600)
         XCTAssertEqual(RecordingLimits.remainingTime(for: .video, elapsed: 7_200), 0)
-        XCTAssertEqual(RecordingDiskSpace.minimumFreeBytes, 1_000_000_000)
+        XCTAssertEqual(RecordingDiskSpace.warningFreeBytes, 16_000_000_000)
+        XCTAssertEqual(RecordingDiskSpace.minimumFreeBytesToStart, 12_000_000_000)
+        XCTAssertEqual(RecordingDiskSpace.minimumFreeBytesToContinue, 12_000_000_000)
+        XCTAssertGreaterThan(
+            RecordingDiskSpace.warningFreeBytes,
+            RecordingDiskSpace.minimumFreeBytesToStart
+        )
+        XCTAssertEqual(
+            RecordingDiskSpace.startDecision(availableBytes: 11_999_999_999),
+            .blocked
+        )
+        XCTAssertEqual(
+            RecordingDiskSpace.startDecision(availableBytes: 12_000_000_000),
+            .warning
+        )
+        XCTAssertEqual(
+            RecordingDiskSpace.startDecision(availableBytes: 15_999_999_999),
+            .warning
+        )
+        XCTAssertEqual(
+            RecordingDiskSpace.startDecision(availableBytes: 16_000_000_000),
+            .allowed
+        )
     }
 }
 
@@ -637,6 +732,102 @@ private final class TestAssetWriterBox: @unchecked Sendable {
 
 @MainActor
 final class RecordingInteractionTests: XCTestCase {
+    func testRegionRecordingShowsEditablePixelSizeAndFullscreenDoesNot() throws {
+        let area = SelectionOverlayView(
+            frame: CGRect(x: 0, y: 0, width: 1_512, height: 982),
+            purpose: .recording,
+            allowsRecordingRegionSizing: true
+        )
+        area.presetSelection(CGRect(x: 200, y: 180, width: 960, height: 540))
+        let areaRecordingBar = try XCTUnwrap(descendants(of: area).first { $0 is RecordingStartBar })
+        area.layoutSubtreeIfNeeded()
+        let areaSizeButton = try XCTUnwrap(descendants(of: areaRecordingBar).compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "recordingRegionSize"
+        })
+        XCTAssertFalse(areaSizeButton.isHidden)
+        XCTAssertEqual(regionDimensions(areaSizeButton.title), [960, 540])
+
+        area.updateRecordingAspectRatio(1)
+        let square = regionDimensions(areaSizeButton.title)
+        XCTAssertEqual(square[0], square[1])
+
+        area.updateRecordingAspectRatio(16 / 9)
+        let widescreen = regionDimensions(areaSizeButton.title)
+        XCTAssertEqual(Double(widescreen[0]) / Double(widescreen[1]), 16.0 / 9.0, accuracy: 0.02)
+        let rightHandle = CGPoint(
+            x: 680 + CGFloat(widescreen[0]) / 2,
+            y: 450
+        )
+        area.mouseDown(with: try recordingMouseEvent(type: .leftMouseDown, at: rightHandle))
+        area.mouseDragged(with: try recordingMouseEvent(
+            type: .leftMouseDragged,
+            at: CGPoint(x: rightHandle.x - 120, y: rightHandle.y)
+        ))
+        area.mouseUp(with: try recordingMouseEvent(
+            type: .leftMouseUp,
+            at: CGPoint(x: rightHandle.x - 120, y: rightHandle.y)
+        ))
+        XCTAssertEqual(
+            Double(regionDimensions(areaSizeButton.title)[0]) /
+                Double(regionDimensions(areaSizeButton.title)[1]),
+            16.0 / 9.0,
+            accuracy: 0.02
+        )
+
+        let fullscreen = SelectionOverlayView(
+            frame: CGRect(x: 0, y: 0, width: 1_512, height: 982),
+            purpose: .recording,
+            allowsRecordingRegionSizing: false
+        )
+        fullscreen.presetSelection(fullscreen.bounds)
+        let fullscreenRecordingBar = try XCTUnwrap(
+            descendants(of: fullscreen).first { $0 is RecordingStartBar }
+        )
+        let fullscreenSizeButton = try XCTUnwrap(
+            descendants(of: fullscreenRecordingBar).compactMap { $0 as? NSButton }.first {
+                $0.identifier?.rawValue == "recordingRegionSize"
+            }
+        )
+        XCTAssertTrue(fullscreenSizeButton.isHidden)
+    }
+
+    func testCameraPermissionRequestBlocksStartingUntilItFinishes() async throws {
+        let original = RecordingCameraPreferences.load()
+        var disabled = original
+        disabled.isEnabled = false
+        RecordingCameraPreferences.save(disabled)
+        defer { RecordingCameraPreferences.save(original) }
+
+        let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 176))
+        bar.availableDiskBytesProvider = { 20_000_000_000 }
+        let buttons = descendants(of: bar).compactMap { $0 as? NSButton }
+        let camera = try XCTUnwrap(buttons.first {
+            $0.identifier?.rawValue == "recordingCamera"
+        })
+        let start = try XCTUnwrap(buttons.first {
+            $0.identifier?.rawValue == "startRecordingAction"
+        })
+        try XCTSkipIf(!camera.isEnabled, "This host has no camera to exercise the permission UI.")
+        var didStart = false
+        bar.onStart = { _, _, _, _, _, _, _, _ in didStart = true }
+        bar.cameraPermissionRequester = {
+            try? await Task.sleep(for: .milliseconds(120))
+            return .authorized
+        }
+
+        camera.performClick(nil)
+        XCTAssertFalse(start.isEnabled)
+        XCTAssertEqual(start.title, "正在请求摄像头权限…")
+        start.performClick(nil)
+        XCTAssertFalse(didStart)
+
+        try await Task.sleep(for: .milliseconds(180))
+        XCTAssertTrue(start.isEnabled)
+        XCTAssertEqual(start.title, "开始录制视频")
+        start.performClick(nil)
+        XCTAssertTrue(didStart)
+    }
+
     func testUnresolvedPreviewPromptOffersSaveDiscardAndCancel() {
         let alert = RecordingPreviewResolutionPrompt.makeAlert()
 
@@ -748,7 +939,13 @@ final class RecordingInteractionTests: XCTestCase {
         RecordingPreferences.setVideoResolution(.p1080)
         RecordingPreferences.setVideoFPS(30)
         let bar = RecordingStartBar(frame: CGRect(x: 0, y: 0, width: 650, height: 176))
+        bar.availableDiskBytesProvider = { 20_000_000_000 }
         bar.updateSourcePixelSize(CGSize(width: 2_560, height: 1_600))
+        bar.updateRegionSelection(
+            pixelSize: CGSize(width: 1_512, height: 982),
+            hasLast: false,
+            isAvailable: true
+        )
         let buttons = descendants(of: bar).compactMap { $0 as? NSButton }
         let start = try XCTUnwrap(buttons.first { $0.identifier?.rawValue == "startRecordingAction" })
         let format = try XCTUnwrap(descendants(of: bar).compactMap { $0 as? NSSegmentedControl }.first {
@@ -765,6 +962,12 @@ final class RecordingInteractionTests: XCTestCase {
         let fpsPopup = try XCTUnwrap(descendants(of: bar).compactMap { $0 as? NSPopUpButton }.first {
             $0.identifier?.rawValue == "recordingVideoFPS"
         })
+        let regionSizeButton = try XCTUnwrap(buttons.first {
+            $0.identifier?.rawValue == "recordingRegionSize"
+        })
+        let cameraSettingsButton = try XCTUnwrap(buttons.first {
+            $0.identifier?.rawValue == "recordingCameraSettings"
+        })
         XCTAssertNil(descendants(of: bar).first {
             $0.identifier?.rawValue == "recordingMicrophoneVolume"
         })
@@ -777,17 +980,17 @@ final class RecordingInteractionTests: XCTestCase {
         let labels = descendants(of: bar).compactMap { $0 as? NSTextField }
         let audioLabel = try XCTUnwrap(labels.first { $0.stringValue == "视频音频" })
         let qualityLabel = try XCTUnwrap(labels.first { $0.stringValue == "视频质量" })
-        let outputSizeLabel = try XCTUnwrap(
-            labels.first { $0.stringValue == "输出 1728 × 1080" },
-            "labels: \(labels.map(\.stringValue))"
-        )
+        XCTAssertNil(labels.first { $0.stringValue.hasPrefix("输出 ") })
         let silentHint = try XCTUnwrap(labels.first {
             $0.stringValue == "GIF 最长 60 秒，建议 30 秒内 · 无声音"
         })
         let performanceHint = try XCTUnwrap(labels.first {
-            $0.stringValue == "高负载，建议 1080p · 30 FPS"
+            $0.stringValue == "高负载"
         })
         XCTAssertTrue(performanceHint.isHidden)
+        XCTAssertFalse(regionSizeButton.isHidden)
+        XCTAssertTrue(cameraSettingsButton.isHidden)
+        XCTAssertEqual(regionDimensions(regionSizeButton.title), [1_512, 982])
 
         resolutionPopup.selectItem(at: try XCTUnwrap(resolutionPopup.itemArray.firstIndex {
             ($0.representedObject as? String) == RecordingVideoResolution.p4K.rawValue
@@ -802,7 +1005,7 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertFalse(performanceHint.isHidden)
 
         bar.layoutSubtreeIfNeeded()
-        for view in [resolutionPopup, fpsPopup, outputSizeLabel, performanceHint] {
+        for view in [resolutionPopup, fpsPopup, regionSizeButton, performanceHint] {
             let frame = view.convert(view.bounds, to: bar)
             XCTAssertGreaterThanOrEqual(frame.minX, bar.bounds.minX)
             XCTAssertLessThanOrEqual(frame.maxX, bar.bounds.maxX)
@@ -825,6 +1028,7 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertTrue(qualityLabel.isHidden)
         XCTAssertTrue(resolutionPopup.isHidden)
         XCTAssertTrue(fpsPopup.isHidden)
+        XCTAssertTrue(regionSizeButton.isHidden)
         XCTAssertTrue(audio.isHidden)
         XCTAssertTrue(microphone.isHidden)
         XCTAssertTrue(microphonePopup.isHidden)
@@ -839,6 +1043,41 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertEqual(received.map(\.4), [false, false])
         XCTAssertTrue(receivedWatermarks.allSatisfy { $0 == nil })
         XCTAssertTrue(RecordingPreferences.systemAudioEnabled())
+    }
+
+    func testCameraSettingsOfferShapeSizePositionAndHorizontalFlip() throws {
+        let view = RecordingCameraSettingsView(
+            frame: CGRect(x: 0, y: 0, width: 330, height: 212),
+            options: .defaults,
+            showsDevice: false
+        )
+        let segments = descendants(of: view).compactMap { $0 as? NSSegmentedControl }
+        let shape = try XCTUnwrap(segments.first {
+            $0.identifier?.rawValue == "recordingCameraSettingsShape"
+        })
+        let size = try XCTUnwrap(segments.first {
+            $0.identifier?.rawValue == "recordingCameraSettingsSize"
+        })
+        let position = try XCTUnwrap(segments.first {
+            $0.identifier?.rawValue == "recordingCameraSettingsPosition"
+        })
+        let flip = try XCTUnwrap(descendants(of: view).compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == "recordingCameraSettingsFlip"
+        })
+
+        XCTAssertEqual(shape.segmentCount, RecordingCameraShape.allCases.count)
+        XCTAssertEqual(size.segmentCount, RecordingCameraSize.allCases.count)
+        XCTAssertEqual(position.segmentCount, RecordingCameraPosition.allCases.count)
+        XCTAssertEqual(flip.title, "左右翻转")
+        XCTAssertEqual(flip.state, .off)
+
+        var received: RecordingCameraOptions?
+        view.onOptionsChanged = { received = $0 }
+        size.selectedSegment = 2
+        XCTAssertTrue(size.sendAction(size.action, to: size.target))
+        XCTAssertEqual(received?.relativeWidth, RecordingCameraSize.large.relativeWidth)
+        flip.performClick(nil)
+        XCTAssertEqual(received?.isMirrored, true)
     }
 
     func testRecordingFormatChooserDoesNotOfferWatermarkBeforeRecording() {
@@ -1273,5 +1512,25 @@ final class RecordingInteractionTests: XCTestCase {
 
     private func descendants(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap(descendants(of:))
+    }
+
+    private func regionDimensions(_ title: String) -> [Int] {
+        title.replacingOccurrences(of: ",", with: "")
+            .split(whereSeparator: { !$0.isNumber })
+            .compactMap { Int($0) }
+    }
+
+    private func recordingMouseEvent(type: NSEvent.EventType, at point: CGPoint) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.mouseEvent(
+            with: type,
+            location: point,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        ))
     }
 }

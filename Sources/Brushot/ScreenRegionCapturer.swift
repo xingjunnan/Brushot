@@ -215,6 +215,13 @@ final class ScreenRegionCapturer {
         preparedOverlayExclusion = true
     }
 
+    /// Rebuilds the recording filter after a new live overlay (such as the
+    /// camera) is ordered on screen during an active recording.
+    func refreshRecordingOverlayExclusion() async throws {
+        preparedOverlayExclusion = false
+        try await prepareForRecordingOverlay()
+    }
+
     /// ScreenCaptureKit can briefly lag behind AppKit after a new transparent
     /// overlay is ordered front. Wait until every requested overlay has become
     /// shareable before building the final recording filter; otherwise the

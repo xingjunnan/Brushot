@@ -8,12 +8,65 @@ enum RecordingCameraShape: String, CaseIterable, Sendable {
     var displayName: String {
         switch self {
         case .roundedRectangle: L.text("圆角矩形")
-        case .circle: L.text("圆形画中画")
+        case .circle: L.text("圆形")
         }
     }
 
     var aspectRatio: CGFloat {
         self == .circle ? 1 : 16 / 9
+    }
+}
+
+enum RecordingCameraSize: String, CaseIterable, Sendable {
+    case small
+    case medium
+    case large
+
+    var relativeWidth: Double {
+        switch self {
+        case .small: 0.16
+        case .medium: 0.22
+        case .large: 0.30
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .small: L.text("小")
+        case .medium: L.text("中")
+        case .large: L.text("大")
+        }
+    }
+
+    static func nearest(to relativeWidth: Double) -> RecordingCameraSize? {
+        let result = allCases.min { abs($0.relativeWidth - relativeWidth) < abs($1.relativeWidth - relativeWidth) }
+        guard let result, abs(result.relativeWidth - relativeWidth) < 0.025 else { return nil }
+        return result
+    }
+}
+
+enum RecordingCameraPosition: String, CaseIterable, Sendable {
+    case topLeft
+    case topRight
+    case bottomLeft
+    case bottomRight
+
+    var displayName: String {
+        switch self {
+        case .topLeft: L.text("左上角")
+        case .topRight: L.text("右上角")
+        case .bottomLeft: L.text("左下角")
+        case .bottomRight: L.text("右下角")
+        }
+    }
+
+    var normalizedCenter: CGPoint {
+        switch self {
+        case .topLeft: CGPoint(x: 0.15, y: 0.82)
+        case .topRight: CGPoint(x: 0.85, y: 0.82)
+        case .bottomLeft: CGPoint(x: 0.15, y: 0.18)
+        case .bottomRight: CGPoint(x: 0.85, y: 0.18)
+        }
     }
 }
 
@@ -30,7 +83,7 @@ struct RecordingCameraOptions: Equatable, Sendable {
         isEnabled: false,
         deviceID: nil,
         shape: .roundedRectangle,
-        isMirrored: true,
+        isMirrored: false,
         normalizedCenterX: 0.85,
         normalizedCenterY: 0.18,
         relativeWidth: 0.22
@@ -38,10 +91,8 @@ struct RecordingCameraOptions: Equatable, Sendable {
 }
 
 enum RecordingCameraPreferences {
-    private static let enabledKey = "recording.cameraEnabled"
     private static let deviceKey = "recording.cameraDeviceID"
     private static let shapeKey = "recording.cameraShape"
-    private static let mirroredKey = "recording.cameraMirrored"
     private static let centerXKey = "recording.cameraCenterX"
     private static let centerYKey = "recording.cameraCenterY"
     private static let relativeWidthKey = "recording.cameraRelativeWidth"
@@ -59,14 +110,11 @@ enum RecordingCameraPreferences {
         let relativeWidth = defaults.object(forKey: relativeWidthKey) == nil
             ? fallback.relativeWidth
             : defaults.double(forKey: relativeWidthKey)
-        let mirrored = defaults.object(forKey: mirroredKey) == nil
-            ? fallback.isMirrored
-            : defaults.bool(forKey: mirroredKey)
         return RecordingCameraOptions(
-            isEnabled: defaults.bool(forKey: enabledKey),
+            isEnabled: false,
             deviceID: defaults.string(forKey: deviceKey),
             shape: shape,
-            isMirrored: mirrored,
+            isMirrored: false,
             normalizedCenterX: min(max(centerX, 0), 1),
             normalizedCenterY: min(max(centerY, 0), 1),
             relativeWidth: min(max(relativeWidth, 0.08), 0.8)
@@ -74,11 +122,11 @@ enum RecordingCameraPreferences {
     }
 
     static func save(_ options: RecordingCameraOptions, defaults: UserDefaults = .standard) {
-        defaults.set(options.isEnabled, forKey: enabledKey)
+        defaults.removeObject(forKey: "recording.cameraEnabled")
         if let deviceID = options.deviceID { defaults.set(deviceID, forKey: deviceKey) }
         else { defaults.removeObject(forKey: deviceKey) }
         defaults.set(options.shape.rawValue, forKey: shapeKey)
-        defaults.set(options.isMirrored, forKey: mirroredKey)
+        defaults.removeObject(forKey: "recording.cameraMirrored")
         defaults.set(options.normalizedCenterX, forKey: centerXKey)
         defaults.set(options.normalizedCenterY, forKey: centerYKey)
         defaults.set(options.relativeWidth, forKey: relativeWidthKey)
@@ -118,6 +166,176 @@ enum RecordingCameras {
         guard status == .notDetermined else { return status }
         let granted = await AVCaptureDevice.requestAccess(for: .video)
         return granted ? .authorized : authorizationStatus()
+    }
+}
+
+@MainActor
+final class RecordingCameraSettingsView: NSView {
+    var onOptionsChanged: ((RecordingCameraOptions) -> Void)?
+
+    private var options: RecordingCameraOptions
+    private let showsDevice: Bool
+    private let devicePopup = NSPopUpButton()
+    private lazy var shapeControl = NSSegmentedControl(
+        labels: RecordingCameraShape.allCases.map(\.displayName),
+        trackingMode: .selectOne,
+        target: self,
+        action: #selector(shapeChanged)
+    )
+    private lazy var sizeControl = NSSegmentedControl(
+        labels: RecordingCameraSize.allCases.map(\.displayName),
+        trackingMode: .selectOne,
+        target: self,
+        action: #selector(sizeChanged)
+    )
+    private lazy var positionControl = NSSegmentedControl(
+        labels: ["↖", "↗", "↙", "↘"],
+        trackingMode: .selectOne,
+        target: self,
+        action: #selector(positionChanged)
+    )
+    private lazy var flipCheckbox = NSButton(
+        checkboxWithTitle: L.text("左右翻转"),
+        target: self,
+        action: #selector(flipChanged)
+    )
+
+    init(frame: CGRect, options: RecordingCameraOptions, showsDevice: Bool) {
+        self.options = options
+        self.showsDevice = showsDevice
+        super.init(frame: frame)
+
+        let rows = NSStackView()
+        rows.orientation = .vertical
+        rows.alignment = .leading
+        rows.spacing = 10
+        rows.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(rows)
+
+        if showsDevice {
+            let devices = RecordingCameras.availableDevices()
+            for device in devices {
+                devicePopup.addItem(withTitle: device.name)
+                devicePopup.lastItem?.representedObject = device.id
+            }
+            if devices.isEmpty {
+                devicePopup.addItem(withTitle: L.text("未检测到摄像头"))
+                devicePopup.isEnabled = false
+            }
+            devicePopup.target = self
+            devicePopup.action = #selector(deviceChanged)
+            devicePopup.identifier = NSUserInterfaceItemIdentifier("recordingCameraSettingsDevice")
+            devicePopup.widthAnchor.constraint(equalToConstant: 230).isActive = true
+            rows.addArrangedSubview(makeRow(label: L.text("摄像头"), control: devicePopup))
+        }
+
+        shapeControl.identifier = NSUserInterfaceItemIdentifier("recordingCameraSettingsShape")
+        sizeControl.identifier = NSUserInterfaceItemIdentifier("recordingCameraSettingsSize")
+        positionControl.identifier = NSUserInterfaceItemIdentifier("recordingCameraSettingsPosition")
+        flipCheckbox.identifier = NSUserInterfaceItemIdentifier("recordingCameraSettingsFlip")
+        shapeControl.widthAnchor.constraint(equalToConstant: 230).isActive = true
+        sizeControl.widthAnchor.constraint(equalToConstant: 230).isActive = true
+        positionControl.widthAnchor.constraint(equalToConstant: 230).isActive = true
+        rows.addArrangedSubview(makeRow(label: L.text("形状"), control: shapeControl))
+        rows.addArrangedSubview(makeRow(label: L.text("大小"), control: sizeControl))
+        rows.addArrangedSubview(makeRow(label: L.text("位置"), control: positionControl))
+
+        let bottom = NSStackView(views: [makeLabel(""), flipCheckbox])
+        bottom.orientation = .horizontal
+        bottom.alignment = .centerY
+        bottom.spacing = 8
+        rows.addArrangedSubview(bottom)
+
+        let hint = NSTextField(labelWithString: L.text("可直接拖动画中画调整位置"))
+        hint.font = .systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        let hintRow = NSStackView(views: [makeLabel(""), hint])
+        hintRow.orientation = .horizontal
+        hintRow.alignment = .centerY
+        hintRow.spacing = 8
+        rows.addArrangedSubview(hintRow)
+
+        NSLayoutConstraint.activate([
+            rows.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            rows.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -14),
+            rows.topAnchor.constraint(equalTo: topAnchor, constant: 14),
+            rows.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -14)
+        ])
+        update(options: options)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func update(options: RecordingCameraOptions) {
+        self.options = options
+        if showsDevice,
+           let index = devicePopup.itemArray.firstIndex(where: {
+               ($0.representedObject as? String) == options.deviceID
+           }) {
+            devicePopup.selectItem(at: index)
+        }
+        shapeControl.selectedSegment = RecordingCameraShape.allCases.firstIndex(of: options.shape) ?? 0
+        sizeControl.selectedSegment = RecordingCameraSize.nearest(to: options.relativeWidth)
+            .flatMap { RecordingCameraSize.allCases.firstIndex(of: $0) } ?? -1
+        positionControl.selectedSegment = nearestPositionIndex(options: options)
+        flipCheckbox.state = options.isMirrored ? .on : .off
+    }
+
+    private func makeRow(label: String, control: NSView) -> NSStackView {
+        let row = NSStackView(views: [makeLabel(label), control])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 8
+        return row
+    }
+
+    private func makeLabel(_ text: String) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 12, weight: .medium)
+        label.textColor = .secondaryLabelColor
+        label.widthAnchor.constraint(equalToConstant: 52).isActive = true
+        return label
+    }
+
+    private func publish() { onOptionsChanged?(options) }
+
+    @objc private func deviceChanged() {
+        options.deviceID = devicePopup.selectedItem?.representedObject as? String
+        publish()
+    }
+
+    @objc private func shapeChanged() {
+        guard RecordingCameraShape.allCases.indices.contains(shapeControl.selectedSegment) else { return }
+        options.shape = RecordingCameraShape.allCases[shapeControl.selectedSegment]
+        publish()
+    }
+
+    @objc private func sizeChanged() {
+        guard RecordingCameraSize.allCases.indices.contains(sizeControl.selectedSegment) else { return }
+        options.relativeWidth = RecordingCameraSize.allCases[sizeControl.selectedSegment].relativeWidth
+        publish()
+    }
+
+    @objc private func positionChanged() {
+        guard RecordingCameraPosition.allCases.indices.contains(positionControl.selectedSegment) else { return }
+        let position = RecordingCameraPosition.allCases[positionControl.selectedSegment]
+        options.normalizedCenterX = Double(position.normalizedCenter.x)
+        options.normalizedCenterY = Double(position.normalizedCenter.y)
+        publish()
+    }
+
+    @objc private func flipChanged() {
+        options.isMirrored = flipCheckbox.state == .on
+        publish()
+    }
+
+    private func nearestPositionIndex(options: RecordingCameraOptions) -> Int {
+        let point = CGPoint(x: options.normalizedCenterX, y: options.normalizedCenterY)
+        let distances = RecordingCameraPosition.allCases.map { position in
+            hypot(point.x - position.normalizedCenter.x, point.y - position.normalizedCenter.y)
+        }
+        guard let minimum = distances.min(), minimum < 0.08 else { return -1 }
+        return distances.firstIndex(of: minimum) ?? -1
     }
 }
 
@@ -193,6 +411,23 @@ enum RecordingCameraGeometry {
         result.origin.y = min(max(result.origin.y, minY), max(minY, maxY))
         return result.integral
     }
+
+    static func snappedFrame(
+        _ frame: CGRect,
+        to selection: CGRect,
+        threshold: CGFloat = 24
+    ) -> CGRect {
+        var result = clamp(frame, to: selection)
+        let left = selection.minX + margin
+        let right = selection.maxX - margin - result.width
+        let bottom = selection.minY + margin
+        let top = selection.maxY - margin - result.height
+        if abs(result.minX - left) <= threshold { result.origin.x = left }
+        else if abs(result.minX - right) <= threshold { result.origin.x = right }
+        if abs(result.minY - bottom) <= threshold { result.origin.y = bottom }
+        else if abs(result.minY - top) <= threshold { result.origin.y = top }
+        return result.integral
+    }
 }
 
 private final class RecordingCameraCapture: @unchecked Sendable {
@@ -259,6 +494,8 @@ final class RecordingCameraPreviewView: NSView {
     private var allowedFrame: CGRect
     private let movesWindow: Bool
     private let previewLayer = AVCaptureVideoPreviewLayer()
+    private let resizeHandleBackgroundLayer = CAShapeLayer()
+    private let resizeHandleLayer = CAShapeLayer()
     private var capture: RecordingCameraCapture?
     private var dragStartMouse = CGPoint.zero
     private var dragStartFrame = CGRect.zero
@@ -276,6 +513,10 @@ final class RecordingCameraPreviewView: NSView {
         super.init(frame: frame)
         wantsLayer = true
         layer?.addSublayer(previewLayer)
+        if !movesWindow {
+            layer?.addSublayer(resizeHandleBackgroundLayer)
+            layer?.addSublayer(resizeHandleLayer)
+        }
         previewLayer.videoGravity = .resizeAspectFill
         applyAppearance()
     }
@@ -286,6 +527,7 @@ final class RecordingCameraPreviewView: NSView {
         super.layout()
         previewLayer.frame = bounds
         applyAppearance()
+        updateResizeHandle()
     }
 
     func startPreview() throws {
@@ -320,7 +562,7 @@ final class RecordingCameraPreviewView: NSView {
     override func resetCursorRects() {
         super.resetCursorRects()
         addCursorRect(
-            CGRect(x: max(0, bounds.maxX - 22), y: 0, width: 22, height: 22),
+            CGRect(x: max(0, bounds.maxX - 34), y: 0, width: 34, height: 34),
             cursor: AnnotationCursorFactory.cursor(for: .resizeDiagonalDown)
         )
     }
@@ -329,7 +571,7 @@ final class RecordingCameraPreviewView: NSView {
         dragStartMouse = NSEvent.mouseLocation
         dragStartFrame = movesWindow ? (window?.frame ?? frame) : frame
         let point = convert(event.locationInWindow, from: nil)
-        isResizing = point.x >= bounds.maxX - 22 && point.y <= 22
+        isResizing = point.x >= bounds.maxX - 34 && point.y <= 34
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -361,6 +603,20 @@ final class RecordingCameraPreviewView: NSView {
         onOptionsChanged?(options)
     }
 
+    override func mouseUp(with event: NSEvent) {
+        guard !isResizing else { return }
+        let currentFrame = movesWindow ? (window?.frame ?? frame) : frame
+        let snapped = RecordingCameraGeometry.snappedFrame(currentFrame, to: allowedFrame)
+        guard snapped != currentFrame else { return }
+        applyFrame(snapped)
+        options = RecordingCameraGeometry.options(
+            byUpdating: options,
+            frame: snapped,
+            in: allowedFrame
+        )
+        onOptionsChanged?(options)
+    }
+
     private func applyFrame(_ newFrame: CGRect) {
         if movesWindow { window?.setFrame(newFrame, display: true) }
         else { frame = newFrame }
@@ -380,6 +636,27 @@ final class RecordingCameraPreviewView: NSView {
         guard let connection = previewLayer.connection else { return }
         connection.automaticallyAdjustsVideoMirroring = false
         if connection.isVideoMirroringSupported { connection.isVideoMirrored = options.isMirrored }
+    }
+
+    private func updateResizeHandle() {
+        guard !movesWindow else { return }
+        let center = CGPoint(x: max(15, bounds.maxX - 19), y: min(bounds.maxY - 15, 19))
+        resizeHandleBackgroundLayer.path = CGPath(
+            ellipseIn: CGRect(x: center.x - 12, y: center.y - 12, width: 24, height: 24),
+            transform: nil
+        )
+        resizeHandleBackgroundLayer.fillColor = NSColor.black.withAlphaComponent(0.65).cgColor
+        let path = CGMutablePath()
+        for offset in [CGFloat(-5), 0, 5] {
+            path.move(to: CGPoint(x: center.x + offset - 4, y: center.y - 6))
+            path.addLine(to: CGPoint(x: center.x + 6, y: center.y + offset + 4))
+        }
+        resizeHandleLayer.path = path
+        resizeHandleLayer.fillColor = nil
+        resizeHandleLayer.strokeColor = NSColor.white.cgColor
+        resizeHandleLayer.lineWidth = 1.5
+        resizeHandleLayer.lineCap = .round
+        resizeHandleLayer.lineJoin = .round
     }
 
     private func handleUnavailable() {
@@ -403,6 +680,7 @@ final class RecordingCameraOverlayController {
 
     private let selectionRect: CGRect
     private let previewView: RecordingCameraPreviewView
+    private var isActive = false
 
     init(selectionRect: CGRect, options: RecordingCameraOptions, level: NSWindow.Level) {
         self.selectionRect = selectionRect
@@ -439,9 +717,10 @@ final class RecordingCameraOverlayController {
     }
 
     var windowID: CGWindowID { CGWindowID(window.windowNumber) }
-    var isVisible: Bool { window.isVisible }
+    var isVisible: Bool { isActive }
 
     func show() throws {
+        isActive = true
         options.isEnabled = true
         previewView.isHidden = false
         previewView.update(options: options, allowedFrame: selectionRect)
@@ -450,17 +729,27 @@ final class RecordingCameraOverlayController {
     }
 
     func hide() {
+        isActive = false
         options.isEnabled = false
         previewView.stopPreview()
+        previewView.isHidden = true
         window.orderOut(nil)
     }
 
     func toggle() throws {
-        if window.isVisible { hide() }
+        if isActive { hide() }
         else { try show() }
     }
 
+    func update(options: RecordingCameraOptions) {
+        var updated = options
+        updated.isEnabled = isActive
+        self.options = updated
+        previewView.update(options: updated, allowedFrame: selectionRect)
+    }
+
     func close() {
+        isActive = false
         previewView.stopPreview()
         window.orderOut(nil)
         window.close()

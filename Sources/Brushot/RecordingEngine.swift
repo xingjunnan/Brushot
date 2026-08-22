@@ -276,17 +276,41 @@ enum RecordingLimits {
 }
 
 enum RecordingDiskSpace {
-    static let minimumFreeBytes: Int64 = 1_000_000_000
+    enum StartDecision: Equatable {
+        case blocked
+        case warning
+        case allowed
+    }
+
+    /// macOS can ask replayd to purge its caches and terminate every active
+    /// ScreenCaptureKit stream while free space is already around 10 GB.
+    /// Keep enough headroom to stop through Brushot before that system-level
+    /// pressure path is reached.
+    static let warningFreeBytes: Int64 = 16_000_000_000
+    static let minimumFreeBytesToStart: Int64 = 12_000_000_000
+    static let minimumFreeBytesToContinue: Int64 = 12_000_000_000
 
     static func availableBytes(at url: URL = FileManager.default.temporaryDirectory) -> Int64? {
-        let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-        return values?.volumeAvailableCapacityForImportantUsage
+        let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityKey])
+        return values?.volumeAvailableCapacity.map(Int64.init)
     }
 
-    static func hasEnoughSpace(at url: URL = FileManager.default.temporaryDirectory) -> Bool {
+    static func hasEnoughSpaceToStart(at url: URL = FileManager.default.temporaryDirectory) -> Bool {
         guard let available = availableBytes(at: url) else { return true }
-        return available >= minimumFreeBytes
+        return available >= minimumFreeBytesToStart
     }
+
+    static func hasEnoughSpaceToContinue(at url: URL = FileManager.default.temporaryDirectory) -> Bool {
+        guard let available = availableBytes(at: url) else { return true }
+        return available >= minimumFreeBytesToContinue
+    }
+
+    static func startDecision(availableBytes: Int64) -> StartDecision {
+        if availableBytes < minimumFreeBytesToStart { return .blocked }
+        if availableBytes < warningFreeBytes { return .warning }
+        return .allowed
+    }
+
 }
 
 struct RecordingConfiguration: Sendable {
@@ -337,7 +361,7 @@ enum RecordingError: LocalizedError {
         case .noFrames: L.text("没有录制到有效画面。")
         case .microphonePermissionDenied: L.text("没有麦克风权限。请在“系统设置 → 隐私与安全性 → 麦克风”中允许 Brushot，然后重试。")
         case .microphoneUnavailable: L.text("所选麦克风不可用，请重新连接设备或选择其他麦克风。")
-        case .insufficientDiskSpace: L.text("磁盘剩余空间不足 1 GB，无法安全录制。请清理空间后重试。")
+        case .insufficientDiskSpace: L.text("磁盘可用空间不足 12 GB，macOS 可能强制停止录屏。请清理空间后重试。")
         }
     }
 }
@@ -366,7 +390,7 @@ enum RecordingDiagnostics {
 final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate {
     private(set) var state: RecordingState = .idle
     private(set) var elapsedTime: TimeInterval = 0
-    var onUnexpectedStop: ((Error) -> Void)?
+    var onUnexpectedStop: ((Error, RecordingResult?) -> Void)?
 
     private let sampleQueue = DispatchQueue(label: "com.brushot.recording.samples", qos: .userInitiated)
     private var stream: SCStream?
@@ -384,7 +408,7 @@ final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate {
         configuration: RecordingConfiguration
     ) async throws {
         guard state == .idle else { throw RecordingError.alreadyRecording }
-        guard RecordingDiskSpace.hasEnoughSpace() else { throw RecordingError.insufficientDiskSpace }
+        guard RecordingDiskSpace.hasEnoughSpaceToStart() else { throw RecordingError.insufficientDiskSpace }
         state = .preparing
         elapsedTime = 0
         accumulatedElapsed = 0
@@ -502,6 +526,13 @@ final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate {
         startElapsedTimer()
     }
 
+    func updateContentFilter(_ filter: SCContentFilter) async throws {
+        guard let stream, state == .recording || state == .paused else {
+            throw RecordingError.notRecording
+        }
+        try await stream.updateContentFilter(filter)
+    }
+
     func stop() async throws -> RecordingResult {
         guard state == .recording || state == .paused,
               let stream,
@@ -514,7 +545,14 @@ final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate {
         state = .stopping
         stopElapsedTimer()
         await microphoneCapture?.stop()
-        try await stream.stopCapture()
+        do {
+            try await stream.stopCapture()
+        } catch where Self.isTerminalStreamStopError(error) {
+            // ScreenCaptureKit can report that the user or system already
+            // stopped the stream while Brushot's own stop request is in
+            // flight. The writer still contains valid ordered samples, so
+            // finish it normally instead of discarding the recording.
+        }
         let duration: TimeInterval
         do {
             duration = try await withCheckedThrowingContinuation { continuation in
@@ -545,10 +583,12 @@ final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate {
 
     func cancel() async {
         guard state.isActive else { return }
+        state = .stopping
         stopElapsedTimer()
+        let stream = self.stream
+        let writer = self.writer
         await microphoneCapture?.stop()
         try? await stream?.stopCapture()
-        let writer = self.writer
         await withCheckedContinuation { continuation in
             sampleQueue.async {
                 writer?.cancel()
@@ -577,15 +617,62 @@ final class RecordingEngine: NSObject, SCStreamOutput, SCStreamDelegate {
     nonisolated func stream(_ stream: SCStream, didStopWithError error: any Error) {
         Task { @MainActor [weak self] in
             guard let self, self.state != .stopping else { return }
+            guard self.state == .recording || self.state == .paused else { return }
+            self.state = .stopping
             self.stopElapsedTimer()
+            let configuration = self.configuration
+            let sourceURL = self.sourceURL
+            let pixelSize = self.pixelSize
             let writer = self.writer
             await self.microphoneCapture?.stop()
-            self.sampleQueue.async {
-                writer?.finish { _ in }
+
+            let duration: TimeInterval?
+            do {
+                duration = try await withCheckedThrowingContinuation { continuation in
+                    self.sampleQueue.async {
+                        guard let writer else {
+                            continuation.resume(returning: 0)
+                            return
+                        }
+                        writer.finish { continuation.resume(with: $0) }
+                    }
+                }
+            } catch {
+                self.reset()
+                self.onUnexpectedStop?(error, nil)
+                return
+            }
+
+            let result: RecordingResult?
+            if let duration, duration > 0, let configuration, let sourceURL {
+                result = RecordingResult(
+                    sourceURL: sourceURL,
+                    duration: duration,
+                    format: configuration.format,
+                    pixelSize: pixelSize,
+                    capturedAt: configuration.capturedAt,
+                    watermarkConfiguration: configuration.watermarkConfiguration
+                )
+            } else {
+                if let sourceURL { try? FileManager.default.removeItem(at: sourceURL) }
+                result = nil
             }
             self.reset()
-            self.onUnexpectedStop?(error)
+            self.onUnexpectedStop?(error, result)
         }
+    }
+
+    nonisolated static func isTerminalStreamStopError(_ error: Error) -> Bool {
+        var current: NSError? = error as NSError
+        var visited: Set<ObjectIdentifier> = []
+        while let item = current, visited.insert(ObjectIdentifier(item)).inserted {
+            if item.domain == SCStreamErrorDomain,
+               item.code == -3817 || item.code == -3821 {
+                return true
+            }
+            current = item.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return false
     }
 
     nonisolated static func evenDimension(_ value: Int) -> Int {
