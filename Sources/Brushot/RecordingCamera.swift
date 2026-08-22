@@ -83,7 +83,7 @@ struct RecordingCameraOptions: Equatable, Sendable {
         isEnabled: false,
         deviceID: nil,
         shape: .roundedRectangle,
-        isMirrored: false,
+        isMirrored: true,
         normalizedCenterX: 0.85,
         normalizedCenterY: 0.18,
         relativeWidth: 0.22
@@ -114,7 +114,7 @@ enum RecordingCameraPreferences {
             isEnabled: false,
             deviceID: defaults.string(forKey: deviceKey),
             shape: shape,
-            isMirrored: false,
+            isMirrored: true,
             normalizedCenterX: min(max(centerX, 0), 1),
             normalizedCenterY: min(max(centerY, 0), 1),
             relativeWidth: min(max(relativeWidth, 0.08), 0.8)
@@ -245,15 +245,6 @@ final class RecordingCameraSettingsView: NSView {
         bottom.alignment = .centerY
         bottom.spacing = 8
         rows.addArrangedSubview(bottom)
-
-        let hint = NSTextField(labelWithString: L.text("可直接拖动画中画调整位置"))
-        hint.font = .systemFont(ofSize: 11)
-        hint.textColor = .secondaryLabelColor
-        let hintRow = NSStackView(views: [makeLabel(""), hint])
-        hintRow.orientation = .horizontal
-        hintRow.alignment = .centerY
-        hintRow.spacing = 8
-        rows.addArrangedSubview(hintRow)
 
         NSLayoutConstraint.activate([
             rows.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),

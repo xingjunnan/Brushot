@@ -512,7 +512,7 @@ final class RecordingSessionController: NSObject {
     private var cameraOptions: RecordingCameraOptions?
     private lazy var cameraSettingsView: RecordingCameraSettingsView = {
         let view = RecordingCameraSettingsView(
-            frame: CGRect(x: 0, y: 0, width: 330, height: 252),
+            frame: CGRect(x: 0, y: 0, width: 330, height: 190),
             options: cameraOptions ?? .defaults,
             showsDevice: true
         )
@@ -1210,7 +1210,7 @@ final class RecordingStartBar: NSVisualEffectView {
     )
     private lazy var cameraSettingsView: RecordingCameraSettingsView = {
         let view = RecordingCameraSettingsView(
-            frame: CGRect(x: 0, y: 0, width: 330, height: 212),
+            frame: CGRect(x: 0, y: 0, width: 330, height: 154),
             options: cameraOptions,
             showsDevice: false
         )
@@ -1264,7 +1264,8 @@ final class RecordingStartBar: NSVisualEffectView {
         action: #selector(startAction)
     )
     private lazy var audioLabel = makeSectionLabel(L.text("视频音频"))
-    private lazy var qualityLabel = makeSectionLabel(L.text("视频质量"))
+    private lazy var qualityLabel = makeSectionLabel(L.text("分辨率"))
+    private lazy var frameRateLabel = makeSectionLabel(L.text("帧率"))
     private lazy var cameraLabel = makeSectionLabel(L.text("画中画"))
     private let silentHint = NSTextField(labelWithString: L.text("GIF 最长 60 秒，建议 30 秒内 · 无声音"))
     private var hasMicrophones = false
@@ -1356,6 +1357,7 @@ final class RecordingStartBar: NSVisualEffectView {
         let qualityRow = NSStackView(views: [
             qualityLabel,
             resolutionPopup,
+            frameRateLabel,
             fpsPopup,
             regionSizeButton,
             performanceHint
@@ -1535,6 +1537,7 @@ final class RecordingStartBar: NSVisualEffectView {
         qualityLabel.isHidden = !isVideo
         resolutionPopup.isHidden = !isVideo
         fpsPopup.isHidden = !isVideo
+        frameRateLabel.isHidden = !isVideo
         regionSizeButton.isHidden = !isVideo || !isRegionSizingAvailable
         performanceHint.isHidden = !isVideo || !isHighLoadSelection
         cameraLabel.isHidden = !isVideo
@@ -1571,11 +1574,13 @@ final class RecordingStartBar: NSVisualEffectView {
         resolutionPopup.target = self
         resolutionPopup.action = #selector(videoQualityChanged)
         resolutionPopup.toolTip = L.text("保持比例，不裁剪、不放大较小画面")
-        resolutionPopup.widthAnchor.constraint(equalToConstant: 122).isActive = true
+        resolutionPopup.widthAnchor.constraint(equalToConstant: 132).isActive = true
 
         let savedFPS = RecordingPreferences.videoFPS()
         for fps in [15, 30, 60] {
-            let title = fps == 30 ? L.text("30 FPS（推荐）") : "\(fps) FPS"
+            let title = fps == 30
+                ? L.text("30 帧/秒（推荐）")
+                : L.format("%d 帧/秒", fps)
             fpsPopup.addItem(withTitle: title)
             fpsPopup.lastItem?.representedObject = fps
         }
@@ -1587,11 +1592,11 @@ final class RecordingStartBar: NSVisualEffectView {
         fpsPopup.identifier = NSUserInterfaceItemIdentifier("recordingVideoFPS")
         fpsPopup.target = self
         fpsPopup.action = #selector(videoQualityChanged)
-        fpsPopup.widthAnchor.constraint(equalToConstant: 118).isActive = true
+        fpsPopup.widthAnchor.constraint(equalToConstant: 154).isActive = true
 
         performanceHint.font = .systemFont(ofSize: 11, weight: .medium)
         performanceHint.textColor = .systemOrange
-        performanceHint.toolTip = L.text("高负载模式，长时间录制建议使用 1080p · 30 FPS")
+        performanceHint.toolTip = L.text("高负载模式，长时间录制建议使用 1080p · 30 帧/秒")
         performanceHint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         updateVideoQualitySummary()
     }

@@ -17,7 +17,7 @@ final class RecordingCoreTests: XCTestCase {
         options.isEnabled = true
         options.deviceID = "camera-1"
         options.shape = .circle
-        options.isMirrored = true
+        options.isMirrored = false
         options.normalizedCenterX = 2
         options.normalizedCenterY = -1
         options.relativeWidth = 2
@@ -27,7 +27,7 @@ final class RecordingCoreTests: XCTestCase {
         XCTAssertFalse(loaded.isEnabled)
         XCTAssertEqual(loaded.deviceID, "camera-1")
         XCTAssertEqual(loaded.shape, .circle)
-        XCTAssertFalse(loaded.isMirrored)
+        XCTAssertTrue(loaded.isMirrored)
         XCTAssertEqual(loaded.normalizedCenterX, 1)
         XCTAssertEqual(loaded.normalizedCenterY, 0)
         XCTAssertEqual(loaded.relativeWidth, 0.8)
@@ -979,7 +979,8 @@ final class RecordingInteractionTests: XCTestCase {
         })
         let labels = descendants(of: bar).compactMap { $0 as? NSTextField }
         let audioLabel = try XCTUnwrap(labels.first { $0.stringValue == "视频音频" })
-        let qualityLabel = try XCTUnwrap(labels.first { $0.stringValue == "视频质量" })
+        let qualityLabel = try XCTUnwrap(labels.first { $0.stringValue == "分辨率" })
+        let frameRateLabel = try XCTUnwrap(labels.first { $0.stringValue == "帧率" })
         XCTAssertNil(labels.first { $0.stringValue.hasPrefix("输出 ") })
         let silentHint = try XCTUnwrap(labels.first {
             $0.stringValue == "GIF 最长 60 秒，建议 30 秒内 · 无声音"
@@ -988,6 +989,7 @@ final class RecordingInteractionTests: XCTestCase {
             $0.stringValue == "高负载"
         })
         XCTAssertTrue(performanceHint.isHidden)
+        XCTAssertEqual(fpsPopup.selectedItem?.title, "30 帧/秒（推荐）")
         XCTAssertFalse(regionSizeButton.isHidden)
         XCTAssertTrue(cameraSettingsButton.isHidden)
         XCTAssertEqual(regionDimensions(regionSizeButton.title), [1_512, 982])
@@ -1012,6 +1014,8 @@ final class RecordingInteractionTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(frame.minY, bar.bounds.minY)
             XCTAssertLessThanOrEqual(frame.maxY, bar.bounds.maxY)
         }
+        XCTAssertGreaterThanOrEqual(resolutionPopup.frame.width, resolutionPopup.fittingSize.width)
+        XCTAssertGreaterThanOrEqual(fpsPopup.frame.width, fpsPopup.fittingSize.width)
         XCTAssertGreaterThanOrEqual(performanceHint.frame.width, performanceHint.fittingSize.width)
         var received: [(RecordingFormat, RecordingVideoResolution, Int, Bool, Bool)] = []
         var receivedWatermarks: [WatermarkConfiguration?] = []
@@ -1026,6 +1030,7 @@ final class RecordingInteractionTests: XCTestCase {
         format.performClick(nil)
         XCTAssertTrue(audioLabel.isHidden)
         XCTAssertTrue(qualityLabel.isHidden)
+        XCTAssertTrue(frameRateLabel.isHidden)
         XCTAssertTrue(resolutionPopup.isHidden)
         XCTAssertTrue(fpsPopup.isHidden)
         XCTAssertTrue(regionSizeButton.isHidden)
@@ -1047,10 +1052,11 @@ final class RecordingInteractionTests: XCTestCase {
 
     func testCameraSettingsOfferShapeSizePositionAndHorizontalFlip() throws {
         let view = RecordingCameraSettingsView(
-            frame: CGRect(x: 0, y: 0, width: 330, height: 212),
+            frame: CGRect(x: 0, y: 0, width: 330, height: 154),
             options: .defaults,
             showsDevice: false
         )
+        view.layoutSubtreeIfNeeded()
         let segments = descendants(of: view).compactMap { $0 as? NSSegmentedControl }
         let shape = try XCTUnwrap(segments.first {
             $0.identifier?.rawValue == "recordingCameraSettingsShape"
@@ -1069,7 +1075,27 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertEqual(size.segmentCount, RecordingCameraSize.allCases.count)
         XCTAssertEqual(position.segmentCount, RecordingCameraPosition.allCases.count)
         XCTAssertEqual(flip.title, "左右翻转")
-        XCTAssertEqual(flip.state, .off)
+        XCTAssertEqual(flip.state, .on)
+        XCTAssertNil(descendants(of: view).compactMap { $0 as? NSTextField }.first {
+            $0.stringValue == "可直接拖动画中画调整位置"
+        })
+        for control in [shape, size, position] {
+            let frame = control.convert(control.bounds, to: view)
+            XCTAssertTrue(view.bounds.contains(frame))
+        }
+        XCTAssertTrue(view.bounds.contains(flip.convert(flip.bounds, to: view)))
+
+        let liveView = RecordingCameraSettingsView(
+            frame: CGRect(x: 0, y: 0, width: 330, height: 190),
+            options: .defaults,
+            showsDevice: true
+        )
+        liveView.layoutSubtreeIfNeeded()
+        for control in descendants(of: liveView).filter({
+            $0.identifier?.rawValue.hasPrefix("recordingCameraSettings") == true
+        }) {
+            XCTAssertTrue(liveView.bounds.contains(control.convert(control.bounds, to: liveView)))
+        }
 
         var received: RecordingCameraOptions?
         view.onOptionsChanged = { received = $0 }
@@ -1077,7 +1103,7 @@ final class RecordingInteractionTests: XCTestCase {
         XCTAssertTrue(size.sendAction(size.action, to: size.target))
         XCTAssertEqual(received?.relativeWidth, RecordingCameraSize.large.relativeWidth)
         flip.performClick(nil)
-        XCTAssertEqual(received?.isMirrored, true)
+        XCTAssertEqual(received?.isMirrored, false)
     }
 
     func testRecordingFormatChooserDoesNotOfferWatermarkBeforeRecording() {
